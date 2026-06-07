@@ -1,0 +1,12 @@
+{
+  "_comment": "USD / 百万 token。【已校准·高置信】2026-06-07 用七牛云两笔真实账单(缓存大头¥0.024 + 输出大头¥0.7519)联立，发现七牛云 Opus = 官方价 × 0.334(误差<0.3%，两笔不同token结构都吻合)。此表已按 0.334× 官方钉死，报表从此基本准。熔断仍是最终保证。",
+  "_校准记录": [
+    "2026-06-07 终校: 七牛云 Opus=官方×0.334。opus input 15→5 / cache_write 18.75→6.25 / cache_read 1.5→0.5 / output 75→25。双样本验证误差<0.3%。",
+    "sonnet/haiku 无真实账单，按同一 0.334 因子推算(同 provider 假定同折扣)；haiku 名未验证，背诵L1上线前再确认。",
+    "历史校准: cache_read 实测$0.41-0.55(点1) 与 $0.50(0.334×1.5) 吻合；output 由点2(2622token,¥0.7519)钉死$25。"
+  ],
+  "_汇率": 7.2,
+  "opus":   { "input": 5,    "cache_write": 6.25,  "cache_read": 0.5,   "output": 25 },
+  "sonnet": { "input": 1,    "cache_write": 1.25,  "cache_read": 0.1,   "output": 5 },
+  "haiku":  { "input": 0.33, "cache_write": 0.42,  "cache_read": 0.033, "output": 1.67 }
+}

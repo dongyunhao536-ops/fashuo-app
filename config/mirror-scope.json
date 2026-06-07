@@ -1,0 +1,29 @@
+{
+  "_comment": "content_mirror 同步范围；路径相对 ROOT（D:\\fashuo）。kind 决定 grep 工具命中。",
+  "root": "D:\\fashuo",
+  "rules": [
+    { "pattern": "教材/考试分析_文本.txt",       "kind": "textbook" },
+    { "pattern": "教材/民法学_文本.txt",         "kind": "textbook" },
+    { "pattern": "教材/法理学_文本.txt",         "kind": "textbook" },
+    { "pattern": "教材/宪法学_文本.txt",         "kind": "textbook" },
+    { "pattern": "教材/法制史_文本.txt",         "kind": "textbook" },
+
+    { "pattern": "真题分析/_刑法做题心得.md",     "kind": "xinde" },
+    { "pattern": "真题分析/_民法做题心得.md",     "kind": "xinde" },
+
+    { "pattern": "真题分析/00_真题学习总结.md",       "kind": "zhenti" },
+    { "pattern": "真题分析/01_题型结构与命题趋势.md", "kind": "zhenti" },
+    { "pattern": "真题分析/02_刑法高频考点.md",       "kind": "zhenti" },
+    { "pattern": "真题分析/03_民法高频考点.md",       "kind": "zhenti" },
+    { "pattern": "真题分析/04_法理学高频考点.md",     "kind": "zhenti" },
+    { "pattern": "真题分析/05_宪法高频考点.md",       "kind": "zhenti" },
+    { "pattern": "真题分析/06_法制史高频考点.md",     "kind": "zhenti" },
+    { "pattern": "真题分析/_主观题汇总.md",           "kind": "zhenti" },
+
+    { "pattern": "易混概念库/刑法-*.md", "kind": "yixiao" },
+    { "pattern": "易混概念库/民法-*.md", "kind": "yixiao" },
+
+    { "pattern": "法律更新档案/01_刑法相关更新.md", "kind": "textbook" },
+    { "pattern": "法律更新档案/02_民法相关更新.md", "kind": "textbook" }
+  ]
+}

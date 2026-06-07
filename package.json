@@ -6,12 +6,18 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync": "node --env-file=.env.local scripts/sync-content.mjs",
+    "cost": "node --env-file=.env.local scripts/cost-report.mjs",
+    "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.101.0",
+    "@supabase/supabase-js": "^2.107.0",
     "next": "16.2.7",
     "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "react-dom": "19.2.4",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
@@ -20,6 +26,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.2.7",
+    "pg": "^8.21.0",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
