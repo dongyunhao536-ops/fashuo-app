@@ -35,6 +35,8 @@ interface AskMeta {
   confusion?: string | null;
   weak_candidates?: { knowledge: string; anchor?: string }[];
   xinde_candidates?: { rule: string; anchor?: string }[];
+  /** G2：答疑确实纠正了某个考点的误解 → 投复验请求，背诵下次清单消费 */
+  review_kp_candidates?: { kp_id: string; reason?: string }[];
 }
 
 /** 从答案文本中抽取 META 块并返回 { clean(剥离后展示文本), meta } */
@@ -160,6 +162,35 @@ async function sinkProposals(args: {
       payload: { note: "需真题二次背书才进正文（做题心得规则2）" },
       status: "pending",
     });
+  }
+
+  // G2：复验请求（答疑纠正了对某考点的误解 → 背诵下次清单优先消费）
+  // 防重：同 kp+type=复验请求+pending 已有则跳过（在 /api/ask 路由这一层去重，调度器读时合并）
+  const reviewCands = (meta?.review_kp_candidates ?? []).filter(
+    (r): r is { kp_id: string; reason?: string } => !!r?.kp_id,
+  );
+  if (reviewCands.length > 0) {
+    const ids = reviewCands.map((r) => r.kp_id);
+    const { data: existing } = await supabaseAdmin
+      .from("events")
+      .select("kp_id")
+      .eq("type", "复验请求")
+      .eq("status", "pending")
+      .in("kp_id", ids);
+    const skip = new Set((existing ?? []).map((e) => e.kp_id));
+    for (const r of reviewCands) {
+      if (skip.has(r.kp_id)) continue;
+      rows.push({
+        type: "复验请求",
+        subject,
+        kp_id: r.kp_id,
+        knowledge: r.reason ?? null,
+        anchor: null,
+        source: "答疑",
+        payload: { reason: r.reason ?? null, 触发: "G2 答疑澄清后复验" },
+        status: "pending",
+      });
+    }
   }
 
   if (rows.length > 0) {

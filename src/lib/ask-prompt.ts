@@ -96,9 +96,16 @@ export function buildAskSystemStable(): string {
 ═══ 最后：输出机器可读元数据块（给系统沉淀待办筐用，会从展示中剥离）═══
 在全部回答之后，另起一行输出且仅输出一个如下块（严格 JSON，字段缺省给 null 或空数组）：
 ${META_OPEN}
-{"subject":"刑法|民法|...","kp":"考点短语","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}]}
+{"subject":"刑法|民法|...","kp":"考点短语","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}],"review_kp_candidates":[{"kp_id":"XF-0042","reason":"答疑澄清了云对XX的误解，建议背诵清单复验"}]}
 ${META_CLOSE}
-说明：weak_candidates 只在用户表现出混淆/可能答错时填；xinde_candidates 只在本题揭示出可复用规律时填（仅作候选，需真题二次背书才进正文）。无则给空数组。这个块不要加任何解释文字。`;
+说明（务必区分三类候选的触发条件，错填会污染飞轮）：
+- weak_candidates：用户**首次**对某知识点表现混淆/可能答错时填（PC 登记进当前弱项后→调度器加权）。
+- xinde_candidates：本题揭示出可复用的"判断倾向/答题规则"时填（仅作候选，需真题二次背书才进正文）。
+- review_kp_candidates：本次答疑**确实纠正了**云对某考点的误解（注意：是"已经在用，但用错了"而非"第一次接触陌生点"），且该考点能给出明确的 kp_id（如 XF-0042/MF-0123）→ 投复验请求，背诵下次清单优先消费。
+  · 触发要点：①云的提问里已表达过某种错误判断 ②你用心得/真题/教材锚点纠正 ③纠正落到具体可背诵的考点（不是"案例题答题方法"这种跨考点元能力）
+  · 不要"为投而投"：若本题是新接触的陌生点（云没说错过，是真不会）→ 用 weak_candidates 即可，不要发复验请求。
+  · 无 kp_id 锚点（如题干只涉及方法论/跨考点判断倾向）→ 不投。
+全部为空时给空数组 []。这个块不要加任何解释文字。`;
 }
 
 /**

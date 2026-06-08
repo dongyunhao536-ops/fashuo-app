@@ -54,13 +54,13 @@ Next.js 16.2.7 (App Router, src-dir) + Tailwind + TS · Supabase Postgres · Cla
 - [x] **🎯 Anki 背诵优先级标注体系已解析（2026-06-07，云点明这才是卡的核心价值）**：`anki-extract.py` 重写为【保留标注】——按 HTML 颜色/底色/加粗/下划线还原 00说明 的体系：题型(主观336/客观64/其他463)、P1必背高精(289)/P2必背/P3选背/P4浏览、口诀(330)、客观点(347)/极重要客观点(紫下划线)、✨星级。解决"哪些背+背到何种程度"。直喂引擎：题型→封顶档、P1精确/P2要点→L1默写评分精度、口诀→背诵显示、客观点→客观靶点。`考点库/anki_extracted.json`(全量结构化)。
 - [x] **法综官方教材建库 + 答疑支持（2026-06-07）**：poppler pdftotext 提取法理/宪法/法制史彩色标注版PDF→教材/{法理学,宪法学,法制史}_文本.txt(中文提取干净,▶标核心要点)。① content_mirror kind=textbook(法理135K/宪法100K/法制史124K字)+法综高频文件(zhenti)→**答疑官方教材grep法综**,deck版法综166行已删替换。②build-kp.mjs扩三科(FL/XZ/LS,route B无页码)→法理103+宪法80+法制史74=257法综考点。**kp_state共933考点/5科**,调度器全科覆盖。法综freq待回填。
 - [x] **刑民TXT评估（2026-06-07）**：刑法TXT(自带（Pxx）+真题标记)优于pdftotext能给的→保留不重提；民法TXT(有行号锚无页码)够用,页码是锦上添花→暂不重提。
-- [ ] **L1 秒判** — Anki 优先级内容已就位，待检测引擎统一设计(用 P1/P2 定评分精度)
+- [x] **L1 秒判（2026-06-08）** — Anki P1必背高精+P2必背+口诀作关键词集，本地规则命中率秒判（≥80% 干净通过/60-80% 勉强/<60% 未过），零 LLM 成本。Anki→kp 索引脚本 `scripts/anki-index-kp.mjs` 已写入 kp_state.ext.anki_note_ids（**刑法 254/295 kp 覆盖**，法综卡颗粒度=节大于 kp 颗粒度，少量覆盖留二期）。
 - [x] **L2/L3 题源策略已定（2026-06-07，云授权我选）= 三层题源+生评分离**：
   - 题源分层(取可得最高层)：①真题直取(有关联真题且主观题→原题当检测题,零循环) ②真题改造(关联真题是客观题/需转L2-L3形态→Opus改造+强制标真题年份+进抽查) ③教材生成(冷点无真题→Opus基于考点教材行号锚生成,标"AI生成·待抽查")。
   - 防循环三保险：①生成≠评分(两次独立调用) ②评分锚定教材grep客观比对(L2法理要点/L3罪名法律关系),不对出题者隐藏答案打分 ③来源全程标注detection_log,抽查面板挑AI生成给云核。真题优先,AI生成只兜冷点。
-- [ ] 检测引擎实现（detection.ts + /api/detect）—— 待 Anki 格式定后**统一设计 L1+L2/L3 接口**(避免先建L2/L3再补L1的返工)
-- [ ] **G1**：检测连续失败 → events(弱项候选)（阈值2，config 已配）
-- [ ] **G2**：消费 events(复验请求) → 调度器已接(reviewKpIds 入清单)，待检测侧产出复验请求闭环
+- [x] **检测引擎（2026-06-08）**：`src/lib/detection.ts` 统一三档接口 `generateQuestion`+`gradeAnswer`；L1=规则秒判（零成本），L2/L3=Opus 两段式（复用 `runPlanThenAnswer`，强制 grep 教材锚定，缺锚标★）。出题三层题源：①真题直取 ②客观题改造 ③教材生成（标 source=ai 进抽查）。`POST /api/detect/generate` 与 `POST /api/detect/grade` 两路由（鉴权/错误分类/maxDuration=300 与 ask 对齐）。
+- [x] **G1（2026-06-08）**：评分后 `maybeEmitWeakEvent` 查最近 N 次（config.G1_背诵失败转弱项.连续失败阈值=2）若全 failed 则写 events(弱项候选)；防重=同 kp+pending 已有则跳。`scripts/smoke-detect-api.mjs` 端到端 HTTP 烟测**全绿**：①L1 出题（XF-0001 18 个关键词）②完美答案→干净通过升档 L1→L2 ③错答案×2→未过+G1 触发写 events ④三表落地校验通过 ⑤tsc+lint 全绿。
+- [x] **G2（2026-06-08）**：答疑侧产出复验请求闭环完成。`ask-prompt.ts` META schema 加 `review_kp_candidates:[{kp_id,reason}]`+prompt 教 Opus 触发规则（只在"已用、用错了，被纠正"时投，不在"陌生点"时投，需有 kp_id 锚点）；`/api/ask` sinkProposals 写 events(type=复验请求, source=答疑)+防重(同 kp+pending 已有则跳)。调度器侧已接 reviewKpIds。`scripts/smoke-g2.mjs` 烟测**全绿**：插入复验请求 XF-0042 → `/api/schedule` 返回复验 bucket 含 XF-0042 且**排清单首位**（P=7 > 新考点 P=10 但复验 bucket 优先级最高）。tsc+lint 全绿。
 
 ### ④ 弱项页 + 仪表盘（账本视图，非独立开发）
 - [ ] 弱项 tab、仪表盘（已出效果图：D:\fashuo\系统设计\效果图\概念效果图.html）

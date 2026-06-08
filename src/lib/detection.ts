@@ -1,0 +1,668 @@
+import fs from "node:fs";
+import path from "node:path";
+import { runPlanThenAnswer, extractText, fmtCost } from "./anthropic";
+import { MODELS } from "./models";
+import { supabaseAdmin } from "./supabase";
+import schedulerCfg from "../../config/scheduler.json";
+import type { KpRow } from "./scheduler";
+
+/**
+ * 检测引擎（build order ③ · 系统设计/03 §4 + /14 §6 G1/G2）。
+ *
+ * 统一三档接口（避免先建 L2/L3 再补 L1 的返工）：
+ *   - generateQuestion(kpId, level) → { question, answerKey, source, sourceRef }
+ *   - gradeAnswer(...)              → { grade, passed, hits, missing, confidence, starred, explanation }
+ *
+ * L1 = 规则秒判（关键词命中率，模糊带 Haiku 兜底）—— 内容底座=Anki 标注体系（P1必背高精/P2必背/口诀）
+ * L2 = 理解（简答），Opus + grep 教材锚定        —— 题源三层：真题直取 → 真题改造 → 教材生成
+ * L3 = 应用（迷你案例），Opus + grep 教材锚定    —— 同上
+ *
+ * 红线（不可破，对应 BUILD_PLAN §红线）：
+ *   ① 评分 Opus 不降级（放水=假掌握，飞轮变自欺机器）
+ *   ② L2/L3 题源真题优先，AI 生成必标 source 供云抽查（防出题=评分循环论证）
+ *   ③ grade 后必写 detection_log + kp_state；连续失败达阈值发 events(弱项候选)（G1 闭环）
+ */
+
+export type Level = "L1" | "L2" | "L3";
+export type QuestionSource = "anki" | "real" | "adapted" | "ai" | "none";
+export type Grade = "干净通过" | "勉强" | "未过";
+
+export interface DetectQuestion {
+  kpId: string;
+  level: Level;
+  question: string;
+  /** L1=参考关键词集（评分用）；L2/L3=参考答案要点 */
+  answerKey: string[];
+  source: QuestionSource;
+  /** 来源标注：anki note_id / 真题 "2024-48" / 教材行号区间 / "ai-generated"，供抽查 */
+  sourceRef: string;
+  /** 出题成本（L2/L3 有 Opus 改造/生成时 > 0） */
+  costUsd?: number;
+  /** 缺料：L1 无 Anki 卡，或 L2/L3 教材锚为空 */
+  warning?: string;
+}
+
+export interface GradeResult {
+  kpId: string;
+  level: Level;
+  grade: Grade;
+  passed: boolean;
+  /** 命中的关键词/要点（评分理由可解释） */
+  hits: string[];
+  /** 缺失的关键词/要点 */
+  missing: string[];
+  confidence: number; // 0-100
+  starred: boolean;
+  explanation: string;
+  /** L1 规则评分=undefined；L2/L3 Opus 评分=$ */
+  costUsd: number;
+  /** grep 教材命中行号（L2/L3） */
+  grepLines: number[];
+  /** kp_state 升降档/到期推算的更新（已写库），返回前端展示 */
+  stateUpdate: KpStateUpdate;
+  /** G1：是否触发 events(弱项候选) */
+  weakEventEmitted: boolean;
+  /** 评分使用的模型（红线审计） */
+  model: string;
+}
+
+export interface KpStateUpdate {
+  prev: { cur_level: Level; interval_idx: number; difficulty: number };
+  next: { cur_level: Level; interval_idx: number; difficulty: number; next_due: string };
+  mastered: boolean;
+}
+
+const CFG = schedulerCfg;
+const INTERVALS: number[] = CFG.间隔档_天 as number[];
+const MAX_INTERVAL = INTERVALS.length - 1;
+const DIFF_MIN = CFG.难度D.min;
+const DIFF_MAX = CFG.难度D.max;
+const G1_THRESHOLD = (CFG as { G1_背诵失败转弱项: { 连续失败阈值: number } }).G1_背诵失败转弱项.连续失败阈值;
+
+/** Anki 全量解析结果（构建一次缓存到 module-level，~860 张卡 ≈ 几 MB） */
+interface AnkiCard {
+  note_id: number;
+  subject: string;
+  is_fatiao: boolean;
+  chapter: string;
+  题型: string;
+  星级: number;
+  title: string;
+  口诀: string[];
+  P1必背高精: string[];
+  P2必背: string[];
+  P3选背: string[];
+  P4浏览: string[];
+  客观点: string[];
+  极重要客观点: string[];
+}
+
+let ANKI_CACHE: Map<number, AnkiCard> | null = null;
+function loadAnki(): Map<number, AnkiCard> {
+  if (ANKI_CACHE) return ANKI_CACHE;
+  const root = process.env.FASHUO_ROOT ?? "D:/fashuo";
+  const p = path.join(root, "考点库", "anki_extracted.json");
+  if (!fs.existsSync(p)) {
+    ANKI_CACHE = new Map();
+    return ANKI_CACHE;
+  }
+  const raw = JSON.parse(fs.readFileSync(p, "utf8")) as AnkiCard[] | { cards: AnkiCard[] };
+  const cards = Array.isArray(raw) ? raw : raw.cards;
+  ANKI_CACHE = new Map(cards.map((c) => [c.note_id, c]));
+  return ANKI_CACHE;
+}
+
+// ============================================================
+// 出题：generateQuestion
+// ============================================================
+
+export async function generateQuestion(opts: {
+  kpId: string;
+  level?: Level;
+}): Promise<DetectQuestion> {
+  const kp = await loadKp(opts.kpId);
+  const level: Level = opts.level ?? (kp.cur_level as Level);
+  if (level === "L1") return generateL1(kp);
+  return generateL2L3(kp, level);
+}
+
+function generateL1(kp: KpRow): DetectQuestion {
+  const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
+  const anki = loadAnki();
+  const cards = noteIds.map((id) => anki.get(id)).filter((c): c is AnkiCard => !!c);
+
+  if (cards.length === 0) {
+    // 缺料：考点没有匹配的 Anki 卡，L1 无法出题 → 让调用方降级到 L2
+    return {
+      kpId: kp.kp_id,
+      level: "L1",
+      question: `[L1 缺料] 考点【${(kp.ext as { name?: string })?.name ?? kp.kp_id}】无关联 Anki 卡`,
+      answerKey: [],
+      source: "none",
+      sourceRef: "",
+      warning: "无 Anki 卡，建议跳到 L2",
+    };
+  }
+
+  // 取星级最高的卡（最重要的题目）作为本次检测题
+  const pick = cards.sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))[0];
+
+  // 关键词集 = P1（精确）+ P2（要点）+ 口诀；P1 权重高已通过 dedup 顺序体现
+  const keywords = uniqShort([
+    ...(pick.P1必背高精 ?? []),
+    ...(pick.P2必背 ?? []),
+    ...(pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, "")),
+  ]);
+
+  return {
+    kpId: kp.kp_id,
+    level: "L1",
+    question: `请按要点默写：${pick.title.trim()}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
+    answerKey: keywords,
+    source: "anki",
+    sourceRef: `anki:${pick.note_id}`,
+  };
+}
+
+async function generateL2L3(kp: KpRow, level: Level): Promise<DetectQuestion> {
+  // L2/L3 出题——本期先留骨架（用教材锚生成 Opus 草题），三层题源待真题索引建好后实装。
+  // 工作流：① 查 kp.ext.related_zhenti（建库 by build-kp.mjs，刑法已有）；
+  //         ② 若主观题真题→直取；客观题→Opus 改造；冷点→Opus 基于教材锚生成。
+  // 当前实装：仅"教材生成"路径，标 source=ai 进抽查面板。
+  const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
+  const anchor = formatAnchor(kp);
+
+  const rubric =
+    level === "L2"
+      ? "出一道【简答题】（要求考生分点回答概念/特征/法理依据，4-6 个要点）。"
+      : "出一道【迷你案例题】（一段 80-150 字案情，要求考生定性+说明法律关系/罪名+给出法律后果）。";
+
+  const planSys = `你只列检索查询不作答。围绕考点【${name}】（${kp.subject}）规划 3-5 条检索：
+- search_xinde：本考点相关心得规则
+- search_textbook：教材原文（必查，作答案锚）
+- search_zhenti：相关真题（若考点名常考则按年份枚举几年）
+只输出 JSON 数组：[{"tool":"search_textbook","keyword":"${name}"}]`;
+
+  const answerSys = `你是法硕命题人。基于【系统预检索结果】里的教材原文、真题、心得，为考点【${name}】出一道${rubric}
+
+【硬约束】
+1. 只在教材或真题已覆盖的范围内出题；超纲一票否决。
+2. 输出格式严格如下，不要任何额外文字：
+
+题目：（题干，不含答案）
+参考答案要点（4-6 条，逐条短句，命中其中 ≥3 条算通过）：
+- 要点1
+- 要点2
+- ...
+教材锚点：${anchor || "（若预检索结果有命中行号则填，否则留空）"}
+`;
+
+  const { message, costUsd, grepHits } = await runPlanThenAnswer({
+    planSystem: planSys,
+    answerSystemStable: answerSys,
+    question: `请为【${name}】出一道${level}级检测题。`,
+    model: MODELS.GRADING,
+    route: `detect:gen:${level}`,
+    maxAnswerTokens: 1200,
+  });
+
+  const raw = extractText(message);
+  const { question, answerKey } = parseGeneratedQuestion(raw);
+
+  return {
+    kpId: kp.kp_id,
+    level,
+    question,
+    answerKey,
+    source: "ai",
+    sourceRef: anchor ? `textbook:${anchor}` : `grep:${grepHits.map((h) => h.path).join(",")}`,
+    costUsd,
+    warning: "AI 生成（待抽查面板核对）",
+  };
+}
+
+function parseGeneratedQuestion(raw: string): { question: string; answerKey: string[] } {
+  // 容错抽取：题目: ... 参考答案要点 ... 教材锚点 ...
+  const q = raw.match(/题目[：:]\s*([\s\S]*?)(参考答案要点|参考答案|$)/);
+  const a = raw.match(/参考答案要点[：:][\s\S]*?\n([\s\S]*?)(教材锚点|教材依据|$)/);
+  const question = (q?.[1] ?? raw).trim();
+  const answerKey = (a?.[1] ?? "")
+    .split("\n")
+    .map((s) => s.replace(/^[-·•·▪️ \t]+/, "").trim())
+    .filter((s) => s.length > 0 && s.length < 200);
+  return { question, answerKey };
+}
+
+// ============================================================
+// 评分：gradeAnswer
+// ============================================================
+
+export async function gradeAnswer(opts: {
+  kpId: string;
+  level: Level;
+  question: string;
+  userAnswer: string;
+  answerKey: string[];
+  source: QuestionSource;
+  sourceRef: string;
+}): Promise<GradeResult> {
+  const kp = await loadKp(opts.kpId);
+  const result =
+    opts.level === "L1"
+      ? gradeL1(opts.userAnswer, opts.answerKey)
+      : await gradeL2L3(kp, opts);
+
+  // 写 detection_log
+  await supabaseAdmin.from("detection_log").insert({
+    kp_id: kp.kp_id,
+    level: opts.level,
+    question: opts.question,
+    answer: opts.userAnswer,
+    ai_grade: result.grade,
+    passed: result.passed,
+    model: result.model,
+    grep_lines: result.grepLines.join(","),
+    confidence: result.confidence,
+    starred: result.starred,
+  });
+
+  // 更新 kp_state 升降档
+  const stateUpdate = await applyStateUpdate(kp, opts.level, result.grade);
+
+  // G1：连续失败达阈值 → events(弱项候选)
+  let weakEventEmitted = false;
+  if (!result.passed) {
+    weakEventEmitted = await maybeEmitWeakEvent(kp, opts.level);
+  }
+
+  return {
+    ...result,
+    kpId: kp.kp_id,
+    level: opts.level,
+    stateUpdate,
+    weakEventEmitted,
+  };
+}
+
+// ---------------- L1 规则秒判 ----------------
+
+interface L1Internal {
+  grade: Grade;
+  passed: boolean;
+  hits: string[];
+  missing: string[];
+  confidence: number;
+  starred: boolean;
+  explanation: string;
+  costUsd: number;
+  grepLines: number[];
+  model: string;
+}
+
+function gradeL1(userAnswer: string, answerKey: string[]): L1Internal {
+  const ans = normalize(userAnswer);
+  if (!ans) {
+    return {
+      grade: "未过",
+      passed: false,
+      hits: [],
+      missing: answerKey,
+      confidence: 100,
+      starred: false,
+      explanation: "答案为空。",
+      costUsd: 0,
+      grepLines: [],
+      model: "rule:l1",
+    };
+  }
+  if (answerKey.length === 0) {
+    return {
+      grade: "勉强",
+      passed: false,
+      hits: [],
+      missing: [],
+      confidence: 30,
+      starred: true,
+      explanation: "本题无参考关键词（缺料），评分不可靠，标★。",
+      costUsd: 0,
+      grepLines: [],
+      model: "rule:l1",
+    };
+  }
+
+  const hits: string[] = [];
+  const missing: string[] = [];
+  for (const kw of answerKey) {
+    if (matchKeyword(ans, kw)) hits.push(kw);
+    else missing.push(kw);
+  }
+  const rate = hits.length / answerKey.length;
+
+  let grade: Grade;
+  let confidence: number;
+  if (rate >= 0.8) {
+    grade = "干净通过";
+    confidence = Math.round(80 + rate * 20);
+  } else if (rate >= 0.6) {
+    grade = "勉强"; // TODO: 接 Haiku 复判（成本敏感，先用纯规则）
+    confidence = Math.round(50 + rate * 30);
+  } else {
+    grade = "未过";
+    confidence = Math.round(60 + (1 - rate) * 30);
+  }
+
+  return {
+    grade,
+    passed: grade === "干净通过",
+    hits,
+    missing,
+    confidence,
+    starred: false,
+    explanation: `关键词命中 ${hits.length}/${answerKey.length}（${Math.round(rate * 100)}%）。`,
+    costUsd: 0,
+    grepLines: [],
+    model: "rule:l1",
+  };
+}
+
+const PUNCT = /[\s、，。；：;:,.()（）""""''《》<>【】\[\]·]+/g;
+function normalize(s: string): string {
+  return s.replace(PUNCT, "").replace(/[。，！？]/g, "");
+}
+
+/** 关键词命中：把关键词归一化后做子串匹配；过短(<2 字)的关键词跳过防误判 */
+function matchKeyword(answer: string, keyword: string): boolean {
+  const k = normalize(keyword);
+  if (k.length < 2) return false;
+  if (k.length <= 8) return answer.includes(k);
+  // 长关键词：按 2-字滑动取词根，命中 ≥60% 算命中（应对"用自己话说"场景）
+  const tokens: string[] = [];
+  for (let i = 0; i < k.length - 1; i++) {
+    const t = k.slice(i, i + 2);
+    if (!/[一-龥]{2}/.test(t)) continue;
+    tokens.push(t);
+  }
+  if (tokens.length === 0) return answer.includes(k);
+  const hit = tokens.filter((t) => answer.includes(t)).length;
+  return hit / tokens.length >= 0.6;
+}
+
+// ---------------- L2/L3 Opus 评分 ----------------
+
+async function gradeL2L3(
+  kp: KpRow,
+  opts: { level: Level; question: string; userAnswer: string; answerKey: string[] },
+): Promise<L1Internal> {
+  const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
+  const planSys = `你只列检索查询不作答。本次任务=评分本人对【${name}】（${kp.subject}）的简答/案例作答。规划 3-5 条 grep：
+- search_textbook：本考点教材原文（必查，评分锚）
+- search_xinde：相关心得规则
+- search_zhenti：若题干引自真题则查
+只输出 JSON 数组。`;
+
+  const ans = `═══ 你是法硕评分老师 ═══
+对考生作答按下列 rubric 严格评分。【严禁放水：放水=假掌握=飞轮变自欺机器】。
+
+【题目】
+${opts.question}
+
+【参考答案要点（命题人给的，仅供参考；真正判分以教材为准）】
+${opts.answerKey.map((k) => "- " + k).join("\n")}
+
+【评分 rubric · ${opts.level}】
+${opts.level === "L2" ? CFG.评分rubric.L2 : CFG.评分rubric.L3}
+
+【硬约束】
+1. 必须根据【系统预检索结果】里 search_textbook 命中的教材原文比对；缺锚点一律降信心度并标★。
+2. 判 干净通过 / 勉强 / 未过 三档之一；未过=核心要点缺失或定性错误。
+3. 列出"命中要点"和"缺失要点"，逐条引用教材行号（结果里没行号就不要编）。
+
+═══ 输出严格 JSON 块（不要其他文字，不要 markdown 代码块）═══
+{"grade":"干净通过|勉强|未过","hits":["..."],"missing":["..."],"confidence":0-100,"starred":true|false,"grep_lines":[行号数字],"explanation":"一句话评分理由"}
+`;
+
+  const { message, grepHits, costUsd } = await runPlanThenAnswer({
+    planSystem: planSys,
+    answerSystemStable: ans,
+    question: `【考生作答】\n${opts.userAnswer}`,
+    model: MODELS.GRADING,
+    route: `detect:grade:${opts.level}`,
+    maxAnswerTokens: 1500,
+  });
+
+  const raw = extractText(message);
+  const parsed = parseGradeJson(raw);
+  const grepLines = parsed.grep_lines.length
+    ? parsed.grep_lines
+    : grepHits.flatMap((h) => h.lines).slice(0, 20);
+
+  return {
+    grade: parsed.grade,
+    passed: parsed.grade === "干净通过",
+    hits: parsed.hits,
+    missing: parsed.missing,
+    confidence: parsed.confidence,
+    starred: parsed.starred || grepLines.length === 0,
+    explanation: parsed.explanation,
+    costUsd,
+    grepLines,
+    model: MODELS.GRADING,
+  };
+}
+
+interface GradeJson {
+  grade: Grade;
+  hits: string[];
+  missing: string[];
+  confidence: number;
+  starred: boolean;
+  grep_lines: number[];
+  explanation: string;
+}
+
+function parseGradeJson(raw: string): GradeJson {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  const fallback: GradeJson = {
+    grade: "勉强",
+    hits: [],
+    missing: [],
+    confidence: 30,
+    starred: true,
+    grep_lines: [],
+    explanation: `评分模型未返回合法 JSON：${raw.slice(0, 80)}`,
+  };
+  if (start === -1 || end <= start) return fallback;
+  try {
+    const obj = JSON.parse(raw.slice(start, end + 1)) as Partial<GradeJson>;
+    const grade = (obj.grade ?? "勉强") as Grade;
+    return {
+      grade: (["干净通过", "勉强", "未过"] as Grade[]).includes(grade) ? grade : "勉强",
+      hits: Array.isArray(obj.hits) ? obj.hits.map(String) : [],
+      missing: Array.isArray(obj.missing) ? obj.missing.map(String) : [],
+      confidence: typeof obj.confidence === "number" ? obj.confidence : 50,
+      starred: !!obj.starred,
+      grep_lines: Array.isArray(obj.grep_lines)
+        ? obj.grep_lines.map(Number).filter((n) => Number.isFinite(n))
+        : [],
+      explanation: String(obj.explanation ?? ""),
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+// ============================================================
+// kp_state 升降档 + G1
+// ============================================================
+
+const LEVEL_ORDER: Level[] = ["L1", "L2", "L3"];
+
+async function applyStateUpdate(
+  kp: KpRow,
+  level: Level,
+  grade: Grade,
+): Promise<KpStateUpdate> {
+  const prev = {
+    cur_level: kp.cur_level as Level,
+    interval_idx: kp.interval_idx,
+    difficulty: kp.difficulty,
+  };
+
+  let cur_level = prev.cur_level;
+  let interval_idx = prev.interval_idx;
+  let difficulty = prev.difficulty;
+  const cap = kp.cap_level as Level;
+
+  if (grade === "干净通过") {
+    difficulty = clamp(difficulty - 1, DIFF_MIN, DIFF_MAX);
+    interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
+    // 当前档通过 → 升到下一档（未到封顶）
+    const curIdx = LEVEL_ORDER.indexOf(level);
+    const capIdx = LEVEL_ORDER.indexOf(cap);
+    if (curIdx < capIdx) cur_level = LEVEL_ORDER[curIdx + 1];
+  } else if (grade === "勉强") {
+    // 同档重测，难度微升
+    difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
+  } else {
+    // 未过：难度+1，间隔退半档（即 -1），档级不动；error_count++ 在事务里
+    difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
+    interval_idx = Math.max(interval_idx - 1, 0);
+  }
+
+  // 三档全过 = mastered
+  const l1ok = level === "L1" ? grade === "干净通过" : kp.l1_status === "passed";
+  const l2ok = level === "L2" ? grade === "干净通过" : kp.l2_status === "passed";
+  const l3ok = level === "L3" ? grade === "干净通过" : kp.l3_status === "passed";
+  const mastered =
+    cap === "L1" ? l1ok : cap === "L2" ? l1ok && l2ok : l1ok && l2ok && l3ok;
+
+  const today = new Date();
+  const nextDays = INTERVALS[interval_idx];
+  const nextDue = new Date(today.getTime() + nextDays * 86400000)
+    .toISOString()
+    .slice(0, 10);
+  const lastReview = today.toISOString().slice(0, 10);
+
+  const statusField =
+    level === "L1" ? "l1_status" : level === "L2" ? "l2_status" : "l3_status";
+  const statusValue = grade === "干净通过" ? "passed" : grade === "未过" ? "failed" : "untested";
+
+  const update: Record<string, unknown> = {
+    cur_level,
+    interval_idx,
+    difficulty,
+    last_review: lastReview,
+    next_due: nextDue,
+    mastered,
+    review_count: kp.review_count + 1,
+    error_count: kp.error_count + (grade === "未过" ? 1 : 0),
+    [statusField]: statusValue,
+    updated_at: new Date().toISOString(),
+  };
+  const { error } = await supabaseAdmin
+    .from("kp_state")
+    .update(update)
+    .eq("kp_id", kp.kp_id);
+  if (error) throw new Error(`kp_state 更新失败：${error.message}`);
+
+  return {
+    prev,
+    next: { cur_level, interval_idx, difficulty, next_due: nextDue },
+    mastered,
+  };
+}
+
+/**
+ * G1：检查最近 N 次同档检测是否连续失败，达阈值则向 events 投递弱项候选。
+ * 防重：同 kp_id+level 已有 pending 弱项候选 → 不重发。
+ */
+async function maybeEmitWeakEvent(kp: KpRow, level: Level): Promise<boolean> {
+  const { data: recent } = await supabaseAdmin
+    .from("detection_log")
+    .select("passed")
+    .eq("kp_id", kp.kp_id)
+    .eq("level", level)
+    .order("ts", { ascending: false })
+    .limit(G1_THRESHOLD);
+  if (!recent || recent.length < G1_THRESHOLD) return false;
+  const allFailed = recent.every((r) => r.passed === false);
+  if (!allFailed) return false;
+
+  // 防重：同 kp 已有 pending 弱项候选则跳过
+  const { data: existing } = await supabaseAdmin
+    .from("events")
+    .select("id")
+    .eq("type", "弱项候选")
+    .eq("kp_id", kp.kp_id)
+    .eq("status", "pending")
+    .limit(1);
+  if (existing && existing.length > 0) return false;
+
+  const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
+  const { error } = await supabaseAdmin.from("events").insert({
+    type: "弱项候选",
+    subject: kp.subject,
+    kp_id: kp.kp_id,
+    knowledge: name,
+    anchor: formatAnchor(kp) || null,
+    source: "检测",
+    payload: {
+      level,
+      连续失败次数: G1_THRESHOLD,
+      触发: "G1 背诵失败转弱项",
+    },
+    status: "pending",
+  });
+  if (error) {
+    console.error("[detection] G1 events 写入失败：", error.message);
+    return false;
+  }
+  return true;
+}
+
+// ============================================================
+// 工具
+// ============================================================
+
+async function loadKp(kpId: string): Promise<KpRow> {
+  const { data, error } = await supabaseAdmin
+    .from("kp_state")
+    .select("*")
+    .eq("kp_id", kpId)
+    .single();
+  if (error || !data) throw new Error(`找不到考点：${kpId}`);
+  return data as KpRow;
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+/** 把 kp.ext.{page,src_line} 拼成"P12·行345"风格的锚点串（供出题/事件标注） */
+function formatAnchor(kp: KpRow): string {
+  const ext = kp.ext as { page?: number | null; src_line?: number | null };
+  const parts: string[] = [];
+  if (ext?.page) parts.push(`P${ext.page}`);
+  if (ext?.src_line) parts.push(`行${ext.src_line}`);
+  return parts.join("·");
+}
+
+/** 给 UI/路由用：把 GradeResult 加上人民币显示串（其它字段透传） */
+export function fmtGradeForUI(g: GradeResult): GradeResult & { costText: string } {
+  return { ...g, costText: fmtCost(g.costUsd) };
+}
+
+function uniqShort(items: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of items) {
+    const s = raw.trim();
+    if (!s || s.length > 80) continue; // 过长的整句不当关键词
+    const k = normalize(s);
+    if (k.length < 2 || seen.has(k)) continue;
+    seen.add(k);
+    out.push(s);
+  }
+  return out.slice(0, 20); // 关键词集封顶 20
+}
