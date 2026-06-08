@@ -113,6 +113,71 @@ function loadAnki(): Map<number, AnkiCard> {
 }
 
 // ============================================================
+// 背诵原文（编码阶段·零成本，从 Anki 卡取，不调 LLM）
+// ============================================================
+
+export interface StudyMaterial {
+  kpId: string;
+  name: string;
+  subject: string;
+  level: Level;
+  capLevel: Level;
+  anchor: string;
+  zhentiFreq: string;
+  /** 每张关联 Anki 卡的背诵原文（按星级降序，最重要的在前） */
+  cards: {
+    title: string;
+    star: number;
+    type: string; // 题型：主观/客观/其他
+    p1: string[]; // P1 必背高精
+    p2: string[]; // P2 必背
+    mnemonics: string[]; // 口诀
+    objectivePoints: string[]; // 客观点
+  }[];
+  /** 无 Anki 卡时给出提示（法综覆盖率低 / 冷点） */
+  warning?: string;
+}
+
+/**
+ * 取考点的背诵原文（编码阶段，效果图 ①·5 屏）。
+ * 零 LLM 成本：直接读 Anki 卡的标注体系（P1必背高精/P2必背/口诀/客观点）。
+ * 检测阶段（提取）才调 generateQuestion 出题。
+ */
+export async function getStudyMaterial(kpId: string): Promise<StudyMaterial> {
+  const kp = await loadKp(kpId);
+  const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
+  const anki = loadAnki();
+  const cards = noteIds
+    .map((id) => anki.get(id))
+    .filter((c): c is AnkiCard => !!c)
+    .sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))
+    .map((c) => ({
+      title: c.title.trim(),
+      star: c.星级 ?? 0,
+      type: c.题型 ?? "其他",
+      p1: c.P1必背高精 ?? [],
+      p2: c.P2必背 ?? [],
+      mnemonics: (c.口诀 ?? []).map((s) => s.replace(/【.+?】/g, "")),
+      objectivePoints: c.客观点 ?? [],
+    }));
+
+  return {
+    kpId: kp.kp_id,
+    name: (kp.ext as { name?: string })?.name ?? kp.kp_id,
+    subject: kp.subject,
+    level: kp.cur_level as Level,
+    capLevel: kp.cap_level as Level,
+    anchor: formatAnchor(kp),
+    zhentiFreq: String((kp.ext as { zhenti_freq?: string })?.zhenti_freq ?? "低"),
+    cards,
+    warning:
+      cards.length === 0
+        ? "本考点暂无关联 Anki 卡（法综覆盖率较低或冷点）——可直接进入检测，或在答疑 tab 提问。"
+        : undefined,
+  };
+}
+
+// ============================================================
 // 出题：generateQuestion
 // ============================================================
 
@@ -147,12 +212,15 @@ function generateL1(kp: KpRow): DetectQuestion {
   // 取星级最高的卡（最重要的题目）作为本次检测题
   const pick = cards.sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))[0];
 
-  // 关键词集 = P1（精确）+ P2（要点）+ 口诀；P1 权重高已通过 dedup 顺序体现
-  const keywords = uniqShort([
-    ...(pick.P1必背高精 ?? []),
-    ...(pick.P2必背 ?? []),
-    ...(pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, "")),
-  ]);
+  // L1 关键词集 = P1必背高精（核心，"高精"层）+ 口诀。
+  //   不纳入 P2必背：P2 是要点级展开（往往是整句解释），属 L2 理解检测的料；
+  //   若全混进 L1 答案集，80% 阈值会变成"逐句默写整本书"，惩罚正常的结构化回答。
+  //   （依据 Anki 标注体系：P1=高精必背=L1 默写靶点；P2=要点=L2。见 memory: "P1精确P2要点"）
+  const p1 = pick.P1必背高精 ?? [];
+  const mnemonics = (pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, ""));
+  // 兜底：个别卡 P1 为空（只标了 P2）→ 退用 P2，避免 L1 无料可测。
+  const core = p1.length > 0 ? p1 : (pick.P2必背 ?? []);
+  const keywords = uniqShort([...core, ...mnemonics]);
 
   return {
     kpId: kp.kp_id,
@@ -370,9 +438,29 @@ function normalize(s: string): string {
   return s.replace(PUNCT, "").replace(/[。，！？]/g, "");
 }
 
-/** 关键词命中：把关键词归一化后做子串匹配；过短(<2 字)的关键词跳过防误判 */
+/**
+ * 关键词清洗：剥掉教材的列表编号/标签前缀，只留语义核心。
+ * 否则用户不写"1."这种序号就被判漏（false negative）。
+ * 处理：①前导编号 1. / （1） / (1) / 一、 / Ø / • ②前导标签 概念：/特征：/含义：
+ */
+function keywordCore(keyword: string): string {
+  let s = keyword.trim();
+  // 前导列表标记（可能叠多层，循环剥）
+  let prev = "";
+  while (prev !== s) {
+    prev = s;
+    s = s
+      .replace(/^[（(]?\s*[0-9０-９]+\s*[）)]?\s*[.、:：)]?\s*/, "") // 1. / （1） / 1)
+      .replace(/^[一二三四五六七八九十]+\s*[、.．]\s*/, "") // 一、
+      .replace(/^[Øø•·▪◦*\-—]+\s*/, "") // 项目符号
+      .replace(/^(概念|含义|特征|定义|理解|要点)\s*[:：]\s*/, ""); // 标签前缀
+  }
+  return normalize(s);
+}
+
+/** 关键词命中：剥编号→归一化→子串匹配；过短(<2 字)的关键词跳过防误判 */
 function matchKeyword(answer: string, keyword: string): boolean {
-  const k = normalize(keyword);
+  const k = keywordCore(keyword);
   if (k.length < 2) return false;
   if (k.length <= 8) return answer.includes(k);
   // 长关键词：按 2-字滑动取词根，命中 ≥60% 算命中（应对"用自己话说"场景）

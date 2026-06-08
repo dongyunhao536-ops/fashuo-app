@@ -1,0 +1,129 @@
+import Link from "next/link";
+import { getTodayPlan } from "@/lib/plan";
+import { TabBar } from "@/components/TabBar";
+import type { PlanItem } from "@/lib/scheduler";
+
+/**
+ * 背诵·今日清单（RSC，零成本，效果图 ① 屏）。
+ * 三段式 bucket：复验(G2 最高优先) / 到期复习 / 新考点(配速器额度)。
+ * 点考点 → /recite/[kpId] 进入"编码原文 → 检测"流程。
+ */
+
+export const dynamic = "force-dynamic";
+
+const SUB_SHORT: Record<string, string> = {
+  刑法: "刑",
+  民法: "民",
+  法理: "法理",
+  宪法: "宪",
+  法制史: "法史",
+};
+
+const BUCKET_META: Record<
+  PlanItem["bucket"],
+  { label: string; cls: string; n: (c: { 复验: number; 到期: number; 新考点: number }) => number }
+> = {
+  复验: {
+    label: "🔁 复验（答疑澄清后）",
+    cls: "text-violet-700 dark:text-violet-300",
+    n: (c) => c.复验,
+  },
+  到期: {
+    label: "⏰ 到期复习",
+    cls: "text-amber-700 dark:text-amber-300",
+    n: (c) => c.到期,
+  },
+  新考点: {
+    label: "🌱 新考点（配速引入）",
+    cls: "text-emerald-700 dark:text-emerald-300",
+    n: (c) => c.新考点,
+  },
+};
+
+const FREQ_BADGE: Record<string, string> = {
+  高: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+  中: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+  低: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
+};
+
+export default async function RecitePage() {
+  const plan = await getTodayPlan(undefined, 30);
+  const groups: PlanItem["bucket"][] = ["复验", "到期", "新考点"];
+  const total = plan.items.length;
+
+  return (
+    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
+      <header>
+        <div className="flex items-baseline justify-between">
+          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
+            📅 今日背诵
+          </h1>
+          <span className="text-[11px] text-zinc-500">
+            {plan.date} · {plan.stage}
+          </span>
+        </div>
+        <div className="mt-2 text-[12px] text-zinc-500">
+          {total} 个考点 · {plan.counts.复验} 复验 / {plan.counts.到期} 到期 /{" "}
+          {plan.counts.新考点} 新 · 未学剩余 {plan.counts.未学剩余}
+        </div>
+      </header>
+
+      {total === 0 ? (
+        <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-zinc-400 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+          今日清单为空 🎉<br />
+          （所有到期项已复习，且配速器今日额度已用完）
+        </div>
+      ) : (
+        groups.map((b) => {
+          const items = plan.items.filter((it) => it.bucket === b);
+          if (items.length === 0) return null;
+          const meta = BUCKET_META[b];
+          return (
+            <section key={b} className="flex flex-col gap-2">
+              <div className={`mt-1 text-[12px] font-semibold ${meta.cls}`}>
+                {meta.label}
+                <span className="ml-1 text-zinc-400">· {items.length}</span>
+              </div>
+              {items.map((it) => (
+                <Link
+                  key={it.kp_id}
+                  href={`/recite/${it.kp_id}`}
+                  className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 transition hover:ring-indigo-300 dark:bg-zinc-900 dark:ring-zinc-800"
+                >
+                  <div className="flex items-start gap-2">
+                    <span className="flex-1 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                      {it.name}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-zinc-400">
+                      {it.level}
+                    </span>
+                  </div>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                    <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      {SUB_SHORT[it.subject] ?? it.subject}
+                    </span>
+                    <span
+                      className={`rounded px-1.5 py-0.5 ${
+                        FREQ_BADGE[it.zhenti_freq] ?? FREQ_BADGE["低"]
+                      }`}
+                    >
+                      {it.zhenti_freq}频
+                    </span>
+                    <span className="text-zinc-400">P={it.priority}</span>
+                    <span className="ml-auto text-indigo-500">开始检测 ›</span>
+                  </div>
+                </Link>
+              ))}
+            </section>
+          );
+        })
+      )}
+
+      <p className="mt-2 text-center text-[10px] text-zinc-400">
+        优先级 P =（真题频率×3 + 弱项×2 + 科目权重）×（1+遗忘紧迫度）
+      </p>
+
+      <TabBar active="recite" />
+    </main>
+  );
+}
