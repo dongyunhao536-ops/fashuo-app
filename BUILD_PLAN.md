@@ -62,9 +62,17 @@ Next.js 16.2.7 (App Router, src-dir) + Tailwind + TS · Supabase Postgres · Cla
 - [x] **G1（2026-06-08）**：评分后 `maybeEmitWeakEvent` 查最近 N 次（config.G1_背诵失败转弱项.连续失败阈值=2）若全 failed 则写 events(弱项候选)；防重=同 kp+pending 已有则跳。`scripts/smoke-detect-api.mjs` 端到端 HTTP 烟测**全绿**：①L1 出题（XF-0001 18 个关键词）②完美答案→干净通过升档 L1→L2 ③错答案×2→未过+G1 触发写 events ④三表落地校验通过 ⑤tsc+lint 全绿。
 - [x] **G2（2026-06-08）**：答疑侧产出复验请求闭环完成。`ask-prompt.ts` META schema 加 `review_kp_candidates:[{kp_id,reason}]`+prompt 教 Opus 触发规则（只在"已用、用错了，被纠正"时投，不在"陌生点"时投，需有 kp_id 锚点）；`/api/ask` sinkProposals 写 events(type=复验请求, source=答疑)+防重(同 kp+pending 已有则跳)。调度器侧已接 reviewKpIds。`scripts/smoke-g2.mjs` 烟测**全绿**：插入复验请求 XF-0042 → `/api/schedule` 返回复验 bucket 含 XF-0042 且**排清单首位**（P=7 > 新考点 P=10 但复验 bucket 优先级最高）。tsc+lint 全绿。
 
-### ④ 弱项页 + 仪表盘（账本视图，非独立开发）
-- [ ] 弱项 tab、仪表盘（已出效果图：D:\fashuo\系统设计\效果图\概念效果图.html）
-- [ ] 五科雷达（kp_state 按 parent_kp 聚合）
+### ③′ 背诵 tab UI（commit 598f48e，2026-06-08）
+- [x] `/recite` 今日清单（RSC 零成本）：三段式 bucket（复验/到期/新考点），复用 `getTodayPlan`→`buildDailyPlan` 与仪表盘双核同源。
+- [x] `/recite/[kpId]` 答题页（RSC 壳 + `ReciteSession` client）：①编码=读 Anki 原文（`getStudyMaterial` 零成本）②提取=fetch generate 出题（L2/L3 才花钱）→作答→fetch grade→评分（命中/缺失+证据卡+升降档+G1 提示）。
+- [x] **L1 端到端走查通过**：reset XF-0001→出题→大白话作答→干净通过 96% 升档 L1→L2 间隔 7 天。
+- [x] **L1 评分质量修复**：①`keywordCore()` 剥列表编号/标签前缀（1./（1）/一、/概念：/Ø）修 false negative ②L1 answerKey=P1必背高精+口诀（不混 P2 整句，P2 留 L2 理解检测）。
+
+### ④ 弱项页 + 仪表盘（commit bc285b2，2026-06-08）
+- [x] `/` 仪表盘（RSC）：Hero 倒计时 + 双核入口 + 待办筐 + Top5 弱项 + 本周热力。`src/lib/dashboard.ts` 聚合。
+- [x] `/weak` 弱项页（RSC）：error_count>0 或任一档 failed，科目筛选 + 三档 status badge + 锚点 + 到期。`src/lib/weak.ts`。
+- [x] 五科雷达（kp_state 按 subject 聚合 mastered/总数，SVG）。`src/components/TabBar.tsx` 5 tab 共用。
+- [ ] ⚠️ TabBar 链接的 `/ask` `/coach` `/inbox` 页未建（点击 404）——随对应功能补占位页。
 
 ### ⑤ 教练 T1（13）
 - [ ] study_log 录入 + 四段输出（即时点拨/进度归位/下一步/复盘）
