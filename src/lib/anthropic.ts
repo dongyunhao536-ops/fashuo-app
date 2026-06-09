@@ -311,6 +311,34 @@ export async function runPlanThenAnswer(opts: {
   return { message: ansResp, grepHits, costUsd, plannedCount: searches.length };
 }
 
+/**
+ * 单次调用（无工具、无 grep）—— 教练 T1 用：基于账本+经验帖一次性出四段，不查教材。
+ * 成本栅栏：进入前 assertBudget()，调用后 recordUsage()。
+ */
+export async function runSingleTurn(opts: {
+  system: string;
+  user: string;
+  model?: string;
+  maxTokens?: number;
+  route?: string;
+}): Promise<{ message: Anthropic.Message; costUsd: number }> {
+  const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach" } = opts;
+  await assertBudget();
+  const resp = await callWithRetry({
+    model,
+    max_tokens: maxTokens,
+    system: [{ type: "text", text: system }],
+    messages: [{ role: "user", content: user }],
+  });
+  const costUsd = await recordUsage({
+    route,
+    model,
+    usage: usageFromMessage(resp),
+    meta: {},
+  });
+  return { message: resp, costUsd };
+}
+
 export function extractText(message: Anthropic.Message): string {
   return message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")

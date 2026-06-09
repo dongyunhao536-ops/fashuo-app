@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "sync": "node --env-file=.env.local scripts/sync-content.mjs",
+    "register": "node --env-file=.env.local scripts/register-events.mjs",
     "cost": "node --env-file=.env.local scripts/cost-report.mjs",
     "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs"
   },

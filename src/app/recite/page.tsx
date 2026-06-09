@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getTodayPlan } from "@/lib/plan";
+import { getTodayPlan, getDuelPlan } from "@/lib/plan";
 import { TabBar } from "@/components/TabBar";
 import type { PlanItem } from "@/lib/scheduler";
 
@@ -47,7 +47,7 @@ const FREQ_BADGE: Record<string, string> = {
 };
 
 export default async function RecitePage() {
-  const plan = await getTodayPlan(undefined, 30);
+  const [plan, duel] = await Promise.all([getTodayPlan(undefined, 30), getDuelPlan(3)]);
   const groups: PlanItem["bucket"][] = ["复验", "到期", "新考点"];
   const total = plan.items.length;
 
@@ -117,6 +117,41 @@ export default async function RecitePage() {
             </section>
           );
         })
+      )}
+
+      {/* 🆚 易混对决（调度：弱项科目优先 + 每日轮换） */}
+      {duel.items.length > 0 && (
+        <section className="mt-2 flex flex-col gap-2">
+          <div className="text-[12px] font-semibold text-rose-600">
+            🆚 易混对决（专治概念混淆）
+            <span className="ml-1 text-zinc-400">· 今日 {duel.items.length} / 共 {duel.total}</span>
+          </div>
+          {duel.items.map((p) => (
+            <Link
+              key={p.path}
+              href={`/duel?path=${encodeURIComponent(p.path)}`}
+              className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 transition hover:ring-rose-300 dark:bg-zinc-900 dark:ring-zinc-800"
+            >
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                  {SUB_SHORT[p.subject] ?? p.subject}
+                </span>
+                {p.concepts.map((c, i) => (
+                  <span key={i} className="flex items-center gap-1.5">
+                    {i > 0 && <span className="text-[10px] text-zinc-400">vs</span>}
+                    <span className="rounded-lg bg-rose-50 px-1.5 py-0.5 text-[12px] font-medium text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">
+                      {c}
+                    </span>
+                  </span>
+                ))}
+                <span className="ml-auto text-[11px] text-rose-500">对决 ›</span>
+              </div>
+            </Link>
+          ))}
+          <Link href="/duel" className="text-center text-[11px] text-zinc-400 underline">
+            看全部 {duel.total} 对易混 ›
+          </Link>
+        </section>
       )}
 
       <p className="mt-2 text-center text-[10px] text-zinc-400">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
 
 /**
@@ -43,6 +43,8 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
   const [userAnswer, setUserAnswer] = useState("");
   const [result, setResult] = useState<GradeResp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 答题计时：从「题目呈现」到「提交」的秒数 → detection_log.seconds（周报算答题耗时趋势）
+  const answerStartRef = useRef<number>(0);
 
   async function startDetect(lv: Level) {
     setError(null);
@@ -57,6 +59,7 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
       const data = await r.json();
       if (!r.ok) throw new Error(data.error ?? "出题失败");
       setQuestion(data as DetectQuestion);
+      answerStartRef.current = Date.now(); // 题目呈现即开始计时
       setPhase("answering");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -68,6 +71,9 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
     if (!question || !userAnswer.trim()) return;
     setError(null);
     setPhase("grading");
+    const seconds = answerStartRef.current
+      ? Math.max(1, Math.round((Date.now() - answerStartRef.current) / 1000))
+      : null;
     try {
       const r = await fetch("/api/detect/grade", {
         method: "POST",
@@ -80,6 +86,7 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
           answerKey: question.answerKey,
           source: question.source,
           sourceRef: question.sourceRef,
+          seconds,
         }),
       });
       const data = await r.json();

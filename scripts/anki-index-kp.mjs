@@ -37,20 +37,31 @@ const sb = createClient(url, key, { auth: { persistSession: false } });
 // 拉全部 kp_state（subject + kp_id + ext.name）
 const { data: kps, error } = await sb
   .from("kp_state")
-  .select("kp_id, subject, ext");
+  .select("kp_id, subject, ext, parent_kp");
 if (error) {
   console.error("✗ 读 kp_state 失败：", error.message);
   process.exit(1);
 }
 console.log(`▶ kp_state 总数：${kps.length}`);
 
-// 按 subject 分桶 + 按 name 建索引
+// 按 subject 分桶 + 按 name 建索引（精确匹配用）
 const kpBySubjectName = new Map(); // subject → Map<name, kp_id>
+// 按 subject + 节名 索引（节级 fallback 用）：节名 = parent_kp 末段去括号口诀
+const cleanSection = (s) => (s || "").split("/").pop().replace(/[（(].*?[）)]/g, "").trim();
+const kpBySection = new Map(); // subject → Map<节名, kp_id[]>
 for (const kp of kps) {
   const name = kp.ext?.name?.trim();
-  if (!name) continue;
-  if (!kpBySubjectName.has(kp.subject)) kpBySubjectName.set(kp.subject, new Map());
-  kpBySubjectName.get(kp.subject).set(name, kp.kp_id);
+  if (name) {
+    if (!kpBySubjectName.has(kp.subject)) kpBySubjectName.set(kp.subject, new Map());
+    kpBySubjectName.get(kp.subject).set(name, kp.kp_id);
+  }
+  const sec = cleanSection(kp.parent_kp);
+  if (sec && sec.length >= 2) {
+    if (!kpBySection.has(kp.subject)) kpBySection.set(kp.subject, new Map());
+    const m = kpBySection.get(kp.subject);
+    if (!m.has(sec)) m.set(sec, []);
+    m.get(sec).push(kp.kp_id);
+  }
 }
 
 // 抽 chapter 里所有 "一、XX" / "二、YY" 段
@@ -74,6 +85,9 @@ const kpToNotes = new Map();
 let cardMatched = 0;
 let cardUnmatched = 0;
 
+const kpMatchLevel = new Map(); // kp_id → 'exact' | 'section'
+
+// 第一轮：精确匹配（chapter 含 kp.name）
 for (const card of cards) {
   const subjectMap = kpBySubjectName.get(card.subject);
   if (!subjectMap) {
@@ -87,11 +101,36 @@ for (const card of cards) {
     if (!kp_id) continue;
     if (!kpToNotes.has(kp_id)) kpToNotes.set(kp_id, new Set());
     kpToNotes.get(kp_id).add(card.note_id);
+    kpMatchLevel.set(kp_id, "exact");
     hitAny = true;
   }
   if (hitAny) cardMatched++;
   else cardUnmatched++;
 }
+
+// 第二轮：节级 fallback —— 卡节名("第X节 <节名> 一、...") ↔ kp.parent_kp 末段节名，
+// 补充精确匹配没覆盖的 kp（共用本节卡作题源；标 section 级供 detection 降精度处理）。
+const SEC_RE = new RegExp(`第[${ZH_NUM}]+节\\s+(.+?)(?:\\s+[${ZH_NUM}]+、|\\s*$)`);
+let sectionAddedKp = 0;
+for (const card of cards) {
+  const secMap = kpBySection.get(card.subject);
+  if (!secMap || !card.chapter) continue;
+  const m = card.chapter.match(SEC_RE);
+  if (!m) continue;
+  const sec = m[1].replace(/[（(].*?[）)]/g, "").trim();
+  const kpIds = secMap.get(sec);
+  if (!kpIds) continue;
+  for (const kp_id of kpIds) {
+    if (kpMatchLevel.get(kp_id) === "exact") continue; // 精确匹配优先
+    if (!kpToNotes.has(kp_id)) {
+      kpToNotes.set(kp_id, new Set());
+      sectionAddedKp++;
+    }
+    kpToNotes.get(kp_id).add(card.note_id);
+    if (!kpMatchLevel.has(kp_id)) kpMatchLevel.set(kp_id, "section");
+  }
+}
+console.log(`▶ 节级 fallback 新增题源 kp：${sectionAddedKp}`);
 
 console.log(`\n═══ 索引预览 ${COMMIT ? "· 正式写入" : "· DRY-RUN"} ═══`);
 console.log(`命中卡：${cardMatched} / ${cards.length}（${((cardMatched / cards.length) * 100).toFixed(1)}%）`);
@@ -133,7 +172,11 @@ const updates = [];
 for (const [kp_id, notes] of kpToNotes) {
   const kp = kps.find((k) => k.kp_id === kp_id);
   if (!kp) continue;
-  const ext = { ...(kp.ext ?? {}), anki_note_ids: [...notes] };
+  const ext = {
+    ...(kp.ext ?? {}),
+    anki_note_ids: [...notes],
+    anki_match_level: kpMatchLevel.get(kp_id) ?? "exact",
+  };
   updates.push({ kp_id, ext });
 }
 // 分批 upsert（仅更 ext）
