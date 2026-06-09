@@ -1,0 +1,53 @@
+# nginx 反代配置：监听 8443 TLS（避开阿里云对 80/443 的备案要求），分两路：
+#   /rest/v1/* → PostgREST 127.0.0.1:3001（路径前缀去掉 /rest/v1）
+#   /*         → Next.js   127.0.0.1:3000
+#
+# 占位符：<ECS-IP> 部署时 sed 替换。
+# 安装：cp nginx-fashuo.conf.tmpl /etc/nginx/sites-available/fashuo
+#       sed -i "s/<ECS-IP>/<真实IP>/g" /etc/nginx/sites-available/fashuo
+#       ln -sf /etc/nginx/sites-available/fashuo /etc/nginx/sites-enabled/
+#       nginx -t && systemctl reload nginx
+
+server {
+    listen 8443 ssl;
+    listen [::]:8443 ssl;
+    http2 on;
+    server_name <ECS-IP>;
+
+    ssl_certificate     /etc/ssl/fashuo/cert.pem;
+    ssl_certificate_key /etc/ssl/fashuo/key.pem;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers off;
+
+    # 七牛云 RPM 慢 + 案例题答疑可达 2.5 分钟 → 把超时拉到 5 分钟
+    proxy_read_timeout 300s;
+    proxy_send_timeout 300s;
+    send_timeout 300s;
+    client_max_body_size 16m;
+
+    # PostgREST 路由（supabase-js 默认路径 /rest/v1/<table>）
+    location /rest/v1/ {
+        # 把 /rest/v1/foo → /foo 喂给 PostgREST
+        rewrite ^/rest/v1/(.*)$ /$1 break;
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    # 其余全转 Next.js
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+}
+
+# 可选：把 80 直接 301 到 8443，但阿里云 80 对未备案 IP 有屏蔽风险，
+# 推荐**完全不开 80**，iPhone 直接走 https://<IP>:8443

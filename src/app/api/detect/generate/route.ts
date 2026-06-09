@@ -15,16 +15,11 @@ import { DailyCapError } from "@/lib/anthropic";
 // 七牛云 RPM 限速 → 两段式 Opus 生成可能 2-3 分钟，放宽超时
 export const maxDuration = 300;
 
-function checkAuth(req: Request): boolean {
-  const pw = process.env.APP_PASSWORD;
-  if (!pw || pw === "change-me") return true;
-  return req.headers.get("x-app-password") === pw;
-}
+// 鉴权由 src/middleware.ts 统一网关处理（未登录的 /api/* 在网关被 401）。
 
 const VALID_LEVELS: Level[] = ["L1", "L2", "L3"];
 
 export async function POST(req: Request) {
-  if (!checkAuth(req)) return Response.json({ error: "未授权" }, { status: 401 });
 
   let body: { kpId?: string; level?: string };
   try {

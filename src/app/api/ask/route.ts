@@ -58,17 +58,9 @@ function splitMeta(full: string): { clean: string; meta: AskMeta | null } {
   }
 }
 
-function checkAuth(req: Request): boolean {
-  const pw = process.env.APP_PASSWORD;
-  if (!pw || pw === "change-me") return true; // 未设真实密码 → 暂不拦（开发期）
-  return req.headers.get("x-app-password") === pw;
-}
+// 鉴权由 src/middleware.ts 统一网关处理（未登录的 /api/* 直接 401，到不了这里）。
 
 export async function POST(req: Request) {
-  if (!checkAuth(req)) {
-    return Response.json({ error: "未授权" }, { status: 401 });
-  }
-
   let body: { question?: string; subject?: string; kpId?: string };
   try {
     body = await req.json();

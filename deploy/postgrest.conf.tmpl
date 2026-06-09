@@ -1,0 +1,19 @@
+# PostgREST 配置（03 脚本会把 __AUTH_PW__ 和 __JWT_SECRET__ 替换成真值）。
+# 仅监听 127.0.0.1（nginx 在 8443 反代到这里）。
+
+db-uri = "postgres://authenticator:__AUTH_PW__@localhost:5432/fashuo"
+db-schemas = "public"
+db-anon-role = "anon"
+
+server-host = "127.0.0.1"
+server-port = 3001
+
+# supabase-js 发的 JWT 用这个 secret 验签；role 必须匹配 PG 角色名（anon / service_role）
+jwt-secret = "__JWT_SECRET__"
+jwt-aud = "fashuo"
+
+# 限制单个 GET 最多取这么多行（防误拉全表打爆内存）
+max-rows = 10000
+
+# 日志级别：info=请求摘要；高负载时改 warn
+log-level = "info"

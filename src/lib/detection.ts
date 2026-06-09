@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { runPlanThenAnswer, extractText, fmtCost } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import schedulerCfg from "../../config/scheduler.json";
+import ankiData from "../data/anki_extracted.json";
 import type { KpRow } from "./scheduler";
 
 /**
@@ -97,16 +96,13 @@ interface AnkiCard {
   极重要客观点: string[];
 }
 
+// Anki 卡组随仓库一起打包（src/data/anki_extracted.json，~6 MB / 863 张卡）。
+// import 让 Next 在 build 时把数据序列化进 server bundle —— Railway/Vercel 上无需 fs。
+// 更新流程：PC 跑 scripts/anki-extract.py → 覆盖 src/data/anki_extracted.json → 部署。
 let ANKI_CACHE: Map<number, AnkiCard> | null = null;
 function loadAnki(): Map<number, AnkiCard> {
   if (ANKI_CACHE) return ANKI_CACHE;
-  const root = process.env.FASHUO_ROOT ?? "D:/fashuo";
-  const p = path.join(root, "考点库", "anki_extracted.json");
-  if (!fs.existsSync(p)) {
-    ANKI_CACHE = new Map();
-    return ANKI_CACHE;
-  }
-  const raw = JSON.parse(fs.readFileSync(p, "utf8")) as AnkiCard[] | { cards: AnkiCard[] };
+  const raw = ankiData as unknown as AnkiCard[] | { cards: AnkiCard[] };
   const cards = Array.isArray(raw) ? raw : raw.cards;
   ANKI_CACHE = new Map(cards.map((c) => [c.note_id, c]));
   return ANKI_CACHE;
@@ -342,11 +338,14 @@ export async function gradeAnswer(opts: {
   answerKey: string[];
   source: QuestionSource;
   sourceRef: string;
+  /** 答题耗时秒数（题目呈现→提交）；UI 未传则 null */
+  seconds?: number | null;
 }): Promise<GradeResult> {
   const kp = await loadKp(opts.kpId);
+  const matchLevel = (kp.ext as { anki_match_level?: string })?.anki_match_level;
   const result =
     opts.level === "L1"
-      ? gradeL1(opts.userAnswer, opts.answerKey)
+      ? gradeL1(opts.userAnswer, opts.answerKey, matchLevel)
       : await gradeL2L3(kp, opts);
 
   // 写 detection_log
@@ -357,6 +356,7 @@ export async function gradeAnswer(opts: {
     answer: opts.userAnswer,
     ai_grade: result.grade,
     passed: result.passed,
+    seconds: opts.seconds ?? null,
     model: result.model,
     grep_lines: result.grepLines.join(","),
     confidence: result.confidence,
@@ -396,7 +396,7 @@ interface L1Internal {
   model: string;
 }
 
-function gradeL1(userAnswer: string, answerKey: string[]): L1Internal {
+function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: string): L1Internal {
   const ans = normalize(userAnswer);
   if (!ans) {
     return {
@@ -434,13 +434,16 @@ function gradeL1(userAnswer: string, answerKey: string[]): L1Internal {
     else missing.push(kw);
   }
   const rate = hits.length / answerKey.length;
+  // 节级共用题源（answerKey 是整节要点、偏多）→ 放宽通过门槛 0.8→0.6
+  const passT = matchLevel === "section" ? 0.6 : 0.8;
+  const note = matchLevel === "section" ? "（本节共用题源，门槛已放宽）" : "";
 
   let grade: Grade;
   let confidence: number;
-  if (rate >= 0.8) {
+  if (rate >= passT) {
     grade = "干净通过";
     confidence = Math.round(80 + rate * 20);
-  } else if (rate >= 0.6) {
+  } else if (rate >= passT - 0.2) {
     grade = "勉强"; // TODO: 接 Haiku 复判（成本敏感，先用纯规则）
     confidence = Math.round(50 + rate * 30);
   } else {
@@ -455,7 +458,7 @@ function gradeL1(userAnswer: string, answerKey: string[]): L1Internal {
     missing,
     confidence,
     starred: false,
-    explanation: `关键词命中 ${hits.length}/${answerKey.length}（${Math.round(rate * 100)}%）。`,
+    explanation: `关键词命中 ${hits.length}/${answerKey.length}（${Math.round(rate * 100)}%）。${note}`,
     costUsd: 0,
     grepLines: [],
     model: "rule:l1",

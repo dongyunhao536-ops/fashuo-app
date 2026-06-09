@@ -74,9 +74,12 @@ create table if not exists study_log (
   feeling      text,                      -- 自评感受
   source       text not null default 'manual', -- manual（APP外手录）/ auto（吃背诵/答疑活动·G3 二期）
   raw_input    text,                      -- 云的原话（解析前）
+  plan_decision text,                     -- 教练③规划建议的处置：采纳/改一改/不按（NULL=未表态）→ 周报算采纳率
   created_at   timestamptz not null default now()
 );
 create index if not exists idx_study_log_date on study_log (log_date);
+-- 既有库补列（schema.sql 重复执行时 create table if not exists 不会加列，故显式 alter）
+alter table study_log add column if not exists plan_decision text;
 
 -- 跨会话答疑摘要（12 §五：结构化字段 + TTL，检索式注入，不回 markdown）
 create table if not exists ask_summary (

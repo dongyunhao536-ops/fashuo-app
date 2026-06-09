@@ -17,17 +17,12 @@ import { DailyCapError } from "@/lib/anthropic";
 
 export const maxDuration = 300;
 
-function checkAuth(req: Request): boolean {
-  const pw = process.env.APP_PASSWORD;
-  if (!pw || pw === "change-me") return true;
-  return req.headers.get("x-app-password") === pw;
-}
+// 鉴权由 src/middleware.ts 统一网关处理（未登录的 /api/* 在网关被 401）。
 
 const VALID_LEVELS: Level[] = ["L1", "L2", "L3"];
 const VALID_SOURCES: QuestionSource[] = ["anki", "real", "adapted", "ai", "none"];
 
 export async function POST(req: Request) {
-  if (!checkAuth(req)) return Response.json({ error: "未授权" }, { status: 401 });
 
   let body: {
     kpId?: string;
@@ -37,6 +32,7 @@ export async function POST(req: Request) {
     answerKey?: unknown;
     source?: string;
     sourceRef?: string;
+    seconds?: unknown;
   };
   try {
     body = await req.json();
@@ -53,6 +49,10 @@ export async function POST(req: Request) {
   const answerKey = Array.isArray(body.answerKey)
     ? body.answerKey.map(String)
     : [];
+  const seconds =
+    typeof body.seconds === "number" && Number.isFinite(body.seconds) && body.seconds > 0
+      ? Math.round(body.seconds)
+      : null;
 
   if (!kpId) return Response.json({ error: "kpId 不能为空" }, { status: 400 });
   if (!level || !VALID_LEVELS.includes(level as Level)) {
@@ -73,6 +73,7 @@ export async function POST(req: Request) {
       answerKey,
       source: source as QuestionSource,
       sourceRef,
+      seconds,
     });
     return Response.json(fmtGradeForUI(result));
   } catch (err) {
