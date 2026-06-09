@@ -289,15 +289,22 @@ async function generateL2L3(kp: KpRow, level: Level): Promise<DetectQuestion> {
   };
 }
 
-function parseGeneratedQuestion(raw: string): { question: string; answerKey: string[] } {
-  // 容错抽取：题目: ... 参考答案要点 ... 教材锚点 ...
-  const q = raw.match(/题目[：:]\s*([\s\S]*?)(参考答案要点|参考答案|$)/);
-  const a = raw.match(/参考答案要点[：:][\s\S]*?\n([\s\S]*?)(教材锚点|教材依据|$)/);
+export function parseGeneratedQuestion(raw: string): {
+  question: string;
+  answerKey: string[];
+} {
+  // 容错抽取：题目: ... 参考答案要点（可带括号说明）: ... 教材锚点 ...
+  // ⚠️ 标签后可能有"（4-6 条…）"括号说明再接冒号，故用 [^\n]* 吃掉中间，再匹配冒号。
+  const q = raw.match(/题目[^\n：:]*[：:]\s*([\s\S]*?)(?=参考答案要点|参考答案|教材锚点|$)/);
+  const a = raw.match(
+    /参考答案要点[^\n：:]*[：:][^\n]*\n([\s\S]*?)(?=教材锚点|教材依据|$)/,
+  );
   const question = (q?.[1] ?? raw).trim();
   const answerKey = (a?.[1] ?? "")
     .split("\n")
-    .map((s) => s.replace(/^[-·•·▪️ \t]+/, "").trim())
-    .filter((s) => s.length > 0 && s.length < 200);
+    .map((s) => s.replace(/^[\s\t]*[-·•▪️*]+\s*/, "").trim()) // 剥项目符号
+    .map((s) => s.replace(/^[（(]?\d+[）)]?[.、:：]?\s*/, "")) // 剥编号 1. / （1）
+    .filter((s) => s.length > 1 && s.length < 200);
   return { question, answerKey };
 }
 
