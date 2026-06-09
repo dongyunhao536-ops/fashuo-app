@@ -232,6 +232,27 @@ function generateL1(kp: KpRow): DetectQuestion {
   };
 }
 
+/**
+ * 关键词规则（出题/评分规划器共用）。
+ * grep 是逐行子串匹配 → 关键词必须是【单个连续短词，不含空格】，否则几乎必然零命中。
+ * 这是 L2/L3 真实验收（2026-06-09）暴露的坑：用完整考点名当 keyword → grep 全空 → 评分无锚退化。
+ */
+const KEYWORD_RULE = `【关键词硬规则】grep 是逐行子串匹配：
+- 关键词必须是【单个连续短词，2-6 字法律术语最佳，不含空格】。
+- 把长考点名拆成核心术语，如"正当防卫的概念和成立条件"→只用"正当防卫"；"债务转移与担保"→拆成"债务转移"+"担保"两条。
+- 整名/带空格的词几乎零命中，禁止使用。`;
+
+/** 从考点名截出一个适合 grep 的短关键词（去掉"的概念/成立条件/特征"等后缀修饰） */
+function shortKeyword(name: string): string {
+  let s = name
+    .replace(/^(刑法|民法|宪法)(中|上)的/, "") // 剥前缀修饰：刑法中的因果关系→因果关系
+    .replace(/的(概念|特征|含义|定义|成立条件|构成要件|分类|种类|意义|认定|效力|原则).*$/, "")
+    .replace(/[（(].*?[）)]/g, "")
+    .trim();
+  if (s.length > 8) s = s.slice(0, 6); // 仍过长则截前 6 字（宁短勿长，命中率优先）
+  return s || name.slice(0, 4);
+}
+
 async function generateL2L3(kp: KpRow, level: Level): Promise<DetectQuestion> {
   // L2/L3 出题——本期先留骨架（用教材锚生成 Opus 草题），三层题源待真题索引建好后实装。
   // 工作流：① 查 kp.ext.related_zhenti（建库 by build-kp.mjs，刑法已有）；
@@ -249,7 +270,8 @@ async function generateL2L3(kp: KpRow, level: Level): Promise<DetectQuestion> {
 - search_xinde：本考点相关心得规则
 - search_textbook：教材原文（必查，作答案锚）
 - search_zhenti：相关真题（若考点名常考则按年份枚举几年）
-只输出 JSON 数组：[{"tool":"search_textbook","keyword":"${name}"}]`;
+${KEYWORD_RULE}
+只输出 JSON 数组（示例用短词）：[{"tool":"search_textbook","keyword":"${shortKeyword(name)}"},{"tool":"search_xinde","keyword":"${shortKeyword(name)}"}]`;
 
   const answerSys = `你是法硕命题人。基于【系统预检索结果】里的教材原文、真题、心得，为考点【${name}】出一道${rubric}
 
@@ -489,11 +511,12 @@ async function gradeL2L3(
   opts: { level: Level; question: string; userAnswer: string; answerKey: string[] },
 ): Promise<L1Internal> {
   const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
-  const planSys = `你只列检索查询不作答。本次任务=评分本人对【${name}】（${kp.subject}）的简答/案例作答。规划 3-5 条 grep：
+  const planSys = `你只列检索查询不作答。本次任务=评分考生对【${name}】（${kp.subject}）的简答/案例作答。规划 3-5 条 grep：
 - search_textbook：本考点教材原文（必查，评分锚）
 - search_xinde：相关心得规则
 - search_zhenti：若题干引自真题则查
-只输出 JSON 数组。`;
+${KEYWORD_RULE}
+只输出 JSON 数组（示例用短词）：[{"tool":"search_textbook","keyword":"${shortKeyword(name)}"}]`;
 
   const ans = `═══ 你是法硕评分老师 ═══
 对考生作答按下列 rubric 严格评分。【严禁放水：放水=假掌握=飞轮变自欺机器】。
