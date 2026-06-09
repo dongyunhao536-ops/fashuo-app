@@ -199,6 +199,26 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } },
 );
+
+/** 国内家宽 → 阿里云 ECS 偶发 TCP 抖断，重试 4 次指数退避 */
+async function withRetry(label, fn, max = 5) {
+  let lastErr;
+  for (let i = 0; i < max; i++) {
+    try {
+      const res = await fn();
+      const msg = res?.error ? String(res.error.message ?? res.error) : "";
+      const isNet = /fetch failed|ETIMEDOUT|ECONNRESET|ENETUNREACH|EAI_AGAIN|socket hang up/i.test(msg);
+      if (!res?.error || !isNet) return res;
+      lastErr = res.error;
+    } catch (e) { lastErr = e; }
+    if (i < max - 1) {
+      const delay = 400 * Math.pow(2, i);
+      process.stdout.write(`    ↻ ${label} 抖断，${delay}ms 后重试 (${i + 1}/${max - 1})\n`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { error: lastErr };
+}
 const rows = kps.map((k) => ({
   kp_id: k.kp_id,
   subject: SUBJECT,
@@ -218,7 +238,9 @@ const rows = kps.map((k) => ({
 let done = 0;
 for (let i = 0; i < rows.length; i += 200) {
   const batch = rows.slice(i, i + 200);
-  const { error } = await sb.from("kp_state").upsert(batch, { onConflict: "kp_id" });
+  const { error } = await withRetry(`upsert 批 ${i}`, () =>
+    sb.from("kp_state").upsert(batch, { onConflict: "kp_id" })
+  );
   if (error) {
     console.error(`✗ kp_state upsert 失败(批 ${i}):`, error.message);
     process.exit(1);

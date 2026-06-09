@@ -14,6 +14,29 @@ if (!url || !key) {
 }
 const sb = createClient(url, key, { auth: { persistSession: false } });
 
+/** 重试包装：sb 调用失败时（fetch failed / ETIMEDOUT / ECONNRESET），指数退避重试。
+ *  国内家宽 → 阿里云 ECS 偶发 TCP 抖断，这层让幂等同步能扛过去。 */
+async function withRetry(label, fn, max = 5) {
+  let lastErr;
+  for (let i = 0; i < max; i++) {
+    try {
+      const res = await fn();
+      const errMsg = res?.error ? String(res.error.message ?? res.error) : "";
+      const isNetErr = /fetch failed|ETIMEDOUT|ECONNRESET|ENETUNREACH|EAI_AGAIN|socket hang up/i.test(errMsg);
+      if (!res?.error || !isNetErr) return res;
+      lastErr = res.error;
+    } catch (e) {
+      lastErr = e;
+    }
+    if (i < max - 1) {
+      const delay = 400 * Math.pow(2, i);
+      process.stdout.write(`    ↻ ${label} 抖断，${delay}ms 后重试 (${i + 1}/${max - 1})\n`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { error: lastErr };
+}
+
 const cfg = JSON.parse(readFileSync("config/mirror-scope.json", "utf8"));
 const ROOT = cfg.root;
 
@@ -52,18 +75,22 @@ for (const f of files) {
     bytesTotal += content.length;
 
     // 删旧
-    const del = await sb.from("content_mirror").delete().eq("path", f.rel);
-    if (del.error) throw new Error(`delete: ${del.error.message}`);
+    const del = await withRetry(`delete ${f.rel}`, () =>
+      sb.from("content_mirror").delete().eq("path", f.rel),
+    );
+    if (del.error) throw new Error(`delete: ${del.error.message ?? del.error}`);
 
     // 插新（一文件一行，start_line=1；grep 行号 = 1 + i 即源文件真实行号）
-    const ins = await sb.from("content_mirror").insert({
-      kind: f.kind,
-      path: f.rel,
-      chunk_no: 0,
-      start_line: 1,
-      content,
-    });
-    if (ins.error) throw new Error(`insert: ${ins.error.message}`);
+    const ins = await withRetry(`insert ${f.rel}`, () =>
+      sb.from("content_mirror").insert({
+        kind: f.kind,
+        path: f.rel,
+        chunk_no: 0,
+        start_line: 1,
+        content,
+      }),
+    );
+    if (ins.error) throw new Error(`insert: ${ins.error.message ?? ins.error}`);
 
     okCount++;
     console.log(`  ✓ [${f.kind.padEnd(8)}] ${f.rel}  (${content.length} chars)`);

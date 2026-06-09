@@ -34,6 +34,26 @@ if (!url || !key) {
 }
 const sb = createClient(url, key, { auth: { persistSession: false } });
 
+/** 国内家宽 → 阿里云 ECS 偶发 TCP 抖断，重试 4 次指数退避 */
+async function withRetry(label, fn, max = 5) {
+  let lastErr;
+  for (let i = 0; i < max; i++) {
+    try {
+      const res = await fn();
+      const msg = res?.error ? String(res.error.message ?? res.error) : "";
+      const isNet = /fetch failed|ETIMEDOUT|ECONNRESET|ENETUNREACH|EAI_AGAIN|socket hang up/i.test(msg);
+      if (!res?.error || !isNet) return res;
+      lastErr = res.error;
+    } catch (e) { lastErr = e; }
+    if (i < max - 1) {
+      const delay = 400 * Math.pow(2, i);
+      process.stdout.write(`    ↻ ${label} 抖断，${delay}ms 后重试 (${i + 1}/${max - 1})\n`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { error: lastErr };
+}
+
 // 拉全部 kp_state（subject + kp_id + ext.name）
 const { data: kps, error } = await sb
   .from("kp_state")
@@ -184,7 +204,9 @@ for (let i = 0; i < updates.length; i += 200) {
   const batch = updates.slice(i, i + 200);
   // upsert 需要全字段保存，简单用 update 单条循环（200 行 / 批，~1s）
   for (const u of batch) {
-    const { error } = await sb.from("kp_state").update({ ext: u.ext }).eq("kp_id", u.kp_id);
+    const { error } = await withRetry(`update ${u.kp_id}`, () =>
+      sb.from("kp_state").update({ ext: u.ext }).eq("kp_id", u.kp_id)
+    );
     if (error) {
       console.error(`✗ 更新失败 ${u.kp_id}:`, error.message);
       continue;
