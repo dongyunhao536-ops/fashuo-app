@@ -24,3 +24,45 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Anki 卡原始 HTML 渲染（背诵原文保真层）。
+   卡内 inline 颜色按白底设计 → 容器恒为白底纸卡，暗色模式下也不反色。 */
+.anki-html {
+  font-size: 13.5px;
+  line-height: 1.8;
+  color: #1f2937;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+.anki-html img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 8px;
+  margin: 4px 0;
+}
+.anki-html h1,
+.anki-html h2 {
+  font-size: 15px;
+  font-weight: 700;
+  margin: 0.6em 0 0.3em;
+}
+.anki-html h3,
+.anki-html h4 {
+  font-size: 14px;
+  font-weight: 700;
+  margin: 0.5em 0 0.25em;
+}
+.anki-html table {
+  border-collapse: collapse;
+  max-width: 100%;
+}
+.anki-html td,
+.anki-html th {
+  border: 1px solid #d4d4d8;
+  padding: 2px 6px;
+}
+.anki-html ul,
+.anki-html ol {
+  padding-left: 1.2em;
+  list-style: revert;
+}

@@ -192,28 +192,69 @@ function EncodePane({
             <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
               📄 背诵原文 · 考试分析
             </span>
-            {c.star > 0 && (
-              <span className="text-[10px] text-amber-500">
-                {"✨".repeat(Math.min(3, Math.ceil(c.star / 3)))}
-              </span>
-            )}
             <span className="ml-auto text-[10px] text-zinc-400">{c.type}</span>
           </div>
-          <div className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
-            {c.title}
-          </div>
 
-          {c.p1.length > 0 && (
-            <Block label="P1 必背高精" tone="indigo" items={c.p1} />
-          )}
-          {c.p2.length > 0 && <Block label="P2 必背" tone="sky" items={c.p2} />}
-          {c.objectivePoints.length > 0 && (
-            <Block label="客观点" tone="emerald" items={c.objectivePoints} />
-          )}
-          {c.mnemonics.length > 0 && (
-            <div className="mt-2 rounded-lg bg-emerald-50 p-2 text-[12px] text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
-              💡 口诀：{c.mnemonics.join("｜")}
-            </div>
+          {c.contentHtml ? (
+            <>
+              {/* 原始 Anki 卡 HTML（颜色/排版一字不差）。卡内配色按白底设计 → 恒白底纸卡 */}
+              <article
+                className="anki-html mt-2 rounded-xl bg-white"
+                dangerouslySetInnerHTML={{ __html: c.contentHtml }}
+              />
+              {c.sourceHtml && (
+                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
+                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
+                    📖 考试分析原文对照（完整原文，含上下文）
+                  </summary>
+                  <article
+                    className="anki-html mt-2 rounded-lg bg-white p-2"
+                    dangerouslySetInnerHTML={{ __html: c.sourceHtml }}
+                  />
+                </details>
+              )}
+              {c.chapterHtml && (
+                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
+                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
+                    🗺️ 章节定位 · 知识结构图
+                  </summary>
+                  <article
+                    className="anki-html mt-2 rounded-lg bg-white p-2"
+                    dangerouslySetInnerHTML={{ __html: c.chapterHtml }}
+                  />
+                </details>
+              )}
+              {c.noteHtml && (
+                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
+                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
+                    ✏️ 我的笔记
+                  </summary>
+                  <article
+                    className="anki-html mt-2 rounded-lg bg-white p-2"
+                    dangerouslySetInnerHTML={{ __html: c.noteHtml }}
+                  />
+                </details>
+              )}
+            </>
+          ) : (
+            <>
+              {/* 兜底：极个别无 HTML 的卡退回分桶要点视图 */}
+              <div className="mt-2 text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                {c.title}
+              </div>
+              {c.p1.length > 0 && (
+                <Block label="P1 必背高精" tone="indigo" items={c.p1} />
+              )}
+              {c.p2.length > 0 && <Block label="P2 必背" tone="sky" items={c.p2} />}
+              {c.objectivePoints.length > 0 && (
+                <Block label="客观点" tone="emerald" items={c.objectivePoints} />
+              )}
+              {c.mnemonics.length > 0 && (
+                <div className="mt-2 rounded-lg bg-emerald-50 p-2 text-[12px] text-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300">
+                  💡 口诀：{c.mnemonics.join("｜")}
+                </div>
+              )}
+            </>
           )}
         </div>
       ))}

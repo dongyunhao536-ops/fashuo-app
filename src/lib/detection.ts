@@ -94,6 +94,11 @@ interface AnkiCard {
   P4浏览: string[];
   客观点: string[];
   极重要客观点: string[];
+  /** 原始 HTML 保真层（2026-06-10）：与 Anki 卡颜色/排版一字不差，背诵原文以此为准 */
+  章节HTML?: string;
+  题目HTML?: string;
+  原文HTML?: string;
+  笔记HTML?: string;
 }
 
 // Anki 卡组随仓库一起打包（src/data/anki_extracted.json，~6 MB / 863 张卡）。
@@ -129,6 +134,12 @@ export interface StudyMaterial {
     p2: string[]; // P2 必背
     mnemonics: string[]; // 口诀
     objectivePoints: string[]; // 客观点
+    /** 原始 HTML 保真层：contentHtml=Anki 答案面主体（题目字段，无则原文），
+     *  sourceHtml=考试分析原文对照（仅当与主体不同），chapterHtml=章节结构图，noteHtml=我的笔记 */
+    contentHtml: string;
+    sourceHtml: string;
+    chapterHtml: string;
+    noteHtml: string;
   }[];
   /** 无 Anki 卡时给出提示（法综覆盖率低 / 冷点） */
   warning?: string;
@@ -147,15 +158,24 @@ export async function getStudyMaterial(kpId: string): Promise<StudyMaterial> {
     .map((id) => anki.get(id))
     .filter((c): c is AnkiCard => !!c)
     .sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))
-    .map((c) => ({
-      title: c.title.trim(),
-      star: c.星级 ?? 0,
-      type: c.题型 ?? "其他",
-      p1: c.P1必背高精 ?? [],
-      p2: c.P2必背 ?? [],
-      mnemonics: (c.口诀 ?? []).map((s) => s.replace(/【.+?】/g, "")),
-      objectivePoints: c.客观点 ?? [],
-    }));
+    .map((c) => {
+      const timu = c.题目HTML ?? "";
+      const yuanwen = c.原文HTML ?? "";
+      return {
+        title: c.title.trim(),
+        star: c.星级 ?? 0,
+        type: c.题型 ?? "其他",
+        p1: c.P1必背高精 ?? [],
+        p2: c.P2必背 ?? [],
+        mnemonics: (c.口诀 ?? []).map((s) => s.replace(/【.+?】/g, "")),
+        objectivePoints: c.客观点 ?? [],
+        // 主体=题目字段（带优先级配色的背诵内容）；无题目的"要点速刷"卡直接用原文
+        contentHtml: timu || yuanwen,
+        sourceHtml: timu && yuanwen ? yuanwen : "",
+        chapterHtml: c.章节HTML ?? "",
+        noteHtml: c.笔记HTML ?? "",
+      };
+    });
 
   return {
     kpId: kp.kp_id,

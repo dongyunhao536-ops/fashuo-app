@@ -6,6 +6,7 @@
 #   底色(194,226,255)浅蓝=P1必背高精  蓝字无底=P2必背略低  黑加粗=P3选背  黑普通=P4浏览
 #   下划线=客观题点(紫=极重要)  绿字(87,141,49)=口诀
 import sqlite3, json, re, html, sys, io
+import urllib.parse
 from html.parser import HTMLParser
 from collections import Counter
 
@@ -103,6 +104,27 @@ def annotate(htmltext):
     except Exception: pass
     return p.result()
 
+# ── 原始 HTML 保真层（2026-06-10：背诵原文必须与 Anki 卡一字不差、颜色排版一致）──
+# 不再依赖颜色分桶重组（会肢解句子），而是把字段 HTML 原样带给前端渲染。
+# 仅做三件事：①剥 <script>/on* 事件（防注入）②img src 改写到 /anki-media/（png/jpg→webp）③去外链跟踪像素。
+def raw_html(h):
+    if not h or not h.strip():
+        return ""
+    h = re.sub(r"<script[\s\S]*?</script>", "", h, flags=re.I)
+    h = re.sub(r"\son\w+\s*=\s*(\"[^\"]*\"|'[^']*')", "", h, flags=re.I)
+
+    def _src(m):
+        src = html.unescape(m.group(1))
+        if src.startswith(("http:", "https:", "data:")):
+            return m.group(0)  # 外链/内嵌保持原样（字段里基本没有）
+        if src.lower().endswith(".svg"):
+            name = src
+        else:
+            name = src.rsplit(".", 1)[0] + ".webp"
+        return 'src="/anki-media/%s"' % urllib.parse.quote(name)
+
+    return re.sub(r'src="([^"]+)"', _src, h).strip()
+
 def subject_of(deck):
     parts = deck.split("::")
     seg = parts[1].strip() if len(parts) > 1 else parts[0].strip()
@@ -140,12 +162,19 @@ for nid, mid, flds in c.execute("select id, mid, flds from notes order by id"):
         ann = annotate(f.get("Back", ""))
         timu = plain(f.get("Front", ""))
         title = timu.split("\n")[0][:80]; kind = "法条"
+        # Basic 卡：Front=题干，Back+图片=内容
+        timu_html = raw_html(f.get("Front", ""))
+        yuanwen_html = raw_html(f.get("Back", "")) + raw_html(f.get("图片", ""))
+        biji_html = ""
     else:
         # 题目字段=带口诀+优先级配色的主观题范答(首选)；无则退原文
         src = f.get("题目", "") or f.get("原文", "")
         ann = annotate(src)
         timu = plain(f.get("题目", ""))
         title = (timu.split("【")[0] or plain(chap_raw).split("\n")[0])[:80]; kind = "卡片"
+        timu_html = raw_html(f.get("题目", ""))
+        yuanwen_html = raw_html(f.get("原文", ""))
+        biji_html = raw_html(f.get("我的笔记", ""))
     g = lambda *ks: [s for k in ks for s in ann.get(k, [])]
     has_subj = bool(f.get("题目", "").strip()) or bool(ann.get("出主观标记"))
     has_obj = bool(ann.get("客观点") or ann.get("极重要客观点"))
@@ -163,6 +192,11 @@ for nid, mid, flds in c.execute("select id, mid, flds from notes order by id"):
         "客观点": g("客观点"),
         "极重要客观点": g("极重要客观点"),
         "原文全文": plain(f.get("原文", "") or f.get("Back", "")),
+        # 原始 HTML（保真层）：前端直接渲染，颜色/排版与 Anki 完全一致
+        "章节HTML": raw_html(chap_raw),
+        "题目HTML": timu_html,
+        "原文HTML": yuanwen_html,
+        "笔记HTML": biji_html,
     })
 db.close()
 
@@ -176,3 +210,5 @@ withP1 = sum(1 for n in notes if n["P1必背高精"])
 withMn = sum(1 for n in notes if n["口诀"])
 withObj = sum(1 for n in notes if n["客观点"] or n["极重要客观点"])
 print(f"有P1必背高精: {withP1} | 有口诀: {withMn} | 有客观点: {withObj}")
+withHtml = sum(1 for n in notes if n["题目HTML"] or n["原文HTML"])
+print(f"有原始HTML: {withHtml}")
