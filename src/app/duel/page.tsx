@@ -17,12 +17,12 @@ const SUB_ORDER = ["刑法", "民法", "法理", "宪法", "法制史"];
 export default async function DuelPage({
   searchParams,
 }: {
-  searchParams: Promise<{ path?: string }>;
+  searchParams: Promise<{ path?: string; subject?: string }>;
 }) {
   const sp = await searchParams;
   const path = sp.path ? decodeURIComponent(sp.path) : "";
 
-  // ── 单对模式：先读辨析档案（背诵区），再做区分题 ──
+  // ── 单对模式：先背诵辨析档案，再做区分题（study 阶段在 DuelSession 内） ──
   if (path) {
     const pair = parsePair(path);
     const content = await readPairContent(path);
@@ -33,32 +33,21 @@ export default async function DuelPage({
             ‹ 易混
           </Link>
           <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            {pair.subject}·区分题
+            {pair.subject}·先背再战
           </h1>
         </header>
-
-        {/* 辨析档案背诵区（2026-06-10）：对决前可通读完整辨析——区分test/教材依据/对照表/陷阱模式 */}
-        {content && (
-          <details className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-            <summary className="cursor-pointer text-[13px] font-medium text-rose-600">
-              📖 先读辨析档案（{pair.label}）›
-            </summary>
-            <pre className="mt-2 max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-zinc-50 p-3 text-[12.5px] leading-relaxed text-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-200">
-              {content}
-            </pre>
-          </details>
-        )}
-
-        <DuelSession path={path} label={pair.label} concepts={pair.concepts} />
+        <DuelSession path={path} label={pair.label} concepts={pair.concepts} content={content} />
         <TabBar active="recite" />
       </main>
     );
   }
 
-  // ── 列表模式：选一对 ──
+  // ── 列表模式：科目筛选 + 选一对 ──
+  const subjectFilter = sp.subject && SUB_ORDER.includes(sp.subject) ? sp.subject : undefined;
   const pairs = await listDuelPairs();
+  const shown = subjectFilter ? pairs.filter((p) => p.subject === subjectFilter) : pairs;
   const bySubject = new Map<string, typeof pairs>();
-  for (const p of pairs) {
+  for (const p of shown) {
     if (!bySubject.has(p.subject)) bySubject.set(p.subject, []);
     bySubject.get(p.subject)!.push(p);
   }
@@ -71,13 +60,34 @@ export default async function DuelPage({
       <header>
         <div className="flex items-baseline justify-between">
           <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            🆚 易混对决
+            🆚 易混背诵+对决
           </h1>
-          <span className="text-[11px] text-zinc-500">{pairs.length} 对</span>
+          <span className="text-[11px] text-zinc-500">
+            {subjectFilter ? `${shown.length} / ${pairs.length}` : pairs.length} 对
+          </span>
         </div>
         <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
-          专治概念交叉污染——给踩分界线的迷你案例，逼你说出关键区分 test。混了会进弱项档。
+          先通读辨析档案（区分 test / 对照表 / 陷阱），背完再做踩分界线的迷你案例。混了会进弱项档。
         </p>
+        {/* 科目筛选 */}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {["全部", ...SUB_ORDER].map((s) => {
+            const active = (s === "全部" && !subjectFilter) || s === subjectFilter;
+            return (
+              <Link
+                key={s}
+                href={s === "全部" ? "/duel" : `/duel?subject=${encodeURIComponent(s)}`}
+                className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
+                  active
+                    ? "bg-rose-600 text-white"
+                    : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+                }`}
+              >
+                {s}
+              </Link>
+            );
+          })}
+        </div>
       </header>
 
       {pairs.length === 0 ? (

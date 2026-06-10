@@ -4,11 +4,12 @@ import { useState } from "react";
 
 /**
  * 易混对决交互（系统设计/03 §3.5，效果图 ① 屏 C 段）。
- * 区分题流程：intro（看概念）→ generate 出题（Opus，花钱）→ 作答 → grade 评分。
+ * 流程（2026-06-10 云拍板：先背诵再检测）：
+ *   study（通读辨析档案全文）→ intro（确认开战）→ generate 出题（Opus，花钱）→ 作答 → grade 评分。
  * 评分严判：①选对概念 ②说出关键区分 test。未过 → 已在后端投待办筐弱项候选。
  */
 
-type Phase = "intro" | "generating" | "answering" | "grading" | "result";
+type Phase = "study" | "intro" | "generating" | "answering" | "grading" | "result";
 
 interface GenResp {
   question: string;
@@ -33,12 +34,15 @@ export function DuelSession({
   path,
   label,
   concepts,
+  content,
 }: {
   path: string;
   label: string;
   concepts: string[];
+  /** 辨析档案全文（RSC 预取，背诵阶段展示；空则跳过背诵直接 intro） */
+  content?: string;
 }) {
-  const [phase, setPhase] = useState<Phase>("intro");
+  const [phase, setPhase] = useState<Phase>(content ? "study" : "intro");
   const [gen, setGen] = useState<GenResp | null>(null);
   const [userAnswer, setUserAnswer] = useState("");
   const [result, setResult] = useState<GradeResp | null>(null);
@@ -112,6 +116,29 @@ export function DuelSession({
         </div>
       )}
 
+      {phase === "study" && content && (
+        <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+          <div className="flex items-center gap-2">
+            <span className="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-medium text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">
+              📖 背诵 · 辨析档案
+            </span>
+            <span className="text-[11px] text-zinc-400">{label}</span>
+          </div>
+          <pre className="mt-3 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-zinc-50 p-3 text-[12.5px] leading-relaxed text-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-200">
+            {content}
+          </pre>
+          <p className="mt-2 text-[11px] leading-relaxed text-zinc-400">
+            先把「一句话区分 test」「对照表」「陷阱模式」过一遍——对决题就踩在这些分界线上。
+          </p>
+          <button
+            onClick={() => setPhase("intro")}
+            className="mt-3 w-full rounded-xl bg-rose-600 py-3 text-sm font-semibold text-white transition hover:bg-rose-700"
+          >
+            📖 背完了，去对决 →
+          </button>
+        </div>
+      )}
+
       {phase === "intro" && (
         <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
           <div className="text-[11px] font-semibold text-rose-600">🆚 易混对决</div>
@@ -134,6 +161,14 @@ export function DuelSession({
           >
             ⚔️ 开始对决（Opus 出题，约 1-3 分钟）
           </button>
+          {content && (
+            <button
+              onClick={() => setPhase("study")}
+              className="mt-2 w-full text-[11px] text-zinc-400 underline"
+            >
+              ‹ 再背一遍辨析档案
+            </button>
+          )}
         </div>
       )}
 

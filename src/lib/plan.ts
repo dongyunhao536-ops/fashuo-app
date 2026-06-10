@@ -45,24 +45,24 @@ function hashPath(s: string): number {
   return h;
 }
 
-export async function getDuelPlan(limit = 3, today = new Date()) {
+/**
+ * 每科每日 perSubject 个（云 2026-06-10 拍板：每科每天只展示 5 对），
+ * 同科内按 path+日期 hash 轮换，避免老是同几对。
+ */
+export async function getDuelPlan(perSubject = 5, today = new Date()) {
   const pairs = await listDuelPairs();
   if (pairs.length === 0) return { items: [] as DuelPair[], total: 0 };
 
-  // 弱项科目权重：error_count>0 的考点按科目聚合
-  const { data: weak } = await supabaseAdmin
-    .from("kp_state")
-    .select("subject, error_count")
-    .gt("error_count", 0);
-  const weakBySubject = new Map<string, number>();
-  for (const w of weak ?? []) {
-    weakBySubject.set(w.subject, (weakBySubject.get(w.subject) ?? 0) + (Number(w.error_count) || 0));
-  }
-
   const seed = Math.floor(today.getTime() / DAY_MS_PLAN);
-  const scored = pairs
-    .map((p) => ({ p, score: weakBySubject.get(p.subject) ?? 0, jitter: (hashPath(p.path) + seed) % 997 }))
-    .sort((a, b) => b.score - a.score || a.jitter - b.jitter);
-
-  return { items: scored.slice(0, limit).map((s) => s.p), total: pairs.length };
+  const bySubject = new Map<string, DuelPair[]>();
+  for (const p of pairs) {
+    if (!bySubject.has(p.subject)) bySubject.set(p.subject, []);
+    bySubject.get(p.subject)!.push(p);
+  }
+  const items: DuelPair[] = [];
+  for (const list of bySubject.values()) {
+    list.sort((a, b) => ((hashPath(a.path) + seed) % 997) - ((hashPath(b.path) + seed) % 997));
+    items.push(...list.slice(0, perSubject));
+  }
+  return { items, total: pairs.length };
 }

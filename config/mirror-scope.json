@@ -22,6 +22,9 @@
 
     { "pattern": "易混概念库/刑法-*.md", "kind": "yixiao" },
     { "pattern": "易混概念库/民法-*.md", "kind": "yixiao" },
+    { "pattern": "易混概念库/法理-*.md", "kind": "yixiao" },
+    { "pattern": "易混概念库/宪法-*.md", "kind": "yixiao" },
+    { "pattern": "易混概念库/法制史-*.md", "kind": "yixiao" },
 
     { "pattern": "法律更新档案/01_刑法相关更新.md", "kind": "textbook" },
     { "pattern": "法律更新档案/02_民法相关更新.md", "kind": "textbook" }
