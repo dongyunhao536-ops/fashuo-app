@@ -59,8 +59,8 @@ export async function listDuelPairs(subject?: string): Promise<DuelPair[]> {
   return pairs;
 }
 
-/** 读某易混对全文（拼 content_mirror 的 chunks） */
-async function readPairContent(path: string): Promise<string> {
+/** 读某易混对全文（拼 content_mirror 的 chunks）——对决页"先读辨析"背诵区也用它 */
+export async function readPairContent(path: string): Promise<string> {
   const { data } = await supabaseAdmin
     .from("content_mirror")
     .select("content, chunk_no")

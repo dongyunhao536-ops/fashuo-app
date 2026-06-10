@@ -83,6 +83,7 @@ interface AnkiCard {
   note_id: number;
   subject: string;
   is_fatiao: boolean;
+  deck: string;
   chapter: string;
   题型: string;
   星级: number;
@@ -200,6 +201,70 @@ export async function getStudyMaterial(kpId: string): Promise<StudyMaterial> {
       cards.length === 0
         ? "本考点暂无关联 Anki 卡（法综覆盖率较低或冷点）——可直接进入检测，或在答疑 tab 提问。"
         : undefined,
+  };
+}
+
+// ============================================================
+// 全卡浏览（/cards 卡组入口，零成本零 DB）——保证 863 张卡一张不漏可达，
+// 不依赖考点匹配（民法法条卡等无法按名挂 kp 的卡由此入口兜底）。
+// ============================================================
+
+export interface CardListItem {
+  noteId: number;
+  subject: string;
+  /** 去掉牌组根名的卡组路径，如 "民法法条分析" / "A 刑法学/05.故意犯罪的停止形态/02 第二节 犯罪既遂" */
+  deck: string;
+  title: string;
+  star: number;
+  isFatiao: boolean;
+}
+
+const deckPath = (c: AnkiCard) => c.deck.split("::").slice(1).join("/");
+
+export function listAnkiCards(subject?: string): CardListItem[] {
+  const out: CardListItem[] = [];
+  for (const c of loadAnki().values()) {
+    if (subject && c.subject !== subject) continue;
+    out.push({
+      noteId: c.note_id,
+      subject: c.subject,
+      deck: deckPath(c),
+      title: c.title.trim(),
+      star: c.星级 ?? 0,
+      isFatiao: c.is_fatiao,
+    });
+  }
+  // 卡组路径排序 = 牌组编号序 = 章节序；同组内保持 note 顺序（即卡组内顺序）
+  return out.sort((a, b) => a.deck.localeCompare(b.deck, "zh") || a.noteId - b.noteId);
+}
+
+export interface CardView {
+  noteId: number;
+  subject: string;
+  deck: string;
+  title: string;
+  type: string;
+  contentHtml: string;
+  sourceHtml: string;
+  chapterHtml: string;
+  noteHtml: string;
+}
+
+export function getAnkiCardView(noteId: number): CardView | null {
+  const c = loadAnki().get(noteId);
+  if (!c) return null;
+  const timu = c.题目HTML ?? "";
+  const yuanwen = c.原文HTML ?? "";
+  return {
+    noteId: c.note_id,
+    subject: c.subject,
+    deck: deckPath(c),
+    title: c.title.trim(),
+    type: c.题型 ?? "其他",
+    contentHtml: timu || yuanwen,
+    sourceHtml: timu && yuanwen ? yuanwen : "",
+    chapterHtml: c.章节HTML ?? "",
+    noteHtml: c.笔记HTML ?? "",
   };
 }
 

@@ -46,8 +46,26 @@ const FREQ_BADGE: Record<string, string> = {
   低: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
 };
 
-export default async function RecitePage() {
-  const [plan, duel] = await Promise.all([getTodayPlan(undefined, 30), getDuelPlan(3)]);
+const SUBJECT_TABS = ["全部", "刑法", "民法", "法理", "宪法", "法制史"];
+const CAPACITY_OPTIONS = [10, 30, 50];
+
+export default async function RecitePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ subject?: string; n?: string }>;
+}) {
+  const sp = await searchParams;
+  const subject = sp.subject && SUBJECT_TABS.includes(sp.subject) && sp.subject !== "全部" ? sp.subject : undefined;
+  const capacity = CAPACITY_OPTIONS.includes(Number(sp.n)) ? Number(sp.n) : 30;
+  const qs = (s: string | undefined, n: number) => {
+    const p = new URLSearchParams();
+    if (s) p.set("subject", s);
+    if (n !== 30) p.set("n", String(n));
+    const str = p.toString();
+    return str ? `/recite?${str}` : "/recite";
+  };
+
+  const [plan, duel] = await Promise.all([getTodayPlan(subject, capacity), getDuelPlan(3)]);
   const groups: PlanItem["bucket"][] = ["复验", "到期", "新考点"];
   const total = plan.items.length;
 
@@ -62,6 +80,45 @@ export default async function RecitePage() {
             {plan.date} · {plan.stage}
           </span>
         </div>
+
+        {/* 科目选择（按章节顺序逐科推进） */}
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {SUBJECT_TABS.map((s) => {
+            const active = (s === "全部" && !subject) || s === subject;
+            return (
+              <Link
+                key={s}
+                href={qs(s === "全部" ? undefined : s, capacity)}
+                className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
+                  active
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+                }`}
+              >
+                {s}
+              </Link>
+            );
+          })}
+        </div>
+
+        {/* 背诵量选择 */}
+        <div className="mt-2 flex items-center gap-1.5">
+          <span className="text-[11px] text-zinc-400">背诵量</span>
+          {CAPACITY_OPTIONS.map((n) => (
+            <Link
+              key={n}
+              href={qs(subject, n)}
+              className={`rounded-lg px-2.5 py-0.5 text-[12px] font-medium transition ${
+                n === capacity
+                  ? "bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-300 dark:ring-indigo-700"
+                  : "bg-white text-zinc-500 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+              }`}
+            >
+              {n}
+            </Link>
+          ))}
+        </div>
+
         <div className="mt-2 text-[12px] text-zinc-500">
           {total} 个考点 · {plan.counts.复验} 复验 / {plan.counts.到期} 到期 /{" "}
           {plan.counts.新考点} 新 · 未学剩余 {plan.counts.未学剩余}
@@ -154,8 +211,16 @@ export default async function RecitePage() {
         </section>
       )}
 
+      {/* 全卡浏览入口（含全部法条卡，考点匹配不上的卡由此兜底） */}
+      <Link
+        href="/cards"
+        className="rounded-2xl bg-white p-3 text-center text-[13px] font-medium text-indigo-600 shadow-sm ring-1 ring-zinc-200/60 transition hover:ring-indigo-300 dark:bg-zinc-900 dark:text-indigo-400 dark:ring-zinc-800"
+      >
+        📚 全卡浏览 · 按卡组章节顺序（含全部法条卡）›
+      </Link>
+
       <p className="mt-2 text-center text-[10px] text-zinc-400">
-        优先级 P =（真题频率×3 + 弱项×2 + 科目权重）×（1+遗忘紧迫度）
+        新考点按教材章节顺序引入 · 复验/到期按优先级 P 排序
       </p>
 
       <TabBar active="recite" />

@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
+import { AnkiCardView } from "./AnkiCardView";
 
 /**
  * 背诵检测交互（效果图 ①·5 / ②·A / ②·B）。
@@ -196,46 +197,7 @@ function EncodePane({
           </div>
 
           {c.contentHtml ? (
-            <>
-              {/* 原始 Anki 卡 HTML（颜色/排版一字不差）。卡内配色按白底设计 → 恒白底纸卡 */}
-              <article
-                className="anki-html mt-2 rounded-xl bg-white"
-                dangerouslySetInnerHTML={{ __html: c.contentHtml }}
-              />
-              {c.sourceHtml && (
-                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
-                    📖 考试分析原文对照（完整原文，含上下文）
-                  </summary>
-                  <article
-                    className="anki-html mt-2 rounded-lg bg-white p-2"
-                    dangerouslySetInnerHTML={{ __html: c.sourceHtml }}
-                  />
-                </details>
-              )}
-              {c.chapterHtml && (
-                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
-                    🗺️ 章节定位 · 知识结构图
-                  </summary>
-                  <article
-                    className="anki-html mt-2 rounded-lg bg-white p-2"
-                    dangerouslySetInnerHTML={{ __html: c.chapterHtml }}
-                  />
-                </details>
-              )}
-              {c.noteHtml && (
-                <details className="mt-2 rounded-xl bg-zinc-50 p-2 dark:bg-zinc-800/60">
-                  <summary className="cursor-pointer text-[12px] font-medium text-zinc-600 dark:text-zinc-300">
-                    ✏️ 我的笔记
-                  </summary>
-                  <article
-                    className="anki-html mt-2 rounded-lg bg-white p-2"
-                    dangerouslySetInnerHTML={{ __html: c.noteHtml }}
-                  />
-                </details>
-              )}
-            </>
+            <AnkiCardView card={c} />
           ) : (
             <>
               {/* 兜底：极个别无 HTML 的卡退回分桶要点视图 */}

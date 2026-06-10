@@ -92,6 +92,12 @@ export function paceQuota(untestedCount: number, today = new Date()): number {
 
 const nameOf = (kp: KpRow) => String(kp.ext?.name ?? kp.kp_id);
 
+const SUBJECT_ORDER = ["刑法", "民法", "法理", "宪法", "法制史"];
+const subjectRank = (s: string) => {
+  const i = SUBJECT_ORDER.indexOf(s);
+  return i === -1 ? 99 : i;
+};
+
 /**
  * 生成今日背诵清单。
  * @param kps        全部考点状态（可按 subject 预过滤）
@@ -147,12 +153,19 @@ export function buildDailyPlan(opts: {
     .map((k) => mk(k, "到期", urgencyOf(k, today), "间隔到期需复习"))
     .sort((a, b) => b.priority - a.priority);
 
-  // ③ 新考点——按价值 V 降序（真题频率主导），取配速器额度
-  const quota = paceQuota(untested.length, today);
+  // ③ 新考点——按教材章节顺序引入（kp_id 即建库时的教材顺序；云 2026-06-10 拍板：
+  //    每一科必须按章节体系推进，价值 V 仅作显示参考，不再决定新考点先后）。
+  //    跨科目时按固定科目顺序排（刑→民→法理→宪→法史），同科目内章节序。
+  //    额度=用户所选背诵量减去复验/到期后的余量（云自选 10/30/50，不再用配速器卡死）。
+  const remaining = Math.max(0, capacity - 复验.length - 到期.length);
   const 新考点 = untested
-    .map((k) => mk(k, "新考点", 0, `配速引入(剩余未学${untested.length})`))
-    .sort((a, b) => b.value - a.value)
-    .slice(0, quota);
+    .map((k) => mk(k, "新考点", 0, `章节顺序推进(剩余未学${untested.length})`))
+    .sort(
+      (a, b) =>
+        subjectRank(a.subject) - subjectRank(b.subject) ||
+        a.kp_id.localeCompare(b.kp_id),
+    )
+    .slice(0, remaining);
 
   // 容量裁剪：复验 > 到期 > 新考点
   const items = [...复验, ...到期, ...新考点].slice(0, capacity);

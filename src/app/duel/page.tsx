@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { listDuelPairs, parsePair } from "@/lib/yixiao";
+import { listDuelPairs, parsePair, readPairContent } from "@/lib/yixiao";
 import { DuelSession } from "@/components/DuelSession";
 import { TabBar } from "@/components/TabBar";
 
@@ -22,9 +22,10 @@ export default async function DuelPage({
   const sp = await searchParams;
   const path = sp.path ? decodeURIComponent(sp.path) : "";
 
-  // ── 单对模式：做区分题 ──
+  // ── 单对模式：先读辨析档案（背诵区），再做区分题 ──
   if (path) {
     const pair = parsePair(path);
+    const content = await readPairContent(path);
     return (
       <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
         <header className="flex items-center gap-2">
@@ -35,6 +36,19 @@ export default async function DuelPage({
             {pair.subject}·区分题
           </h1>
         </header>
+
+        {/* 辨析档案背诵区（2026-06-10）：对决前可通读完整辨析——区分test/教材依据/对照表/陷阱模式 */}
+        {content && (
+          <details className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+            <summary className="cursor-pointer text-[13px] font-medium text-rose-600">
+              📖 先读辨析档案（{pair.label}）›
+            </summary>
+            <pre className="mt-2 max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-zinc-50 p-3 text-[12.5px] leading-relaxed text-zinc-800 dark:bg-zinc-800/60 dark:text-zinc-200">
+              {content}
+            </pre>
+          </details>
+        )}
+
         <DuelSession path={path} label={pair.label} concepts={pair.concepts} />
         <TabBar active="recite" />
       </main>
