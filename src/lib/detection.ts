@@ -99,6 +99,16 @@ interface AnkiCard {
   题目HTML?: string;
   原文HTML?: string;
   笔记HTML?: string;
+  /** 小节分段（L1 出题/评分单位）：一卡多考点时题目与 answerKey 必须同段 */
+  分段?: AnkiSegment[];
+}
+
+interface AnkiSegment {
+  标题: string;
+  星级: number;
+  口诀: string[];
+  P1必背高精: string[];
+  P2必背: string[];
 }
 
 // Anki 卡组随仓库一起打包（src/data/anki_extracted.json，~6 MB / 863 张卡）。
@@ -228,24 +238,50 @@ function generateL1(kp: KpRow): DetectQuestion {
   // 取星级最高的卡（最重要的题目）作为本次检测题
   const pick = cards.sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))[0];
 
-  // L1 关键词集 = P1必背高精（核心，"高精"层）+ 口诀。
+  // 一卡多考点（258 张卡含多个编号小节）→ 题目与 answerKey 必须同段，
+  // 否则题目只问第一小节、关键词却混入其他小节 → 永远到不了 80% 通过线（2026-06-10 修）。
+  const seg = pickSegment(pick, (kp.ext as { name?: string })?.name ?? "");
+  const segTitle = (seg?.标题 || pick.title).trim();
+
+  // L1 关键词集 = 本段 P1必背高精（核心，"高精"层）+ 本段口诀。
   //   不纳入 P2必背：P2 是要点级展开（往往是整句解释），属 L2 理解检测的料；
   //   若全混进 L1 答案集，80% 阈值会变成"逐句默写整本书"，惩罚正常的结构化回答。
   //   （依据 Anki 标注体系：P1=高精必背=L1 默写靶点；P2=要点=L2。见 memory: "P1精确P2要点"）
-  const p1 = pick.P1必背高精 ?? [];
-  const mnemonics = (pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, ""));
-  // 兜底：个别卡 P1 为空（只标了 P2）→ 退用 P2，避免 L1 无料可测。
-  const core = p1.length > 0 ? p1 : (pick.P2必背 ?? []);
+  const p1 = seg?.P1必背高精 ?? pick.P1必背高精 ?? [];
+  const mnemonics = (seg?.口诀 ?? pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, ""));
+  // 兜底：个别段 P1 为空（只标了 P2）→ 退用本段 P2，避免 L1 无料可测。
+  const core = p1.length > 0 ? p1 : (seg?.P2必背 ?? pick.P2必背 ?? []);
   const keywords = uniqShort([...core, ...mnemonics]);
 
   return {
     kpId: kp.kp_id,
     level: "L1",
-    question: `请按要点默写：${pick.title.trim()}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
+    question: `请按要点默写：${segTitle}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
     answerKey: keywords,
     source: "anki",
     sourceRef: `anki:${pick.note_id}`,
   };
+}
+
+/**
+ * 选出题小节：优先标题与考点名互含的段（去掉 "0XX."/✨/"题目：" 修饰后比对），
+ * 否则取星级最高段（同星取首段）。无分段数据 → null（退整卡，与旧行为一致）。
+ */
+function pickSegment(card: AnkiCard, kpName: string): AnkiSegment | null {
+  const segs = (card.分段 ?? []).filter((s) => s.P1必背高精.length || s.P2必背.length || s.口诀.length);
+  if (segs.length === 0) return null;
+  if (segs.length === 1) return segs[0];
+  const clean = (s: string) =>
+    normalize(s.replace(/^\d{3}\./, "").replace(/✨/g, "").replace(/^题目[:：]/, ""));
+  const name = normalize(kpName);
+  if (name.length >= 2) {
+    const hit = segs.find((s) => {
+      const t = clean(s.标题);
+      return t.length >= 2 && (t.includes(name) || name.includes(t));
+    });
+    if (hit) return hit;
+  }
+  return [...segs].sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))[0];
 }
 
 /**

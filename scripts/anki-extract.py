@@ -125,6 +125,44 @@ def raw_html(h):
 
     return re.sub(r'src="([^"]+)"', _src, h).strip()
 
+# ── 小节分段层（2026-06-10：修 L1 评分误判）──
+# 243 张卡是"一卡多考点"（一张卡含 009/010/011 多个编号小节）。L1 出题若按整卡取
+# 关键词，题目只问第一个小节、answerKey 却混入其他小节 → 永远到不了 80% 通过线。
+# 故按 <h2> 标题把"题目"字段切段，每段独立跑 annotate，L1 以段为出题/评分单位。
+H2_RE = re.compile(r"<h2[^>]*>", re.I)
+
+def segment_field(htmltext):
+    """按 <h2 边界切分字段 HTML → [{标题, 星级, 口诀, P1必背高精, P2必背}]。
+    首个 h2 之前的内容并入第一段。无 h2 → 单段（标题留空，调用方用卡 title）。"""
+    if not htmltext or not htmltext.strip():
+        return []
+    starts = [m.start() for m in H2_RE.finditer(htmltext)]
+    if not starts:
+        chunks = [htmltext]
+    else:
+        chunks = []
+        if starts[0] > 0:
+            head = htmltext[: starts[0]]
+            if re.sub(r"<[^>]+>", "", head).strip():
+                chunks.append(head)  # h2 前导内容自成一段（无标题）
+        for i, s in enumerate(starts):
+            e = starts[i + 1] if i + 1 < len(starts) else len(htmltext)
+            chunks.append(htmltext[s:e])
+    segs = []
+    for chunk in chunks:
+        m = re.search(r"<h2[^>]*>([\s\S]*?)</h2>", chunk, re.I)
+        title = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", html.unescape(m[1]))).strip() if m else ""
+        ann = annotate(chunk)
+        g = lambda *ks: [s for k in ks for s in ann.get(k, [])]
+        segs.append({
+            "标题": title,
+            "星级": title.count("✨"),
+            "口诀": g("口诀"),
+            "P1必背高精": g("P1必背高精"),
+            "P2必背": g("P2必背"),
+        })
+    return segs
+
 def subject_of(deck):
     parts = deck.split("::")
     seg = parts[1].strip() if len(parts) > 1 else parts[0].strip()
@@ -197,6 +235,8 @@ for nid, mid, flds in c.execute("select id, mid, flds from notes order by id"):
         "题目HTML": timu_html,
         "原文HTML": yuanwen_html,
         "笔记HTML": biji_html,
+        # 小节分段（L1 出题/评分单位）：基于"题目"字段（无则原文/Back）按 h2 切分
+        "分段": segment_field(src if kind == "卡片" else f.get("Back", "")),
     })
 db.close()
 

@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "@/lib/supabase";
+import { supabaseAdmin, fetchAllRows } from "@/lib/supabase";
 import { buildDailyPlan, type KpRow } from "@/lib/scheduler";
 
 /**
@@ -12,10 +12,11 @@ export async function GET(req: Request) {
   const capacity = Number(url.searchParams.get("capacity")) || 30;
 
   try {
-    let q = supabaseAdmin.from("kp_state").select("*");
-    if (subject) q = q.eq("subject", subject);
-    const { data: kps, error } = await q;
-    if (error) throw new Error(`kp_state 读取失败：${error.message}`);
+    const kps = await fetchAllRows<KpRow>((from, to) => {
+      let q = supabaseAdmin.from("kp_state").select("*").order("kp_id").range(from, to);
+      if (subject) q = q.eq("subject", subject);
+      return q;
+    });
 
     // G2：pending 复验请求的考点ID
     const { data: ev } = await supabaseAdmin
@@ -28,7 +29,7 @@ export async function GET(req: Request) {
       .filter((x): x is string => Boolean(x));
 
     const plan = buildDailyPlan({
-      kps: (kps ?? []) as KpRow[],
+      kps,
       reviewKpIds,
       capacity,
     });

@@ -14,7 +14,9 @@ const fz = notes.filter((n) => FZ.has(n.subject) && !n.is_fatiao);
 
 const rows = fz.map((n, i) => {
   const chapterLine = (n.chapter || "").split("\n")[0].slice(0, 60).trim();
-  const content = [n.题目, n.原文].filter(Boolean).join("\n").trim();
+  // ⚠️ 提取 JSON 的字段叫 title/原文全文（不是 题目/原文）——2026-06-10 修：
+  //   旧字段名读出 undefined → content 全空 → 灌库 0 行（线上 content_mirror 实测为 0）。
+  const content = [n.title, n.原文全文].filter(Boolean).join("\n").trim();
   return {
     kind: "textbook", // 复用 search_textbook，零改动即可被答疑 grep
     path: `${PATH_PREFIX}/${n.subject}/${chapterLine || n.note_id}`,
@@ -48,11 +50,31 @@ const sb = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } },
 );
+
+/** 国内家宽 → 阿里云 ECS 偶发 TCP 抖断，重试指数退避（同 anki-index-kp.mjs） */
+async function withRetry(label, fn, max = 5) {
+  let lastErr;
+  for (let i = 0; i < max; i++) {
+    try {
+      const res = await fn();
+      const msg = res?.error ? String(res.error.message ?? res.error) : "";
+      const isNet = /fetch failed|ETIMEDOUT|ECONNRESET|ENETUNREACH|EAI_AGAIN|socket hang up|terminated/i.test(msg);
+      if (!res?.error || !isNet) return res;
+      lastErr = res.error;
+    } catch (e) { lastErr = e; }
+    if (i < max - 1) {
+      const delay = 400 * Math.pow(2, i);
+      process.stdout.write(`    ↻ ${label} 抖断，${delay}ms 后重试 (${i + 1}/${max - 1})\n`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  return { error: lastErr };
+}
+
 // 幂等：先删旧的 Anki法综 行（不碰真实刑民教材 path）
-const { error: delErr } = await sb
-  .from("content_mirror")
-  .delete()
-  .like("path", `${PATH_PREFIX}/%`);
+const { error: delErr } = await withRetry("清旧行", () =>
+  sb.from("content_mirror").delete().like("path", `${PATH_PREFIX}/%`),
+);
 if (delErr) {
   console.error("✗ 清旧行失败：", delErr.message);
   process.exit(1);
@@ -60,7 +82,9 @@ if (delErr) {
 let done = 0;
 for (let i = 0; i < rows.length; i += 200) {
   const batch = rows.slice(i, i + 200);
-  const { error } = await sb.from("content_mirror").insert(batch);
+  const { error } = await withRetry(`插入批${i}`, () =>
+    sb.from("content_mirror").insert(batch),
+  );
   if (error) {
     console.error(`✗ 插入失败(批 ${i})：`, error.message);
     process.exit(1);

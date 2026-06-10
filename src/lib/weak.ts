@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "./supabase";
+import { supabaseAdmin, fetchAllRows } from "./supabase";
 
 /**
  * 弱项清单（RSC 直接调）。
@@ -27,18 +27,35 @@ export interface WeakKp {
 }
 
 export async function getWeakKps(subject?: string): Promise<WeakKp[]> {
-  let q = supabaseAdmin
-    .from("kp_state")
-    .select(
-      "kp_id, subject, ext, error_count, review_count, cur_level, cap_level, l1_status, l2_status, l3_status, difficulty, last_review, next_due",
-    )
-    .or("error_count.gt.0,l1_status.eq.failed,l2_status.eq.failed,l3_status.eq.failed")
-    .order("error_count", { ascending: false })
-    .order("last_review", { ascending: false, nullsFirst: false })
-    .order("kp_id");
-  if (subject) q = q.eq("subject", subject);
-  const { data, error } = await q;
-  if (error) throw new Error(`getWeakKps 失败：${error.message}`);
+  interface Row {
+    kp_id: string;
+    subject: string;
+    ext: Record<string, unknown> | null;
+    error_count: number;
+    review_count: number;
+    cur_level: string;
+    cap_level: string;
+    l1_status: string;
+    l2_status: string;
+    l3_status: string;
+    difficulty: number;
+    last_review: string | null;
+    next_due: string | null;
+  }
+  const data = await fetchAllRows<Row>((from, to) => {
+    let q = supabaseAdmin
+      .from("kp_state")
+      .select(
+        "kp_id, subject, ext, error_count, review_count, cur_level, cap_level, l1_status, l2_status, l3_status, difficulty, last_review, next_due",
+      )
+      .or("error_count.gt.0,l1_status.eq.failed,l2_status.eq.failed,l3_status.eq.failed")
+      .order("error_count", { ascending: false })
+      .order("last_review", { ascending: false, nullsFirst: false })
+      .order("kp_id")
+      .range(from, to);
+    if (subject) q = q.eq("subject", subject);
+    return q;
+  });
 
   return (data ?? []).map((k) => ({
     kp_id: k.kp_id,

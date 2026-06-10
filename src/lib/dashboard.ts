@@ -1,4 +1,4 @@
-import { supabaseAdmin } from "./supabase";
+import { supabaseAdmin, fetchAllRows } from "./supabase";
 import { buildDailyPlan, type KpRow } from "./scheduler";
 
 /**
@@ -63,7 +63,9 @@ export async function getDashboard(): Promise<DashboardData> {
     todayStudy,
     todayDetect,
   ] = await Promise.all([
-    supabaseAdmin.from("kp_state").select("*"),
+    fetchAllRows<KpRow>((from, to) =>
+      supabaseAdmin.from("kp_state").select("*").order("kp_id").range(from, to),
+    ),
     supabaseAdmin
       .from("ask_summary")
       .select("confusion, created_at")
@@ -118,7 +120,7 @@ export async function getDashboard(): Promise<DashboardData> {
     .map((e) => e.kp_id)
     .filter((x): x is string => !!x);
   const plan = buildDailyPlan({
-    kps: (kpAll.data ?? []) as KpRow[],
+    kps: kpAll,
     reviewKpIds,
     capacity: PLAN_CAPACITY,
     today,
@@ -130,7 +132,7 @@ export async function getDashboard(): Promise<DashboardData> {
   // —— 3. 雷达：按科目聚合 mastered/总数 ——
   const radarMap = new Map<string, { mastered: number; total: number }>();
   for (const s of SUBJECTS) radarMap.set(s, { mastered: 0, total: 0 });
-  for (const k of (kpAll.data ?? []) as KpRow[]) {
+  for (const k of kpAll) {
     const row = radarMap.get(k.subject);
     if (!row) continue;
     row.total++;
