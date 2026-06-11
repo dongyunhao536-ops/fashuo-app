@@ -4,7 +4,7 @@ import { TabBar } from "@/components/TabBar";
 import { EventActions } from "@/components/EventActions";
 
 /**
- * 待办筐（events status=pending）。
+ * 待办筐（events status=pending）。极简暗色版方案 ⑧ 屏。
  * 系统设计/11：手机只读不改 markdown；这里展示三类候选（弱项/心得/复验），
  * PC 登记环节（去重一处）才把它们 consumed 进 markdown。本页只读，不写。
  */
@@ -22,27 +22,11 @@ interface EventRow {
   created_at: string;
 }
 
-const TYPE_META: Record<string, { icon: string; cls: string; desc: string }> = {
-  弱项候选: {
-    icon: "⚠️",
-    cls: "text-red-600 dark:text-red-400",
-    desc: "答疑/检测暴露的薄弱点，登记后进当前弱项加权",
-  },
-  心得候选: {
-    icon: "📝",
-    cls: "text-sky-600 dark:text-sky-400",
-    desc: "可复用规律，需真题二次背书才进心得正文",
-  },
-  复验请求: {
-    icon: "🔁",
-    cls: "text-violet-600 dark:text-violet-400",
-    desc: "答疑澄清后，背诵清单优先复验该考点（G2）",
-  },
-  已强化: {
-    icon: "✅",
-    cls: "text-emerald-600 dark:text-emerald-400",
-    desc: "之前的弱项已答对，可移入已强化项",
-  },
+const TYPE_DESC: Record<string, string> = {
+  弱项候选: "答疑/检测暴露的薄弱点，登记后进当前弱项加权",
+  心得候选: "可复用规律，需真题二次背书才进心得正文",
+  复验请求: "答疑澄清后，背诵清单优先复验该考点（G2）",
+  已强化: "之前的弱项已答对，可移入已强化项",
 };
 
 export default async function InboxPage() {
@@ -66,81 +50,71 @@ export default async function InboxPage() {
   const types = [...byType.keys()].sort((a, b) => rank(a) - rank(b));
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
-      <header className="flex items-baseline justify-between">
-        <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-          🗂 待办筐
-        </h1>
-        <span className="text-[11px] text-zinc-500">{rows.length} 条待登记</span>
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col pb-28 pt-4">
+      <header className="flex items-center justify-between px-4">
+        <Link href="/" className="text-[15px] text-blue">
+          ‹ 今日
+        </Link>
+        <h1 className="text-[17px] font-semibold">待办筐</h1>
+        <span className="text-[13px] text-label3">{rows.length} 项</span>
       </header>
 
-      <div className="rounded-xl bg-zinc-100 px-3 py-2 text-[11px] leading-relaxed text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-        📌 这些是答疑/检测自动沉淀的候选。手机端只看不改；在 PC 上「云确认 → 登记进 markdown」后才会
-        consumed（去重只在 PC 一处，避免两库各记一次）。
-      </div>
+      <p className="px-5 pb-1 pt-3 text-[13px] leading-relaxed text-label2">
+        答疑、教练、检测中沉淀的候选。「收下」后会在你 PC 端登记进档案；去重只在 PC 一处。
+      </p>
 
       {error && (
-        <div className="rounded-xl bg-red-50 p-3 text-[12px] text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-300">
+        <div className="mx-4 mt-2 rounded-[10px] bg-red/15 p-3 text-[12.5px] text-red">
           读取失败：{error.message}
         </div>
       )}
 
       {rows.length === 0 ? (
-        <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-zinc-400 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-          待办筐是空的 🎉<br />
+        <div className="mx-4 mt-3 rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+          待办筐是空的
+          <br />
           答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。
         </div>
       ) : (
         types.map((type) => {
-          const meta = TYPE_META[type] ?? {
-            icon: "•",
-            cls: "text-zinc-500",
-            desc: "",
-          };
           const items = byType.get(type)!;
           return (
-            <section key={type} className="flex flex-col gap-2">
-              <div className={`mt-1 text-[12px] font-semibold ${meta.cls}`}>
-                {meta.icon} {type}
-                <span className="ml-1 text-zinc-400">· {items.length}</span>
-              </div>
-              <div className="text-[10.5px] text-zinc-400">{meta.desc}</div>
-              {items.map((r) => (
-                <div
-                  key={r.id}
-                  className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800"
-                >
-                  <div className="text-[13px] text-zinc-800 dark:text-zinc-200">
-                    {r.knowledge ?? r.kp_id ?? "(无描述)"}
-                  </div>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10.5px] text-zinc-400">
-                    {r.subject && (
-                      <span className="rounded bg-zinc-100 px-1.5 py-0.5 dark:bg-zinc-800">
-                        {r.subject}
+            <section key={type}>
+              <h2 className="px-8 pb-1 pt-5 text-[13px] text-label2">
+                {type} · {items.length}
+                {type === "复验请求" && <span className="text-label3">（自动入清单）</span>}
+              </h2>
+              <div className="px-8 pb-2 text-[11px] text-label3">{TYPE_DESC[type] ?? ""}</div>
+              <div className="mx-4 divide-y divide-hairline rounded-[12px] bg-card">
+                {items.map((r) => (
+                  <div key={r.id} className="px-4 py-3.5">
+                    <div className="text-[15px] leading-snug">
+                      {r.knowledge ?? r.kp_id ?? "(无描述)"}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12px] text-label2">
+                      {r.subject && <span>{r.subject}</span>}
+                      {r.kp_id && <span>{r.kp_id}</span>}
+                      {r.anchor && <span>锚 {r.anchor}</span>}
+                      <span>{r.source}</span>
+                      <span className="ml-auto text-label3">
+                        {new Date(r.created_at).toLocaleDateString("zh-CN")}
                       </span>
+                    </div>
+                    {/* 复验请求由 G2 自动进背诵清单，不需云确认；其余候选给收下/忽略 */}
+                    {type === "复验请求" ? (
+                      <span className="mt-2 inline-block rounded-[6px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft">
+                        已排入清单
+                      </span>
+                    ) : (
+                      <EventActions id={r.id} />
                     )}
-                    {r.kp_id && <span>{r.kp_id}</span>}
-                    {r.anchor && <span>锚 {r.anchor}</span>}
-                    <span>来源：{r.source}</span>
-                    <span className="ml-auto">
-                      {new Date(r.created_at).toLocaleDateString("zh-CN")}
-                    </span>
                   </div>
-                  {/* 复验请求由 G2 自动进背诵清单，不需云确认；其余候选给收下/忽略 */}
-                  {type !== "复验请求" && <EventActions id={r.id} />}
-                </div>
-              ))}
+                ))}
+              </div>
             </section>
           );
         })
       )}
-
-      <Link
-        href="/"
-        className="mt-1 text-center text-[12px] text-indigo-600 dark:text-indigo-400"
-      >
-        ‹ 回仪表盘
-      </Link>
 
       <TabBar active="dash" />
     </main>

@@ -26,11 +26,11 @@ export default async function CardPage({
 
   if (!card) {
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
-        <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-zinc-400 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-6">
+        <div className="rounded-[12px] bg-card p-8 text-center text-[13px] text-label3">
           找不到卡片 {noteId}
         </div>
-        <Link href={backHref} className="text-center text-[12px] text-indigo-600">
+        <Link href={backHref} className="text-center text-[13px] text-blue">
           ‹ 返回全卡浏览
         </Link>
         <TabBar active="recite" />
@@ -39,20 +39,18 @@ export default async function CardPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <Link href={backHref} className="text-[12px] text-indigo-600 dark:text-indigo-400">
-          ‹ 返回全卡浏览
+        <Link href={backHref} className="text-[15px] text-blue">
+          ‹ 全卡浏览
         </Link>
-        <div className="mt-1 text-[11px] text-zinc-400">{card.deck}</div>
+        <div className="mt-1 text-[12px] text-label3">{card.deck}</div>
       </header>
 
-      <div className="rounded-2xl bg-white p-4 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+      <div className="rounded-[12px] bg-card p-4">
         <div className="flex items-center gap-2">
-          <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300">
-            📄 背诵原文 · 考试分析
-          </span>
-          <span className="ml-auto text-[10px] text-zinc-400">{card.type}</span>
+          <span className="text-[12px] text-label2">背诵原文 · 考试分析</span>
+          <span className="ml-auto text-[11px] text-label3">{card.type}</span>
         </div>
         <AnkiCardView card={card} />
       </div>

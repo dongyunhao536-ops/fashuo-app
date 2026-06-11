@@ -1,32 +1,45 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/* ===================================================================
+   极简暗色 / Apple HIG（真相源：D:\fashuo\系统设计\效果图\极简暗色版.html
+   + 极简暗色版-审查优化.md，2026-06-10 定稿）
+   纪律：
+     - 恒暗单套（无 light 模式）：bg 纯黑 / 卡 #1c1c1e / 二级 #2c2c2e
+     - 文字三档灰阶，层级靠字号+字重不靠彩色
+     - systemBlue #0a84ff 全站唯一强调色（激活态/主按钮/链接）
+     - 状态色（绿/橙/红）大面积仅用于评分结果；信息徽章允许 15% tint
+     - Anki 纸卡（.anki-html 容器）是全站唯一白底区域，卡内配色不反色
+   =================================================================== */
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+@theme {
+  --color-bg: #000000;
+  --color-card: #1c1c1e;
+  --color-card2: #2c2c2e;
+  --color-fill: rgba(120, 120, 128, 0.24);
+  --color-fill2: rgba(120, 120, 128, 0.16);
+  --color-label: #f5f5f7;
+  --color-label2: rgba(235, 235, 245, 0.6);
+  --color-label3: rgba(235, 235, 245, 0.3);
+  --color-hairline: rgba(255, 255, 255, 0.08);
+  --color-blue: #0a84ff;
+  --color-blue-soft: #5ab2ff;
+  --color-green: #30d158;
+  --color-orange: #ff9f0a;
+  --color-red: #ff453a;
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
+    "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-label);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
 }
 
 /* Anki 卡原始 HTML 渲染（背诵原文保真层）。
-   卡内 inline 颜色按白底设计 → 容器恒为白底纸卡，暗色模式下也不反色。 */
+   卡内 inline 颜色按白底设计 → 容器恒为白底纸卡，暗色 UI 下也不反色。 */
 .anki-html {
   font-size: 13.5px;
   line-height: 1.8;

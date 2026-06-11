@@ -3,7 +3,7 @@ import { listAnkiCards } from "@/lib/detection";
 import { TabBar } from "@/components/TabBar";
 
 /**
- * 全卡浏览（卡组入口）——863 张 Anki 卡按卡组章节树全量可达（2026-06-10）。
+ * 全卡浏览（卡组入口）——863 张 Anki 卡按卡组章节树全量可达（极简暗色版审查优化#2 补屏）。
  * 考点匹配挂不上的卡（民法法条卡 179 张等）由此入口兜底，保证背诵内容一张不漏。
  * 零成本零 DB：全部来自打包进 bundle 的 anki_extracted.json。
  */
@@ -29,26 +29,22 @@ export default async function CardsPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            📚 全卡浏览
-          </h1>
-          <span className="text-[11px] text-zinc-500">{cards.length} 张</span>
+        <div className="flex items-baseline justify-between px-1">
+          <h1 className="text-[28px] font-bold tracking-tight">全卡浏览</h1>
+          <span className="text-[12px] text-label3">{cards.length} 张</span>
         </div>
-        <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+        <p className="mt-1 px-1 text-[13px] leading-relaxed text-label2">
           按卡组章节顺序浏览全部 Anki 卡（含法条分析卡）——与原卡内容、排版、颜色一字不差。
         </p>
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {SUBJECT_TABS.map((s) => (
             <Link
               key={s}
               href={`/cards?subject=${encodeURIComponent(s)}`}
-              className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
-                s === subject
-                  ? "bg-indigo-600 text-white"
-                  : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+              className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
+                s === subject ? "bg-blue text-white" : "bg-card text-label2"
               }`}
             >
               {s}
@@ -58,23 +54,20 @@ export default async function CardsPage({
       </header>
 
       {[...groups.entries()].map(([deck, items]) => (
-        <details
-          key={deck}
-          className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800"
-        >
-          <summary className="cursor-pointer text-[13px] font-medium text-zinc-800 dark:text-zinc-200">
+        <details key={deck} className="rounded-[12px] bg-card p-3">
+          <summary className="cursor-pointer px-1 text-[14px] font-medium">
             {deck}
-            <span className="ml-1.5 text-[11px] text-zinc-400">· {items.length} 卡</span>
+            <span className="ml-1.5 text-[12px] font-normal text-label3">{items.length} 卡</span>
           </summary>
-          <ul className="mt-2 flex flex-col gap-1">
+          <ul className="mt-2 divide-y divide-hairline">
             {items.map((c) => (
               <li key={c.noteId}>
                 <Link
                   href={`/cards/${c.noteId}?subject=${encodeURIComponent(subject)}`}
-                  className="block rounded-lg px-2 py-1.5 text-[12.5px] leading-snug text-zinc-700 transition hover:bg-indigo-50 dark:text-zinc-300 dark:hover:bg-zinc-800"
+                  className="block px-1 py-2.5 text-[13.5px] leading-snug text-label"
                 >
                   {c.isFatiao && (
-                    <span className="mr-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+                    <span className="mr-1.5 rounded-[5px] bg-orange/15 px-1 py-0.5 text-[10px] text-orange">
                       法条
                     </span>
                   )}

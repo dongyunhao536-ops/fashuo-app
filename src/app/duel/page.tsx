@@ -4,10 +4,10 @@ import { DuelSession } from "@/components/DuelSession";
 import { TabBar } from "@/components/TabBar";
 
 /**
- * 易混对决（系统设计/03 §3.5）。
+ * 易混对决（系统设计/03 §3.5，极简暗色版审查优化#1 补屏）。
  * - /duel              → 列出全部易混对（按科目分组），点进做区分题
  * - /duel?path=<编码>  → 对某一对出区分题（DuelSession 客户端流程）
- * 从 /recite 今日清单「🆚 易混对决」段进入。
+ * 从 /recite 今日清单「易混背诵」段进入。
  */
 
 export const dynamic = "force-dynamic";
@@ -27,14 +27,13 @@ export default async function DuelPage({
     const pair = parsePair(path);
     const content = await readPairContent(path);
     return (
-      <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
-        <header className="flex items-center gap-2">
-          <Link href="/duel" className="text-[13px] text-zinc-400">
+      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+        <header className="flex items-center justify-between">
+          <Link href="/duel" className="text-[15px] text-blue">
             ‹ 易混
           </Link>
-          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            {pair.subject}·先背再战
-          </h1>
+          <h1 className="text-[17px] font-semibold">{pair.subject} · 先背再战</h1>
+          <span className="w-10" />
         </header>
         <DuelSession path={path} label={pair.label} concepts={pair.concepts} content={content} />
         <TabBar active="recite" />
@@ -56,31 +55,27 @@ export default async function DuelPage({
   );
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">
-            🆚 易混背诵+对决
-          </h1>
-          <span className="text-[11px] text-zinc-500">
+        <div className="flex items-baseline justify-between px-1">
+          <h1 className="text-[28px] font-bold tracking-tight">易混对决</h1>
+          <span className="text-[12px] text-label3">
             {subjectFilter ? `${shown.length} / ${pairs.length}` : pairs.length} 对
           </span>
         </div>
-        <p className="mt-1 text-[12px] leading-relaxed text-zinc-500">
+        <p className="mt-1 px-1 text-[13px] leading-relaxed text-label2">
           先通读辨析档案（区分 test / 对照表 / 陷阱），背完再做踩分界线的迷你案例。混了会进弱项档。
         </p>
         {/* 科目筛选 */}
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {["全部", ...SUB_ORDER].map((s) => {
             const active = (s === "全部" && !subjectFilter) || s === subjectFilter;
             return (
               <Link
                 key={s}
                 href={s === "全部" ? "/duel" : `/duel?subject=${encodeURIComponent(s)}`}
-                className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
-                  active
-                    ? "bg-rose-600 text-white"
-                    : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+                className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
+                  active ? "bg-blue text-white" : "bg-card text-label2"
                 }`}
               >
                 {s}
@@ -91,36 +86,39 @@ export default async function DuelPage({
       </header>
 
       {pairs.length === 0 ? (
-        <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-zinc-400 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-          易混概念库尚未镜像到云端 🗂<br />
+        <div className="rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+          易混概念库尚未镜像到云端
+          <br />
           （PC 跑 sync-content 后这里就有题）
         </div>
       ) : (
         subjects.map((sub) => (
-          <section key={sub} className="flex flex-col gap-2">
-            <div className="mt-1 text-[12px] font-semibold text-rose-600">
+          <section key={sub}>
+            <h2 className="px-4 pb-2 pt-1 text-[13px] text-label2">
               {sub}
-              <span className="ml-1 text-zinc-400">· {bySubject.get(sub)!.length}</span>
-            </div>
-            {bySubject.get(sub)!.map((p) => (
-              <Link
-                key={p.path}
-                href={`/duel?path=${encodeURIComponent(p.path)}`}
-                className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 transition hover:ring-rose-300 dark:bg-zinc-900 dark:ring-zinc-800"
-              >
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {p.concepts.map((c, i) => (
-                    <span key={i} className="flex items-center gap-1.5">
-                      {i > 0 && <span className="text-[10px] text-zinc-400">vs</span>}
-                      <span className="rounded-lg bg-rose-50 px-1.5 py-0.5 text-[12px] font-medium text-rose-700 dark:bg-rose-950/30 dark:text-rose-300">
-                        {c}
+              <span className="ml-1.5 text-label3">{bySubject.get(sub)!.length}</span>
+            </h2>
+            <div className="divide-y divide-hairline rounded-[12px] bg-card">
+              {bySubject.get(sub)!.map((p) => (
+                <Link
+                  key={p.path}
+                  href={`/duel?path=${encodeURIComponent(p.path)}`}
+                  className="flex min-h-11 items-center px-4 py-3"
+                >
+                  <div className="flex flex-1 flex-wrap items-center gap-1.5">
+                    {p.concepts.map((c, i) => (
+                      <span key={i} className="flex items-center gap-1.5">
+                        {i > 0 && <span className="text-[10px] text-label3">vs</span>}
+                        <span className="rounded-[6px] bg-fill px-1.5 py-0.5 text-[12px] font-medium">
+                          {c}
+                        </span>
                       </span>
-                    </span>
-                  ))}
-                  <span className="ml-auto text-[11px] text-rose-500">对决 ›</span>
-                </div>
-              </Link>
-            ))}
+                    ))}
+                  </div>
+                  <span className="ml-2 text-[14px] text-label3">›</span>
+                </Link>
+              ))}
+            </div>
           </section>
         ))
       )}

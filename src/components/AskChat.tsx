@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 
 /**
- * 答疑对话（v2.3 直答版，效果图 3/4 屏的功能版——引导式留第二迭代）。
+ * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
  * 调 /api/ask：六步预检 + 四段式/证据卡 + 信心度 + grep 锚定。
  * RPM 慢（案例题 ~2-3 分钟）→ 明显 loading 提示。
  * 答疑沉淀的候选弱项/心得已由路由写 events 待办筐，UI 给一句提示。
@@ -88,13 +88,10 @@ export function AskChat() {
     <div className="flex flex-col gap-3">
       {/* 科目选择器 */}
       <div className="flex flex-wrap items-center gap-1.5">
-        <span className="text-[11px] text-zinc-400">科目：</span>
         <button
           onClick={() => setSubject("")}
-          className={`rounded-full px-2.5 py-0.5 text-[12px] ${
-            subject === ""
-              ? "bg-indigo-600 text-white"
-              : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-800"
+          className={`rounded-full px-3 py-1 text-[12px] font-medium ${
+            subject === "" ? "bg-blue text-white" : "bg-card text-label2"
           }`}
         >
           不限
@@ -103,10 +100,8 @@ export function AskChat() {
           <button
             key={s}
             onClick={() => setSubject(s)}
-            className={`rounded-full px-2.5 py-0.5 text-[12px] ${
-              subject === s
-                ? "bg-indigo-600 text-white"
-                : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-800"
+            className={`rounded-full px-3 py-1 text-[12px] font-medium ${
+              subject === s ? "bg-blue text-white" : "bg-card text-label2"
             }`}
           >
             {s}
@@ -115,12 +110,11 @@ export function AskChat() {
       </div>
 
       {turns.length === 0 && (
-        <div className="rounded-2xl bg-white p-5 text-[12.5px] leading-relaxed text-zinc-500 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-          🧭 直答版答疑（v2.3）：问一道题或一个概念，我按「六步预检 → 心得/真题/教材
-          grep 锚定 → 四段式作答 → 证据卡 + 信心度」回答，**结论都可追溯到教材原文 /
-          真题题号 / 心得规则**。
-          <div className="mt-2 text-[11px] text-zinc-400">
-            ⏱ 七牛云 RPM 限速，案例题可能要等 1-3 分钟，请耐心。选个科目能让我顺带接上你之前的卡点。
+        <div className="rounded-[12px] bg-card p-5 text-[13px] leading-relaxed text-label2">
+          直答版答疑（v2.3）：问一道题或一个概念，我按「六步预检 → 心得/真题/教材 grep 锚定 →
+          四段式作答 → 证据卡 + 信心度」回答，结论都可追溯到教材原文 / 真题题号 / 心得规则。
+          <div className="mt-2 text-[12px] text-label3">
+            七牛云 RPM 限速，案例题可能要等 1-3 分钟。选个科目能让我顺带接上你之前的卡点。
           </div>
         </div>
       )}
@@ -129,9 +123,9 @@ export function AskChat() {
       {turns.map((t, i) => (
         <div key={i} className="flex flex-col gap-2">
           {/* 用户问题 */}
-          <div className="self-end max-w-[88%] rounded-2xl rounded-br-sm bg-indigo-600 px-3.5 py-2.5 text-[13px] leading-relaxed text-white">
+          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white">
             {t.subject && (
-              <span className="mr-1 rounded bg-white/20 px-1 py-0.5 text-[10px]">
+              <span className="mr-1.5 rounded-[5px] bg-white/20 px-1 py-0.5 text-[10px]">
                 {t.subject}
               </span>
             )}
@@ -140,14 +134,14 @@ export function AskChat() {
 
           {/* AI 答案 / loading / 错误 */}
           {t.loading && (
-            <div className="self-start flex items-center gap-2 rounded-2xl rounded-bl-sm bg-white px-3.5 py-3 text-[12px] text-zinc-500 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+            <div className="flex items-center gap-2 self-start rounded-[18px] rounded-bl-[4px] bg-card px-3.5 py-3 text-[12.5px] text-label2">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
               六步预检 + grep 教材中…（RPM 限速，案例题约 1-3 分钟）
             </div>
           )}
           {t.error && (
-            <div className="self-start max-w-[92%] rounded-2xl rounded-bl-sm bg-red-50 px-3.5 py-2.5 text-[12.5px] text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-300">
-              ⚠️ {t.error}
+            <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[4px] bg-red/15 px-3.5 py-2.5 text-[13px] text-red">
+              {t.error}
             </div>
           )}
           {t.result && <AnswerBubble result={t.result} />}
@@ -157,7 +151,7 @@ export function AskChat() {
       <div ref={bottomRef} />
 
       {/* 输入区 */}
-      <div className="sticky bottom-20 mt-1 flex items-end gap-2 rounded-2xl bg-white p-2 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+      <div className="sticky bottom-20 mt-1 flex items-end gap-2 border-t border-hairline bg-bg/90 pt-2 backdrop-blur">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -170,12 +164,12 @@ export function AskChat() {
           rows={2}
           disabled={busy}
           placeholder="问一道题或一个概念…（Ctrl/⌘+Enter 发送）"
-          className="flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100"
+          className="flex-1 resize-none rounded-[18px] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-label outline-none placeholder:text-label3"
         />
         <button
           onClick={send}
           disabled={busy || !input.trim()}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-indigo-600 text-white transition hover:bg-indigo-700 disabled:opacity-40"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue text-[16px] font-bold text-white disabled:opacity-40"
         >
           ↑
         </button>
@@ -191,44 +185,42 @@ function AnswerBubble({ result }: { result: AskResult }) {
     (result.meta?.review_kp_candidates?.length ?? 0);
   const confTone =
     result.confidence == null
-      ? "text-zinc-400"
+      ? "text-label3"
       : result.confidence >= 70
-        ? "text-emerald-600"
+        ? "text-green"
         : result.confidence >= 50
-          ? "text-amber-600"
-          : "text-red-500";
+          ? "text-orange"
+          : "text-red";
 
   return (
-    <div className="self-start w-full rounded-2xl rounded-bl-sm bg-white p-3.5 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+    <div className="w-full self-start rounded-[18px] rounded-bl-[4px] bg-card p-3.5">
       {/* 答案正文（保留 v2.3 框线/缩进格式） */}
-      <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-zinc-800 dark:text-zinc-200">
+      <pre className="whitespace-pre-wrap break-words font-sans text-[13.5px] leading-relaxed text-label">
         {result.answer}
       </pre>
 
       {/* 元信息条 */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-zinc-100 pt-2 text-[11px] dark:border-zinc-800">
+      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2 text-[11px]">
         {result.confidence != null && (
           <span className={confTone}>
             信心度 {result.confidence}%{result.starred ? " ★" : ""}
           </span>
         )}
         {result.confidence != null && result.confidence < 70 && (
-          <span className="text-amber-500">建议核对标答</span>
+          <span className="text-orange">建议核对标答</span>
         )}
         {result.grepHits && result.grepHits.length > 0 && (
-          <span className="text-zinc-400">
+          <span className="text-label3">
             grep {result.grepHits.filter((h) => h.lines.length > 0).length} 处命中
           </span>
         )}
-        {result.costText && (
-          <span className="text-zinc-400">{result.costText}</span>
-        )}
+        {result.costText && <span className="text-label3">{result.costText}</span>}
       </div>
 
       {/* 候选沉淀提示 */}
       {cand > 0 && (
-        <div className="mt-2 rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
-          🗂 本轮沉淀 {cand} 个候选（
+        <div className="mt-2 rounded-[8px] bg-blue/15 px-2.5 py-1.5 text-[12px] text-blue-soft">
+          本轮沉淀 {cand} 个候选（
           {[
             result.meta?.weak_candidates?.length
               ? `${result.meta.weak_candidates.length} 弱项`

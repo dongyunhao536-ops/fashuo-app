@@ -4,9 +4,9 @@ import { TabBar } from "@/components/TabBar";
 import type { PlanItem } from "@/lib/scheduler";
 
 /**
- * 背诵·今日清单（RSC，零成本）。
- * 2026-06-10 改版（云需求）：
- *  - 拆「🌱 新背诵 / ⏰ 待复习」两个页签（待复习 = 复验 + 到期）
+ * 背诵·今日清单（RSC，零成本）。极简暗色版方案 ③ 屏 + 审查优化#4（按 6/10 改版结构重画）。
+ *  - 「新背诵 / 待复习」segmented 页签（待复习 = 复验 + 到期）
+ *  - 科目筛选 + 背诵量 10/30/50
  *  - 严格按 科目 → 章 → 节 分级折叠，全部带序号（章节号按教材编排推导）
  *  - 易混对决：按科目每日 5 个，先背诵辨析档案再对决
  */
@@ -22,9 +22,9 @@ const SUB_SHORT: Record<string, string> = {
 };
 
 const FREQ_BADGE: Record<string, string> = {
-  高: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
-  中: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
-  低: "bg-zinc-100 text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400",
+  高: "bg-red/15 text-red",
+  中: "bg-orange/15 text-orange",
+  低: "bg-fill text-label2",
 };
 
 const SUBJECT_TABS = ["全部", "刑法", "民法", "法理", "宪法", "法制史"];
@@ -120,51 +120,45 @@ export default async function RecitePage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen max-w-md flex-col gap-3 bg-zinc-50 px-4 pb-24 pt-6 dark:bg-zinc-950">
+    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between">
-          <h1 className="text-base font-semibold text-zinc-900 dark:text-zinc-100">📅 今日背诵</h1>
-          <span className="text-[11px] text-zinc-500">
+        <div className="flex items-baseline justify-between px-1">
+          <h1 className="text-[28px] font-bold tracking-tight">背诵</h1>
+          <span className="text-[12px] text-label3">
             {plan.date} · {plan.stage}
           </span>
         </div>
 
-        {/* 新背诵 / 待复习 页签 */}
-        <div className="mt-2 grid grid-cols-2 gap-1.5">
-          <Link
-            href={qs(subject, capacity, "new")}
-            className={`rounded-xl py-2 text-center text-[13px] font-semibold transition ${
-              tab === "new"
-                ? "bg-emerald-600 text-white"
-                : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
-            }`}
-          >
-            🌱 新背诵 · {newItems.length}
-          </Link>
-          <Link
-            href={qs(subject, capacity, "review")}
-            className={`rounded-xl py-2 text-center text-[13px] font-semibold transition ${
-              tab === "review"
-                ? "bg-amber-600 text-white"
-                : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
-            }`}
-          >
-            ⏰ 待复习 · {reviewItems.length}
-          </Link>
+        {/* 新背诵 / 待复习 segmented */}
+        <div className="mt-3 flex rounded-[9px] bg-fill2 p-0.5">
+          {(
+            [
+              ["new", `新背诵 · ${newItems.length}`],
+              ["review", `待复习 · ${reviewItems.length}`],
+            ] as const
+          ).map(([t, label]) => (
+            <Link
+              key={t}
+              href={qs(subject, capacity, t)}
+              className={`flex-1 rounded-[7px] py-1.5 text-center text-[13px] font-medium transition ${
+                tab === t ? "bg-fill text-label" : "text-label2"
+              }`}
+            >
+              {label}
+            </Link>
+          ))}
         </div>
 
         {/* 科目选择 */}
-        <div className="mt-2 flex flex-wrap gap-1.5">
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
           {SUBJECT_TABS.map((s) => {
             const active = (s === "全部" && !subject) || s === subject;
             return (
               <Link
                 key={s}
                 href={qs(s === "全部" ? undefined : s, capacity, tab)}
-                className={`rounded-full px-2.5 py-1 text-[12px] font-medium transition ${
-                  active
-                    ? "bg-indigo-600 text-white"
-                    : "bg-white text-zinc-600 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+                className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
+                  active ? "bg-blue text-white" : "bg-card text-label2"
                 }`}
               >
                 {s}
@@ -174,116 +168,117 @@ export default async function RecitePage({
         </div>
 
         {/* 背诵量选择 */}
-        <div className="mt-2 flex items-center gap-1.5">
-          <span className="text-[11px] text-zinc-400">背诵量</span>
+        <div className="mt-2.5 flex items-center gap-1.5">
+          <span className="text-[11px] text-label3">背诵量</span>
           {CAPACITY_OPTIONS.map((n) => (
             <Link
               key={n}
               href={qs(subject, n, tab)}
-              className={`rounded-lg px-2.5 py-0.5 text-[12px] font-medium transition ${
-                n === capacity
-                  ? "bg-indigo-100 text-indigo-700 ring-1 ring-indigo-300 dark:bg-indigo-900/50 dark:text-indigo-300 dark:ring-indigo-700"
-                  : "bg-white text-zinc-500 ring-1 ring-zinc-200 dark:bg-zinc-900 dark:text-zinc-400 dark:ring-zinc-700"
+              className={`rounded-[8px] px-2.5 py-0.5 text-[12px] font-medium transition ${
+                n === capacity ? "bg-blue/15 text-blue-soft" : "bg-card text-label2"
               }`}
             >
               {n}
             </Link>
           ))}
-          <span className="ml-auto text-[11px] text-zinc-400">未学剩余 {plan.counts.未学剩余}</span>
+          <span className="ml-auto text-[11px] text-label3">未学剩余 {plan.counts.未学剩余}</span>
         </div>
       </header>
 
-      {shown.length === 0 ? (
-        <div className="rounded-2xl bg-white p-8 text-center text-[13px] text-zinc-400 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-          {tab === "new" ? (
-            <>新背诵已排满或额度用尽 🎉<br />（先清掉待复习，余量会自动补新考点）</>
-          ) : (
-            <>暂无待复习项 🎉<br />（复验请求与到期复习都会出现在这里）</>
-          )}
-        </div>
-      ) : subject ? (
-        <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} />
-      ) : (
-        subjectsInPlan.map((s) => (
-          <details
-            key={s}
-            open
-            className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800"
-          >
-            <summary className="cursor-pointer text-[13px] font-semibold text-indigo-700 dark:text-indigo-300">
-              {s}
-              <span className="ml-1.5 text-[11px] font-normal text-zinc-400">
-                · {bySubject.get(s)!.length} 个考点
-              </span>
-            </summary>
-            <div className="mt-2">
-              <ChapterList items={bySubject.get(s)!} tab={tab} nested />
-            </div>
-          </details>
-        ))
-      )}
-
-      {/* 🆚 易混对决：每科每日 5 个，先背诵辨析档案再对决 */}
-      {duelBySubject.size > 0 && (
-        <section className="mt-2 flex flex-col gap-2">
-          <div className="text-[12px] font-semibold text-rose-600">
-            🆚 易混背诵（每科每日 5 对 · 先背再测）
-            <span className="ml-1 text-zinc-400">· 库存 {duel.total} 对</span>
+      <div className="mt-3 flex flex-col gap-3">
+        {shown.length === 0 ? (
+          <div className="rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+            {tab === "new" ? (
+              <>新背诵已排满或额度用尽<br />（先清掉待复习，余量会自动补新考点）</>
+            ) : (
+              <>暂无待复习项<br />（复验请求与到期复习都会出现在这里）</>
+            )}
           </div>
-          {SUBJECT_ORDER.filter((s) => duelBySubject.has(s)).map((s) => (
-            <details
-              key={s}
-              className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800"
-            >
-              <summary className="cursor-pointer text-[12.5px] font-medium text-zinc-800 dark:text-zinc-200">
+        ) : subject ? (
+          <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} />
+        ) : (
+          subjectsInPlan.map((s) => (
+            <details key={s} open className="rounded-[12px] bg-card p-3">
+              <summary className="cursor-pointer px-1 text-[15px] font-semibold">
                 {s}
-                <span className="ml-1 text-[11px] text-zinc-400">
-                  · 今日 {duelBySubject.get(s)!.length} 对
+                <span className="ml-1.5 text-[12px] font-normal text-label3">
+                  {bySubject.get(s)!.length} 个考点
                 </span>
               </summary>
-              <div className="mt-2 flex flex-col gap-1.5">
-                {duelBySubject.get(s)!.map((p) => (
-                  <Link
-                    key={p.path}
-                    href={`/duel?path=${encodeURIComponent(p.path)}`}
-                    className="rounded-xl bg-rose-50/60 p-2.5 ring-1 ring-rose-100 transition hover:ring-rose-300 dark:bg-rose-950/20 dark:ring-rose-900/40"
-                  >
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {p.concepts.map((c, i) => (
-                        <span key={i} className="flex items-center gap-1.5">
-                          {i > 0 && <span className="text-[10px] text-zinc-400">vs</span>}
-                          <span className="rounded-lg bg-white px-1.5 py-0.5 text-[12px] font-medium text-rose-700 ring-1 ring-rose-200 dark:bg-zinc-900 dark:text-rose-300 dark:ring-rose-900">
-                            {c}
-                          </span>
-                        </span>
-                      ))}
-                      <span className="ml-auto text-[11px] text-rose-500">背诵+对决 ›</span>
-                    </div>
-                  </Link>
-                ))}
+              <div className="mt-2">
+                <ChapterList items={bySubject.get(s)!} tab={tab} nested />
               </div>
             </details>
-          ))}
-          <Link
-            href={subject ? `/duel?subject=${encodeURIComponent(subject)}` : "/duel"}
-            className="text-center text-[11px] text-zinc-400 underline"
-          >
-            看全部 {duel.total} 对易混 ›
-          </Link>
-        </section>
-      )}
+          ))
+        )}
 
-      {/* 全卡浏览入口（含全部法条卡，考点匹配不上的卡由此兜底） */}
-      <Link
-        href="/cards"
-        className="rounded-2xl bg-white p-3 text-center text-[13px] font-medium text-indigo-600 shadow-sm ring-1 ring-zinc-200/60 transition hover:ring-indigo-300 dark:bg-zinc-900 dark:text-indigo-400 dark:ring-zinc-800"
-      >
-        📚 全卡浏览 · 按卡组章节顺序（含全部法条卡）›
-      </Link>
+        {/* 易混对决：每科每日 5 个，先背诵辨析档案再对决 */}
+        {duelBySubject.size > 0 && (
+          <section className="mt-3">
+            <h2 className="px-4 pb-2 text-[13px] text-label2">
+              易混背诵 · 每科每日 5 对 · 先背再测
+              <span className="ml-1.5 text-label3">库存 {duel.total} 对</span>
+            </h2>
+            <div className="flex flex-col gap-2">
+              {SUBJECT_ORDER.filter((s) => duelBySubject.has(s)).map((s) => (
+                <details key={s} className="rounded-[12px] bg-card p-3">
+                  <summary className="cursor-pointer px-1 text-[14px] font-medium">
+                    {s}
+                    <span className="ml-1.5 text-[12px] font-normal text-label3">
+                      今日 {duelBySubject.get(s)!.length} 对
+                    </span>
+                  </summary>
+                  <div className="mt-2 flex flex-col gap-1.5">
+                    {duelBySubject.get(s)!.map((p) => (
+                      <Link
+                        key={p.path}
+                        href={`/duel?path=${encodeURIComponent(p.path)}`}
+                        className="rounded-[10px] bg-card2 p-2.5"
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {p.concepts.map((c, i) => (
+                            <span key={i} className="flex items-center gap-1.5">
+                              {i > 0 && <span className="text-[10px] text-label3">vs</span>}
+                              <span className="rounded-[6px] bg-fill px-1.5 py-0.5 text-[12px] font-medium">
+                                {c}
+                              </span>
+                            </span>
+                          ))}
+                          <span className="ml-auto text-[12px] text-blue">背诵+对决 ›</span>
+                        </div>
+                      </Link>
+                    ))}
+                  </div>
+                </details>
+              ))}
+            </div>
+            <Link
+              href={subject ? `/duel?subject=${encodeURIComponent(subject)}` : "/duel"}
+              className="mt-2 block text-center text-[12px] text-blue"
+            >
+              看全部 {duel.total} 对易混 ›
+            </Link>
+          </section>
+        )}
 
-      <p className="mt-2 text-center text-[10px] text-zinc-400">
-        新背诵按教材章节顺序推进 · 待复习按遗忘紧迫度优先
-      </p>
+        {/* 全卡浏览入口（含全部法条卡，考点匹配不上的卡由此兜底） */}
+        <Link
+          href="/cards"
+          className="flex min-h-11 items-center rounded-[12px] bg-card px-4 py-3"
+        >
+          <div className="flex-1">
+            <div className="text-[15px]">全卡浏览</div>
+            <div className="mt-0.5 text-[13px] text-label2">
+              按卡组章节顺序 · 含全部法条卡
+            </div>
+          </div>
+          <span className="text-[14px] text-label3">›</span>
+        </Link>
+
+        <p className="text-center text-[11px] text-label3">
+          新背诵按教材章节顺序推进 · 待复习按遗忘紧迫度优先
+        </p>
+      </div>
 
       <TabBar active="recite" />
     </main>
@@ -308,24 +303,20 @@ function ChapterList({
         <details
           key={`${ch.chapterNo}-${ch.chapterName}`}
           open={chapters.length <= 3}
-          className={
-            nested
-              ? "rounded-xl bg-zinc-50 p-2.5 ring-1 ring-zinc-200/60 dark:bg-zinc-800/50 dark:ring-zinc-700/60"
-              : "rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800"
-          }
+          className={nested ? "rounded-[10px] bg-card2 p-2.5" : "rounded-[12px] bg-card p-3"}
         >
-          <summary className="cursor-pointer text-[13px] font-medium text-zinc-800 dark:text-zinc-200">
+          <summary className="cursor-pointer px-1 text-[14px] font-medium">
             {ch.chapterNo > 0 && (
-              <span className="mr-1 text-[11px] text-zinc-400">第{zh(ch.chapterNo)}章</span>
+              <span className="mr-1 text-[12px] text-label3">第{zh(ch.chapterNo)}章</span>
             )}
             {ch.chapterName}
-            <span className="ml-1.5 text-[11px] font-normal text-zinc-400">· {ch.count}</span>
+            <span className="ml-1.5 text-[12px] font-normal text-label3">{ch.count}</span>
           </summary>
           <div className="mt-2 flex flex-col gap-2">
             {ch.sections.map((sec) => (
               <div key={`${sec.sectionNo}-${sec.sectionName}`}>
                 {sec.sectionName && (
-                  <div className="mb-1 text-[11px] font-medium text-zinc-500">
+                  <div className="mb-1 px-1 text-[12px] text-label2">
                     第{zh(sec.sectionNo)}节 · {sec.sectionName}
                   </div>
                 )}
@@ -334,41 +325,41 @@ function ChapterList({
                     <Link
                       key={it.kp_id}
                       href={`/recite/${it.kp_id}`}
-                      className="rounded-xl bg-white p-2.5 ring-1 ring-zinc-200/70 transition hover:ring-indigo-300 dark:bg-zinc-900 dark:ring-zinc-700"
+                      className={`rounded-[10px] p-2.5 ${nested ? "bg-card" : "bg-card2"}`}
                     >
                       <div className="flex items-start gap-2">
-                        <span className="shrink-0 pt-0.5 text-[11px] font-mono text-zinc-400">
+                        <span className="shrink-0 pt-0.5 font-mono text-[11px] text-label3">
                           {String(it.seq).padStart(3, "0")}
                         </span>
-                        <span className="flex-1 text-[13px] font-medium leading-snug text-zinc-900 dark:text-zinc-100">
+                        <span className="flex-1 text-[14px] font-medium leading-snug">
                           {it.name}
                         </span>
-                        <span className="shrink-0 text-[10px] text-zinc-400">{it.level}</span>
+                        <span className="shrink-0 text-[11px] text-label3">{it.level}</span>
                       </div>
-                      <div className="mt-1 flex flex-wrap items-center gap-1.5 pl-7 text-[10px]">
-                        <span className="rounded bg-zinc-100 px-1.5 py-0.5 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-7 text-[10px]">
+                        <span className="rounded-[5px] bg-fill px-1.5 py-0.5 text-label2">
                           {SUB_SHORT[it.subject] ?? it.subject}
                         </span>
                         <span
-                          className={`rounded px-1.5 py-0.5 ${FREQ_BADGE[it.zhenti_freq] ?? FREQ_BADGE["低"]}`}
+                          className={`rounded-[5px] px-1.5 py-0.5 ${FREQ_BADGE[it.zhenti_freq] ?? FREQ_BADGE["低"]}`}
                         >
                           {it.zhenti_freq}频
                         </span>
                         {tab === "review" && (
                           <>
                             <span
-                              className={`rounded px-1.5 py-0.5 ${
+                              className={`rounded-[5px] px-1.5 py-0.5 ${
                                 it.bucket === "复验"
-                                  ? "bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-300"
-                                  : "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                                  ? "bg-blue/15 text-blue-soft"
+                                  : "bg-orange/15 text-orange"
                               }`}
                             >
-                              {it.bucket === "复验" ? "🔁 复验" : "⏰ 到期"}
+                              {it.bucket}
                             </span>
-                            <span className="text-zinc-400">P={it.priority}</span>
+                            <span className="text-label3">P={it.priority}</span>
                           </>
                         )}
-                        <span className="ml-auto text-indigo-500">开始 ›</span>
+                        <span className="ml-auto text-[11px] text-blue">开始 ›</span>
                       </div>
                     </Link>
                   ))}

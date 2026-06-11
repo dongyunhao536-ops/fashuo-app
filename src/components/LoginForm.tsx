@@ -54,16 +54,16 @@ export function LoginForm() {
           if (state === "error") setState("idle");
         }}
         placeholder="口令"
-        className="rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm outline-none focus:border-zinc-500 dark:border-zinc-700 dark:bg-zinc-900"
+        className="rounded-[12px] bg-card px-4 py-3.5 text-[17px] text-label outline-none placeholder:text-label3 focus:ring-1 focus:ring-blue"
       />
       <button
         type="submit"
         disabled={state === "busy" || !password}
-        className="rounded-lg bg-zinc-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-40 dark:bg-zinc-100 dark:text-zinc-900"
+        className="rounded-[14px] bg-blue px-4 py-3.5 text-[17px] font-semibold text-white disabled:opacity-40"
       >
         {state === "busy" ? "登录中…" : "进入"}
       </button>
-      {msg && <p className="text-center text-xs text-rose-500">{msg}</p>}
+      {msg && <p className="text-center text-[12px] text-red">{msg}</p>}
     </form>
   );
 }

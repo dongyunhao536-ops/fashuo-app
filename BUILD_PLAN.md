@@ -106,6 +106,11 @@ Next.js 16.2.7 (App Router, src-dir) + Tailwind + TS · Supabase Postgres · Cla
 - [x] **detection_log.seconds 埋点**：`ReciteSession` 用 `answerStartRef` 记题目呈现时刻→提交时算秒数→grade body→route→`gradeAnswer(opts.seconds)`→写 `detection_log.seconds`(列早已存在)。周报"答题耗时趋势"数据源就位。**live DB 可用**(seconds 列建表即有)。
 - [x] **教练建议卡采纳率回写**：study_log 加 `plan_decision text` 列(schema.sql + 幂等 alter)；`runCoach` study_log insert `.select(id)` 回 `logId`；新 `/api/coach/adopt`(POST {logId,decision} 改 plan_decision，幂等)；`CoachChat` 三键(采纳/改一改/不按)由静态 span 改 `PlanDecision` client(点击回写+高亮+已记录提示)。⚠️ **plan_decision 列需云端部署时 apply-schema 落库**(本地 5432 被 ISP 封无法 alter；列已进 schema.sql，Vercel/云 runner 跑即生效)。周报"调度建议采纳率"数据源就位。
 
+### ③‴ UI 全站重写 · 极简暗色版（2026-06-11，未 commit）
+- [x] **方案审查**：对照 app 现有 13 页面逐屏核对 6/9 改版的 `极简暗色版.html`，结论落档 `D:\fashuo\系统设计\效果图\极简暗色版-审查优化.md`（13 条：补 /duel /cards /weak 三屏、背诵清单按 6/10 两页签结构重画、砍进度环、颜色纪律允许徽章 tint、tab 顺序今日第一位、Geist→系统字体栈、恒暗单套）。
+- [x] **实施**：globals.css 设计令牌（@theme：bg 纯黑/card #1c1c1e/三档灰阶/hairline/systemBlue 唯一强调+绿橙红状态色）+ 16 个文件全重写（layout/TabBar(SF 线性 SVG 图标)/今日/背诵清单/答题/易混/全卡/答疑/教练/待办筐/弱项/登录 + 4 个 client 组件）。Anki 纸卡保持白底保真（全站唯一白底）。manifest/themeColor → #000。
+- [x] **验收**：tsc+lint 全绿；dev 走查 今日/背诵/答疑 截图 + 其余页 DOM/CSS 断言（黑底、白纸卡 12px、蓝按钮 14px、系统字体、segmented、五 tab）全过。
+
 ### ⑥ 后续迭代
 ~~引导式答疑~~（已评估**不做**：多轮=七牛云 RPM 下 token/时间黑洞，直答版+4.8 是最终形态）· ~~真题频率回填~~（✅AI 判频）· ~~法综题源扩匹配~~（✅节级关联）· ~~易混对决 UI/调度接入~~（✅ /duel+DuelSession+getDuelPlan，已接 /recite 今日清单）· OCR 拍照导题 · G3 教练自动聚合 · G4 雷达融合答疑/教练覆盖。
 

@@ -13,8 +13,8 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: "/",
     display: "standalone",
     orientation: "portrait",
-    background_color: "#0f172a",
-    theme_color: "#0f172a",
+    background_color: "#000000",
+    theme_color: "#000000",
     icons: [
       // Next 的 ImageResponse 生成的图标路径是 /icon 和 /apple-icon
       { src: "/icon", sizes: "32x32", type: "image/png" },

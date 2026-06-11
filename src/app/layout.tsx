@@ -1,16 +1,11 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
+/**
+ * 根布局（极简暗色 / Apple HIG，2026-06-10 改版）。
+ * 字体走 -apple-system 系统栈（iPhone = SF Pro/苹方），不再加载 Geist（仅拉丁字形，中文场景无意义）。
+ * 恒暗单套：主题色纯黑，PWA 状态栏沉浸。
+ */
 
 export const metadata: Metadata = {
   title: "法硕备考",
@@ -24,7 +19,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0f172a",
+  themeColor: "#000000",
   width: "device-width",
   initialScale: 1,
   // PWA 独立模式下避免误触缩放
@@ -37,11 +32,8 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html
-      lang="zh-CN"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
-    >
-      <body className="min-h-full flex flex-col">{children}</body>
+    <html lang="zh-CN" className="h-full antialiased">
+      <body className="flex min-h-full flex-col">{children}</body>
     </html>
   );
 }

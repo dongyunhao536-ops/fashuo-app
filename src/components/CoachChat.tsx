@@ -3,9 +3,9 @@
 import { useState } from "react";
 
 /**
- * 教练 T1 交互（系统设计/13）。
+ * 教练 T1 交互（系统设计/13，极简暗色版方案 ⑦ 屏）。
  * 云丢一句"今天刑法第5章听课"→ POST /api/coach → 解析回显 + 四段（点拨/归位/规划/复盘）。
- * ③规划是"建议·可改"（推荐+云拍板，不命令）。复盘困惑点自动投待办筐。
+ * ③规划是"建议·可改"（推荐+云拍板，不命令），accent 蓝左边线。复盘困惑点自动投待办筐。
  */
 
 interface CoachResult {
@@ -85,15 +85,15 @@ export function CoachChat() {
   return (
     <div className="flex flex-col gap-3">
       {turns.length === 0 && (
-        <div className="rounded-2xl bg-white p-4 text-[12.5px] leading-relaxed text-zinc-500 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-          📋 丢一句今天学了啥，我给你四段：① 即时点拨 ② 进度归位 ③ 下一步规划（建议·你拍板）④
+        <div className="rounded-[12px] bg-card p-4 text-[13px] leading-relaxed text-label2">
+          丢一句今天学了啥，我给你四段：① 即时点拨 ② 进度归位 ③ 下一步规划（建议·你拍板）④
           复盘提取。
-          <div className="mt-2 flex flex-col gap-1.5">
+          <div className="mt-3 flex flex-col gap-1.5">
             {EXAMPLES.map((e) => (
               <button
                 key={e}
                 onClick={() => send(e)}
-                className="rounded-lg bg-zinc-50 px-2.5 py-1.5 text-left text-[12px] text-zinc-600 ring-1 ring-zinc-200 hover:bg-zinc-100 dark:bg-zinc-800 dark:text-zinc-300 dark:ring-zinc-700"
+                className="rounded-[10px] bg-card2 px-3 py-2 text-left text-[13px] text-label"
               >
                 试试：「{e}」
               </button>
@@ -104,26 +104,26 @@ export function CoachChat() {
 
       {turns.map((t, i) => (
         <div key={i} className="flex flex-col gap-2">
-          <div className="self-end max-w-[88%] rounded-2xl rounded-br-sm bg-indigo-600 px-3.5 py-2.5 text-[13px] leading-relaxed text-white">
+          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white">
             {t.input}
           </div>
 
           {t.loading && (
-            <div className="self-start flex items-center gap-2 rounded-2xl rounded-bl-sm bg-white px-3.5 py-3 text-[12px] text-zinc-500 ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-indigo-200 border-t-indigo-600" />
+            <div className="flex items-center gap-2 self-start rounded-[18px] rounded-bl-[4px] bg-card px-3.5 py-3 text-[12.5px] text-label2">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
               教练思考中…（约 30 秒–1 分钟）
             </div>
           )}
           {t.error && (
-            <div className="self-start max-w-[92%] rounded-2xl rounded-bl-sm bg-red-50 px-3.5 py-2.5 text-[12.5px] text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-300">
-              ⚠️ {t.error}
+            <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[4px] bg-red/15 px-3.5 py-2.5 text-[13px] text-red">
+              {t.error}
             </div>
           )}
           {t.result && <CoachReply r={t.result} />}
         </div>
       ))}
 
-      <div className="sticky bottom-20 mt-1 flex items-end gap-2 rounded-2xl bg-white p-2 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
+      <div className="sticky bottom-20 mt-1 flex items-end gap-2 border-t border-hairline bg-bg/90 pt-2 backdrop-blur">
         <textarea
           value={input}
           onChange={(e) => setInput(e.target.value)}
@@ -136,12 +136,12 @@ export function CoachChat() {
           rows={2}
           disabled={busy}
           placeholder="今天学了啥？一句话…（Ctrl/⌘+Enter 发送）"
-          className="flex-1 resize-none bg-transparent px-2 py-1.5 text-[13px] leading-relaxed text-zinc-900 outline-none placeholder:text-zinc-400 dark:text-zinc-100"
+          className="flex-1 resize-none rounded-[18px] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-label outline-none placeholder:text-label3"
         />
         <button
           onClick={() => send()}
           disabled={busy || !input.trim()}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-indigo-600 text-white transition hover:bg-indigo-700 disabled:opacity-40"
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue text-[16px] font-bold text-white disabled:opacity-40"
         >
           ↑
         </button>
@@ -161,17 +161,14 @@ function CoachReply({ r }: { r: CoachResult }) {
   ].filter(Boolean) as string[];
 
   return (
-    <div className="self-start w-full flex flex-col gap-2">
+    <div className="flex w-full flex-col gap-2 self-start">
       {/* 解析回显 */}
-      <div className="rounded-xl bg-zinc-100 px-3 py-2 text-[11px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
+      <div className="rounded-[10px] bg-card2 px-3 py-2 text-[12px] text-label2">
         我理解为：
         {tags.length ? (
           <span className="ml-1">
             {tags.map((t, i) => (
-              <span
-                key={i}
-                className="mr-1 rounded bg-white px-1.5 py-0.5 text-zinc-700 dark:bg-zinc-900 dark:text-zinc-300"
-              >
+              <span key={i} className="mr-1 rounded-[5px] bg-fill px-1.5 py-0.5 text-label">
                 {t}
               </span>
             ))}
@@ -179,33 +176,34 @@ function CoachReply({ r }: { r: CoachResult }) {
         ) : (
           <span className="ml-1">（没太识别出科目/章节，下面建议供参考）</span>
         )}
-        <span className="ml-1 text-zinc-400">— 不对就换种说法再发</span>
+        <span className="ml-1 text-label3">— 不对就换种说法再发</span>
       </div>
 
       {/* 红线预警 */}
       {r.redlines.map((rl, i) => (
-        <div
-          key={i}
-          className="rounded-xl bg-red-50 px-3 py-2 text-[12px] text-red-700 ring-1 ring-red-200 dark:bg-red-950/40 dark:text-red-300"
-        >
+        <div key={i} className="rounded-[10px] bg-red/15 px-3 py-2 text-[12.5px] text-red">
           {rl}
         </div>
       ))}
 
       {/* 四段 */}
-      <Seg icon="💡" title="即时点拨" tone="indigo" body={r.pointer} />
-      <Seg icon="📍" title="进度归位" tone="sky" body={r.progress} />
-      <div className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-emerald-200/60 dark:bg-zinc-900 dark:ring-emerald-900/40">
-        <div className="text-[11px] font-semibold text-emerald-600">🧭 下一步规划（建议·你拍板）</div>
-        <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-700 dark:text-zinc-300">{r.plan}</p>
+      <Seg title="即时点拨" body={r.pointer} />
+      <Seg title="进度归位" body={r.progress} />
+      <div className="rounded-[12px] border-l-2 border-blue bg-card p-3.5">
+        <div className="text-[12px] text-label2">下一步规划 · 建议，你拍板</div>
+        <p className="mt-1 text-[13.5px] leading-relaxed text-label">{r.plan}</p>
         {r.plan && <PlanDecision logId={r.logId} />}
       </div>
-      <Seg icon="🔁" title="复盘提取" tone="violet" body={r.review} />
+      <Seg title="复盘提取" body={r.review} />
 
       {/* 系统侧 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-zinc-400">
-        {r.weakEmitted && <span className="text-amber-600">🗂 复盘困惑点已投待办筐（PC 登记后进弱项）</span>}
-        <span className="ml-auto">已记入学习日志{r.costText ? ` · ${r.costText}` : ""}</span>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-label3">
+        {r.weakEmitted && (
+          <span className="text-orange">复盘困惑点已投待办筐（PC 登记后进弱项）</span>
+        )}
+        <span className="ml-auto">
+          已记入学习日志{r.costText ? ` · ${r.costText}` : ""}
+        </span>
       </div>
     </div>
   );
@@ -241,7 +239,7 @@ function PlanDecision({ logId }: { logId: number | null }) {
   }
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
       {OPTS.map((o) => {
         const active = picked === o.value;
         return (
@@ -249,49 +247,28 @@ function PlanDecision({ logId }: { logId: number | null }) {
             key={o.value}
             onClick={() => choose(o.value)}
             disabled={logId == null || saving}
-            className={`rounded-full px-2 py-0.5 text-[11px] transition disabled:opacity-50 ${
-              active
-                ? "bg-emerald-600 text-white"
-                : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:hover:bg-zinc-700"
+            className={`rounded-[10px] px-3 py-1.5 text-[12.5px] font-medium transition disabled:opacity-50 ${
+              active ? "bg-blue/15 text-blue-soft" : "bg-fill2 text-label2"
             }`}
           >
             {o.label}
           </button>
         );
       })}
-      {picked && (
-        <span className="text-[10px] text-emerald-600">已记录「{picked}」✓</span>
-      )}
+      {picked && <span className="text-[11px] text-green">已记录「{picked}」✓</span>}
       {logId == null && (
-        <span className="text-[10px] text-zinc-400">（本次未入库，无法记录）</span>
+        <span className="text-[11px] text-label3">（本次未入库，无法记录）</span>
       )}
     </div>
   );
 }
 
-function Seg({
-  icon,
-  title,
-  body,
-  tone,
-}: {
-  icon: string;
-  title: string;
-  body: string;
-  tone: "indigo" | "sky" | "violet";
-}) {
+function Seg({ title, body }: { title: string; body: string }) {
   if (!body) return null;
-  const toneCls = {
-    indigo: "text-indigo-600 dark:text-indigo-400",
-    sky: "text-sky-600 dark:text-sky-400",
-    violet: "text-violet-600 dark:text-violet-400",
-  }[tone];
   return (
-    <div className="rounded-2xl bg-white p-3 shadow-sm ring-1 ring-zinc-200/60 dark:bg-zinc-900 dark:ring-zinc-800">
-      <div className={`text-[11px] font-semibold ${toneCls}`}>
-        {icon} {title}
-      </div>
-      <p className="mt-1 text-[12.5px] leading-relaxed text-zinc-700 dark:text-zinc-300">{body}</p>
+    <div className="rounded-[12px] bg-card p-3.5">
+      <div className="text-[12px] text-label2">{title}</div>
+      <p className="mt-1 text-[13.5px] leading-relaxed text-label">{body}</p>
     </div>
   );
 }
