@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
+import { Markdown } from "@/components/Markdown";
 
 /**
  * 易混对决交互（系统设计/03 §3.5）。
@@ -114,9 +115,9 @@ export function DuelSession({
             <span className="text-[12px] text-label2">背诵 · 辨析档案</span>
             <span className="ml-auto text-[11px] text-label3">{label}</span>
           </div>
-          <pre className="mt-3 max-h-[65vh] overflow-y-auto whitespace-pre-wrap break-words rounded-[10px] bg-card2 p-3 font-sans text-[13px] leading-relaxed text-label">
-            {content}
-          </pre>
+          <div className="mt-3 max-h-[65vh] overflow-y-auto rounded-[10px] bg-card2 p-3">
+            <Markdown>{content}</Markdown>
+          </div>
           <p className="mt-2 text-[12px] leading-relaxed text-label3">
             先把「一句话区分 test」「对照表」「陷阱模式」过一遍——对决题就踩在这些分界线上。
           </p>
@@ -126,6 +127,12 @@ export function DuelSession({
           >
             背完了，去对决
           </button>
+          <a
+            href="/recite"
+            className="mt-2 block w-full py-2 text-center text-[13px] text-blue"
+          >
+            ‹ 回背诵主页
+          </a>
         </div>
       )}
 

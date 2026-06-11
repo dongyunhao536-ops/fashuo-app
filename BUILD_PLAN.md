@@ -276,6 +276,10 @@ bash deploy/07-backup-cron.sh   # 装 /etc/cron.daily/fashuo-backup
 #### 8. iPhone 信任 CA（5 分钟，一次性）
 见 `deploy/INSTALL-CA-iPhone.md`。把 `/opt/fashuo-ca.crt` 邮件发自己 → iPhone Mail 打开 → 安装描述文件 → 设置 → 通用 → 关于本机 → 证书信任设置 → 启用对该根证书的完全信任。
 
+#### ✅ 上线完成（2026-06-11）
+**阿里云 ECS 47.103.148.124:8443 已上线**，iPhone PWA 装机 + CA 完全信任 + 冒烟全过。
+部署踩坑记：①2核2G build 首次 OOM 假象（实为 SSH 掉线 SIGHUP 杀 build）→ 改 `nohup env NODE_OPTIONS="--max-old-space-size=1536" npm run build &` 后台跑，**55s 编译完成**（swap 2G + 限堆生效）。②微信/QQ 内置浏览器打不开 .crt（iOS 限制：描述文件安装仅 Safari/Mail）→ 临时 `python3 -m http.server 8888` + 安全组开 8888 + **Safari** 下载，装完立即 Ctrl+C + 删 8888 规则。日常更新走 `git pull && nohup build & && pm2 restart fashuo`。
+
 #### 9. 上线冒烟（5 分钟）
 - [ ] iPhone Safari 打开 `https://<ECS-IP>:8443/` → 绿色锁 + 跳 `/login`
 - [ ] 输入口令 → 进仪表盘，5 tab 都能点

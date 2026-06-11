@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
+import { Markdown } from "@/components/Markdown";
 
 /**
  * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
@@ -192,10 +193,8 @@ function AnswerBubble({ result }: { result: AskResult }) {
 
   return (
     <div className="w-full self-start rounded-[18px] rounded-bl-[4px] bg-card p-3.5">
-      {/* 答案正文（保留 v2.3 框线/缩进格式） */}
-      <pre className="whitespace-pre-wrap break-words font-sans text-[13.5px] leading-relaxed text-label">
-        {result.answer}
-      </pre>
+      {/* 答案正文（v2.3 框线/缩进 + Opus markdown 渲染） */}
+      <Markdown>{result.answer}</Markdown>
 
       {/* 元信息条 */}
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2 text-[11px]">
