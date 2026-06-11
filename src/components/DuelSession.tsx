@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { postStreamedJson } from "@/lib/stream-client";
 
 /**
  * 易混对决交互（系统设计/03 §3.5）。
@@ -58,14 +59,12 @@ export function DuelSession({
     setError(null);
     setPhase("generating");
     try {
-      const r = await fetch("/api/yixiao", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "generate", path }),
+      const { status, data } = await postStreamedJson<GenResp>("/api/yixiao", {
+        action: "generate",
+        path,
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(friendly(data));
-      setGen(data as GenResp);
+      if (status >= 400) throw new Error(friendly(data));
+      setGen(data);
       setPhase("answering");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -78,21 +77,16 @@ export function DuelSession({
     setError(null);
     setPhase("grading");
     try {
-      const r = await fetch("/api/yixiao", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "grade",
-          path,
-          question: gen.question,
-          correctConcept: gen.correctConcept,
-          keyPoints: gen.keyPoints,
-          userAnswer,
-        }),
+      const { status, data } = await postStreamedJson<GradeResp>("/api/yixiao", {
+        action: "grade",
+        path,
+        question: gen.question,
+        correctConcept: gen.correctConcept,
+        keyPoints: gen.keyPoints,
+        userAnswer,
       });
-      const data = await r.json();
-      if (!r.ok) throw new Error(friendly(data));
-      setResult(data as GradeResp);
+      if (status >= 400) throw new Error(friendly(data));
+      setResult(data);
       setPhase("result");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

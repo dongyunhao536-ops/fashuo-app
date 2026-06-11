@@ -2,6 +2,7 @@ import { generateQuestion } from "@/lib/detection";
 import type { Level } from "@/lib/detection";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError } from "@/lib/anthropic";
+import { streamJson } from "@/lib/stream-response";
 
 /**
  * POST /api/detect/generate —— 出检测题。
@@ -20,36 +21,38 @@ export const maxDuration = 300;
 const VALID_LEVELS: Level[] = ["L1", "L2", "L3"];
 
 export async function POST(req: Request) {
-
-  let body: { kpId?: string; level?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "请求体不是合法 JSON" }, { status: 400 });
-  }
-  const kpId = body.kpId?.trim();
-  if (!kpId) return Response.json({ error: "kpId 不能为空" }, { status: 400 });
-
-  let level: Level | undefined;
-  if (body.level) {
-    if (!VALID_LEVELS.includes(body.level as Level)) {
-      return Response.json({ error: `level 必须是 L1/L2/L3，收到：${body.level}` }, { status: 400 });
+  // 心跳流包裹：L2/L3 两段式 Opus 可达 2-3 分钟，保活防手机蜂窝网掐断（L1 快，无副作用）。
+  return streamJson(async () => {
+    let body: { kpId?: string; level?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return { status: 400, body: { error: "请求体不是合法 JSON" } };
     }
-    level = body.level as Level;
-  }
+    const kpId = body.kpId?.trim();
+    if (!kpId) return { status: 400, body: { error: "kpId 不能为空" } };
 
-  try {
-    const q = await generateQuestion({ kpId, level });
-    return Response.json(q);
-  } catch (err) {
-    if (err instanceof BudgetExceededError) {
-      return Response.json({ error: err.message, kind: "budget" }, { status: 429 });
+    let level: Level | undefined;
+    if (body.level) {
+      if (!VALID_LEVELS.includes(body.level as Level)) {
+        return { status: 400, body: { error: `level 必须是 L1/L2/L3，收到：${body.level}` } };
+      }
+      level = body.level as Level;
     }
-    if (err instanceof DailyCapError) {
-      return Response.json({ error: err.message, kind: "daily_cap" }, { status: 429 });
+
+    try {
+      const q = await generateQuestion({ kpId, level });
+      return { status: 200, body: q };
+    } catch (err) {
+      if (err instanceof BudgetExceededError) {
+        return { status: 429, body: { error: err.message, kind: "budget" } };
+      }
+      if (err instanceof DailyCapError) {
+        return { status: 429, body: { error: err.message, kind: "daily_cap" } };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[/api/detect/generate] 失败：", msg);
+      return { status: 502, body: { error: msg, kind: "other" } };
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[/api/detect/generate] 失败：", msg);
-    return Response.json({ error: msg, kind: "other" }, { status: 502 });
-  }
+  });
 }

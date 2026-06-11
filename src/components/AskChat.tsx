@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { postStreamedJson } from "@/lib/stream-client";
 
 /**
  * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
@@ -49,13 +50,10 @@ export function AskChat() {
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
 
     try {
-      const r = await fetch("/api/ask", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question: q, subject: subject || undefined }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
+      const { status, data } = await postStreamedJson<
+        AskResult & { error?: string; kind?: string }
+      >("/api/ask", { question: q, subject: subject || undefined });
+      if (status >= 400) {
         const msg =
           data.kind === "budget"
             ? "今日预算已用尽（$3 日熔断），明天再问～"

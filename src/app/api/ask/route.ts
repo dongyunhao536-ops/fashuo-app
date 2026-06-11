@@ -10,6 +10,7 @@ import {
   META_OPEN,
   META_CLOSE,
 } from "@/lib/ask-prompt";
+import { streamJson } from "@/lib/stream-response";
 
 /**
  * POST /api/ask —— 答疑直答版（build order ②）。
@@ -61,62 +62,68 @@ function splitMeta(full: string): { clean: string; meta: AskMeta | null } {
 // 鉴权由 src/middleware.ts 统一网关处理（未登录的 /api/* 直接 401，到不了这里）。
 
 export async function POST(req: Request) {
-  let body: { question?: string; subject?: string; kpId?: string };
-  try {
-    body = await req.json();
-  } catch {
-    return Response.json({ error: "请求体不是合法 JSON" }, { status: 400 });
-  }
-  const question = (body.question ?? "").trim();
-  if (!question) {
-    return Response.json({ error: "question 不能为空" }, { status: 400 });
-  }
-  const subject = body.subject?.trim() || undefined;
-
-  try {
-    const systemVolatile = await buildAskSystemVolatile(subject);
-
-    const { message, grepHits, costUsd } = await runPlanThenAnswer({
-      planSystem: buildPlanSystem(),
-      answerSystemStable: buildAskSystemStable(),
-      answerSystemVolatile: systemVolatile,
-      question,
-      model: MODELS.ASK,
-      route: "ask",
-    });
-
-    const full = extractText(message);
-    const { clean, meta } = splitMeta(full);
-
-    // —— 沉淀到 events 待办筐（append-only，pending，PC 登记后才 consumed）——
-    await sinkProposals({
-      subject: meta?.subject ?? subject ?? null,
-      kpId: meta?.kp ?? body.kpId ?? null,
-      meta,
-      grepLines: grepHits.flatMap((h) => h.lines).slice(0, 30),
-    });
-
-    return Response.json({
-      answer: clean,
-      grepHits,
-      meta,
-      confidence: meta?.confidence ?? null,
-      starred: meta?.starred ?? false,
-      costUsd,
-      costText: fmtCost(costUsd),
-      stopReason: message.stop_reason,
-    });
-  } catch (err) {
-    if (err instanceof BudgetExceededError) {
-      return Response.json({ error: err.message, kind: "budget" }, { status: 429 });
+  // 心跳流包裹：案例题 Opus 可达 2-3 分钟，手机蜂窝网会掐断静默长请求，故持续吐字节保活。
+  return streamJson(async () => {
+    let body: { question?: string; subject?: string; kpId?: string };
+    try {
+      body = await req.json();
+    } catch {
+      return { status: 400, body: { error: "请求体不是合法 JSON" } };
     }
-    if (err instanceof DailyCapError) {
-      return Response.json({ error: err.message, kind: "daily_cap" }, { status: 429 });
+    const question = (body.question ?? "").trim();
+    if (!question) {
+      return { status: 400, body: { error: "question 不能为空" } };
     }
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error("[/api/ask] 失败：", msg);
-    return Response.json({ error: msg, kind: "other" }, { status: 502 });
-  }
+    const subject = body.subject?.trim() || undefined;
+
+    try {
+      const systemVolatile = await buildAskSystemVolatile(subject);
+
+      const { message, grepHits, costUsd } = await runPlanThenAnswer({
+        planSystem: buildPlanSystem(),
+        answerSystemStable: buildAskSystemStable(),
+        answerSystemVolatile: systemVolatile,
+        question,
+        model: MODELS.ASK,
+        route: "ask",
+      });
+
+      const full = extractText(message);
+      const { clean, meta } = splitMeta(full);
+
+      // —— 沉淀到 events 待办筐（append-only，pending，PC 登记后才 consumed）——
+      await sinkProposals({
+        subject: meta?.subject ?? subject ?? null,
+        kpId: meta?.kp ?? body.kpId ?? null,
+        meta,
+        grepLines: grepHits.flatMap((h) => h.lines).slice(0, 30),
+      });
+
+      return {
+        status: 200,
+        body: {
+          answer: clean,
+          grepHits,
+          meta,
+          confidence: meta?.confidence ?? null,
+          starred: meta?.starred ?? false,
+          costUsd,
+          costText: fmtCost(costUsd),
+          stopReason: message.stop_reason,
+        },
+      };
+    } catch (err) {
+      if (err instanceof BudgetExceededError) {
+        return { status: 429, body: { error: err.message, kind: "budget" } };
+      }
+      if (err instanceof DailyCapError) {
+        return { status: 429, body: { error: err.message, kind: "daily_cap" } };
+      }
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("[/api/ask] 失败：", msg);
+      return { status: 502, body: { error: msg, kind: "other" } };
+    }
+  });
 }
 
 /** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（去重交给 PC 登记环节） */

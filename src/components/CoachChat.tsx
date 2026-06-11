@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { postStreamedJson } from "@/lib/stream-client";
 
 /**
  * 教练 T1 交互（系统设计/13，极简暗色版方案 ⑦ 屏）。
@@ -54,13 +55,10 @@ export function CoachChat() {
     const idx = turns.length;
     setTurns((t) => [...t, { input: v, loading: true }]);
     try {
-      const r = await fetch("/api/coach", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input: v }),
-      });
-      const data = await r.json();
-      if (!r.ok) {
+      const { status, data } = await postStreamedJson<
+        CoachResult & { error?: string; kind?: string }
+      >("/api/coach", { input: v });
+      if (status >= 400) {
         const msg =
           data.kind === "budget"
             ? "今日预算已用尽（$3 日熔断），明天再来～"

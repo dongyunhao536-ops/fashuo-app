@@ -3,6 +3,7 @@
 import { useRef, useState } from "react";
 import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
 import { AnkiCardView } from "./AnkiCardView";
+import { postStreamedJson } from "@/lib/stream-client";
 
 /**
  * 背诵检测交互（极简暗色版方案 ④/⑤ 屏）。
@@ -53,14 +54,12 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
     setLevel(lv);
     setPhase("generating");
     try {
-      const r = await fetch("/api/detect/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kpId: material.kpId, level: lv }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error ?? "出题失败");
-      setQuestion(data as DetectQuestion);
+      const { status, data } = await postStreamedJson<DetectQuestion & { error?: string }>(
+        "/api/detect/generate",
+        { kpId: material.kpId, level: lv },
+      );
+      if (status >= 400) throw new Error(data.error ?? "出题失败");
+      setQuestion(data);
       answerStartRef.current = Date.now(); // 题目呈现即开始计时
       setPhase("answering");
     } catch (e) {
@@ -77,10 +76,9 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
       ? Math.max(1, Math.round((Date.now() - answerStartRef.current) / 1000))
       : null;
     try {
-      const r = await fetch("/api/detect/grade", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const { status, data } = await postStreamedJson<GradeResp & { error?: string }>(
+        "/api/detect/grade",
+        {
           kpId: material.kpId,
           level,
           question: question.question,
@@ -89,11 +87,10 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
           source: question.source,
           sourceRef: question.sourceRef,
           seconds,
-        }),
-      });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.error ?? "评分失败");
-      setResult(data as GradeResp);
+        },
+      );
+      if (status >= 400) throw new Error(data.error ?? "评分失败");
+      setResult(data);
       setPhase("result");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
