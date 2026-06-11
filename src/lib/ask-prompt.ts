@@ -9,8 +9,10 @@ import { supabaseAdmin } from "./supabase";
  * - buildAskSystemStable()：v2.3 作答教义（六步预检/证据卡/12机制/优先级）。检索结果由系统预置在用户消息里。
  * - buildAskSystemVolatile(subject)：跨会话答疑记忆（ask_summary 检索注入）。每次不同。
  *
- * ⚠️ 七牛云带 tools 时 prompt caching 读取失效（2026-06-07 两次付费实测，见 anthropic.ts 详注）→ 不用缓存。
- *   两段式作答调用【不带 tools】（grep 已预先跑完），理论上可重新启用 system 缓存；留待后续验证再开。
+ * ⚠️ 七牛云带 tools 时 prompt caching 读取失效（2026-06-07 两次付费实测，见 anthropic.ts 详注）。
+ *   两段式答疑两段都【不带 tools】→ 2026-06-11 起对 plan/stable system 重新启用缓存
+ *   （/api/ask 传 enableCache=true；无 tools 的 system 缓存烟测验证过 cache_read 正常）。
+ *   ⚠️ 因此 buildPlanSystem / buildAskSystemStable 必须保持跨请求字节级稳定，易变内容只进 volatile 段。
  */
 
 /** 机器可读元数据块的标记（路由据此抽取并从展示文本中剥离） */
@@ -22,7 +24,7 @@ export const META_CLOSE = "ASK_META>>>";
  * grep 是逐行子串匹配 → 关键词必须是【单个连续词、不含空格】，需要多个就拆成多条。
  */
 export function buildPlanSystem(): string {
-  return `你是法硕答疑的"检索规划器"。只做一件事：读题，规划出回答它需要的所有检索查询。【不要作答、不要解释】。
+  return `你是法硕答疑的"检索规划器"。只做两件事：①判断题目科目 ②规划出回答它需要的所有检索查询。【不要作答、不要解释】。
 
 按答疑优先级规划检索（心得→真题→教材）：
 - search_xinde：查刑法/民法做题心得规则（最高优先级，先规划这个）
@@ -33,11 +35,12 @@ export function buildPlanSystem(): string {
 1. 覆盖题目涉及的【每一个】核心概念/罪名/法律关系/争议点，逐个给检索词。
 2. 关键词必须是【单个连续词，不能含空格】（grep 逐行子串匹配，带空格几乎必然零命中）。如"债务转移"对，"债务转移 担保"错——拆成两条。
 3. 关键词宜短而准（2-6 字的法律术语最佳），太长命中率低。
-4. 同一概念可对 心得+教材 各来一条；涉及具体真题年份再加 search_zhenti。
+4. 同一概念可对 心得+教材 各来一条；涉及具体真题年份再加 search_zhenti（题号填 question_no，不要并进 year）。
 5. 一般规划 4-10 条即可，宁可多覆盖几个角度。
+6. 若消息含【此前对话】节选 + 【本轮新问题】：只为本轮新问题规划，此前对话仅用于理解"它/这种情况/那如果"之类指代。
 
-仅输出一个 JSON 数组，不要任何其他文字（不要 markdown 代码块、不要前后说明）：
-[{"tool":"search_xinde","keyword":"债务转移"},{"tool":"search_textbook","keyword":"担保人继续同意"},{"tool":"search_textbook","keyword":"免责的债务承担"},{"tool":"search_zhenti","year":"2024"}]`;
+仅输出一个 JSON 对象，不要任何其他文字（不要 markdown 代码块、不要前后说明）：
+{"subject":"刑法|民法|法理|宪法|法制史（判断不了给 null）","searches":[{"tool":"search_xinde","keyword":"债务转移"},{"tool":"search_textbook","keyword":"免责的债务承担"},{"tool":"search_zhenti","year":"2024","question_no":"48"}]}`;
 }
 
 /** 稳定教义段（会被缓存）。内容固化自 Skills/法硕答疑.md v2.3。 */
@@ -55,6 +58,7 @@ export function buildAskSystemStable(): string {
 - 【硬约束·机制⑨】据这些结果作答，在六步预检清单里如实填写"检索了哪些关键词、命中哪些行号 / 未命中"。
 - 引用教材必须用结果里给出的【真实行号】；结果里没有的，绝不许编造行号或题号（机制⑧：没锚点就标★降信心度）。"我记得""通说是""法考也这么讲"都不是锚点。
 - 若预置结果不足以支撑结论 → 如实说明"检索依据不足"，降低信心度并标★，绝不凭印象硬答；可在末尾 META 的 confusion 里点出还缺什么检索。
+- 用户消息可能含【此前对话】节选（追问场景）：仅用于理解指代和延续语境；引用证据仍以【本轮】预检索结果为准，不许把上一轮的行号/题号当本轮锚点复用而不核对。
 
 ═══ 六步预检（第一段固定输出这张清单，填真实检索结果）═══
 ━━ 答疑预检清单 ━━
@@ -96,7 +100,7 @@ export function buildAskSystemStable(): string {
 ═══ 最后：输出机器可读元数据块（给系统沉淀待办筐用，会从展示中剥离）═══
 在全部回答之后，另起一行输出且仅输出一个如下块（严格 JSON，字段缺省给 null 或空数组）：
 ${META_OPEN}
-{"subject":"刑法|民法|...","kp":"考点短语","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}],"review_kp_candidates":[{"kp_id":"XF-0042","reason":"答疑澄清了云对XX的误解，建议背诵清单复验"}]}
+{"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}],"review_kp_candidates":[{"kp_id":"XF-0042","reason":"答疑澄清了云对XX的误解，建议背诵清单复验"}]}
 ${META_CLOSE}
 说明（务必区分三类候选的触发条件，错填会污染飞轮）：
 - weak_candidates：用户**首次**对某知识点表现混淆/可能答错时填（PC 登记进当前弱项后→调度器加权）。
@@ -120,6 +124,7 @@ export async function buildAskSystemVolatile(subject?: string): Promise<string> 
     .select("kp_id, question_type, step_stuck, confusion, created_at")
     .eq("subject", subject)
     .eq("status", "open")
+    .not("confusion", "is", null) // 历史上写过 confusion=null 的空行，注入只取有内容的
     .or(`ttl_until.is.null,ttl_until.gte.${today}`)
     .order("created_at", { ascending: false })
     .limit(5);
@@ -127,12 +132,12 @@ export async function buildAskSystemVolatile(subject?: string): Promise<string> 
   if (error || !data || data.length === 0) return "";
 
   const lines = data
-    .map(
-      (r) =>
-        `· ${r.kp_id ?? "?"}（${r.question_type ?? "?"}）：${r.confusion ?? ""}${
-          r.step_stuck ? `（曾卡在第${r.step_stuck}步）` : ""
-        }`,
-    )
+    .map((r) => {
+      const head = [r.kp_id, r.question_type].filter(Boolean).join("·");
+      return `· ${head ? `【${head}】` : ""}${r.confusion ?? ""}${
+        r.step_stuck ? `（曾卡在第${r.step_stuck}步）` : ""
+      }`;
+    })
     .join("\n");
 
   return `═══ 跨会话答疑记忆（${subject}，仅供参考，别硬套）═══

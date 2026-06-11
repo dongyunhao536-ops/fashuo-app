@@ -1,6 +1,11 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "./models";
-import { SEARCH_TOOLS, executeSearchTool, type GrepHit } from "./search-tools";
+import {
+  SEARCH_TOOLS,
+  executeSearchTool,
+  createMirrorCache,
+  type GrepHit,
+} from "./search-tools";
 import { assertBudget, recordUsage, usageFromMessage, RMB_PER_USD } from "./cost";
 
 /**
@@ -107,6 +112,7 @@ export async function runWithSearchTools(opts: {
 
   const messages = [...opts.messages];
   const grepHits: GrepHit[] = [];
+  const mirrorCache = createMirrorCache();
   let costUsd = 0;
 
   // ⚠️⚠️ 七牛云 prompt caching 在【带 tools 时不可用】——实测结论（2026-06-07，两次真实付费验证）：
@@ -162,6 +168,7 @@ export async function runWithSearchTools(opts: {
         const { result, hit } = await executeSearchTool(
           block.name,
           block.input as Record<string, unknown>,
+          mirrorCache,
         );
         if (hit) grepHits.push(hit);
         toolResults.push({
@@ -185,25 +192,66 @@ interface PlannedSearch {
   question_no?: string;
 }
 
-/** 从规划器输出里解析 JSON 检索数组（容错 ```json 包裹、前后杂文） */
-function parsePlan(text: string): PlannedSearch[] {
+interface ParsedPlan {
+  /** 规划器顺带判的科目（答疑新版对象输出才有；旧数组输出/检测路径没有） */
+  subject?: string;
+  searches: PlannedSearch[];
+}
+
+function normalizeSearches(arr: unknown): PlannedSearch[] {
+  if (!Array.isArray(arr)) return [];
+  return arr
+    .filter((x) => x && typeof x.tool === "string")
+    .map((x) => ({
+      tool: x.tool,
+      keyword: typeof x.keyword === "string" ? x.keyword.trim().slice(0, 40) : undefined,
+      year: x.year != null ? String(x.year) : undefined,
+      question_no: x.question_no != null ? String(x.question_no) : undefined,
+    }));
+}
+
+/**
+ * 从规划器输出里解析检索计划（容错 ```json 包裹、前后杂文）。
+ * 兼容两种形态：
+ * - 新对象形（答疑）：{"subject":"民法","searches":[{...}]}
+ * - 旧数组形（检测出题/评分的 planSystem）：[{...},{...}]
+ */
+function parsePlan(text: string): ParsedPlan {
+  const oStart = text.indexOf("{");
+  const oEnd = text.lastIndexOf("}");
+  if (oStart !== -1 && oEnd > oStart) {
+    try {
+      const obj = JSON.parse(text.slice(oStart, oEnd + 1));
+      if (obj && Array.isArray(obj.searches)) {
+        const subject =
+          typeof obj.subject === "string" && obj.subject && obj.subject !== "null"
+            ? obj.subject
+            : undefined;
+        return { subject, searches: normalizeSearches(obj.searches) };
+      }
+    } catch {
+      // 数组形里 slice(首{ … 末}) 不是合法 JSON，落到下面按数组解
+    }
+  }
   const start = text.indexOf("[");
   const end = text.lastIndexOf("]");
-  if (start === -1 || end === -1 || end <= start) return [];
+  if (start === -1 || end === -1 || end <= start) return { searches: [] };
   try {
-    const arr = JSON.parse(text.slice(start, end + 1));
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((x) => x && typeof x.tool === "string")
-      .map((x) => ({
-        tool: x.tool,
-        keyword: typeof x.keyword === "string" ? x.keyword.trim().slice(0, 40) : undefined,
-        year: x.year != null ? String(x.year) : undefined,
-        question_no: x.question_no != null ? String(x.question_no) : undefined,
-      }));
+    return { searches: normalizeSearches(JSON.parse(text.slice(start, end + 1))) };
   } catch {
-    return [];
+    return { searches: [] };
   }
+}
+
+/** 去掉规划里完全重复的检索（规划器偶尔同一关键词吐两遍） */
+function dedupeSearches(searches: PlannedSearch[]): PlannedSearch[] {
+  const seen = new Set<string>();
+  return searches.filter((s) => {
+    const key = `${s.tool}|${s.keyword ?? ""}|${s.year ?? ""}|${s.question_no ?? ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function formatExecuted(
@@ -220,63 +268,107 @@ function formatExecuted(
 
 /**
  * 两段式答疑（2026-06-07，替代答疑场景的多轮 agentic loop）：
- *   ① 规划器小调用：读题 → JSON 列出所有检索查询（不作答）
- *   ② 本地一次性跑完所有 grep（查内容镜像，免费秒回）
+ *   ① 规划器小调用：读题 → JSON 列出所有检索查询（不作答；答疑新版顺带判 subject）
+ *   ② 本地一次性跑完所有 grep（查内容镜像，per-request 缓存，每 kind 只拉一次）
  *   ③ 作答大调用：把全部 grep 结果喂回 → 按 v2.3 一次性作答 + META
- * 封顶 2 次 LLM 调用 → 时间/成本砍半，绕过七牛云带 tools 的缓存坑。
+ * 封顶 2 次 LLM 调用（规划零产出时重试一次，封顶 3 次）→ 时间/成本砍半。
  * 成本栅栏：进入前 + 两次调用之间各 assertBudget()，每次调用后 recordUsage()。
+ *
+ * Prompt caching（enableCache）：两段都【不带 tools】→ 不踩七牛云"带 tools 缓存失效"的坑
+ * （无 tools 的 system 缓存烟测验证过 cache_read 正常）。仅对真正跨请求稳定的 system 开
+ * （答疑教义段）；检测路径的 system 按题拼接、每次不同，开了只写不读反亏 25%，故默认关。
  */
 export async function runPlanThenAnswer(opts: {
   planSystem: string;
   answerSystemStable: string;
   answerSystemVolatile?: string;
+  /**
+   * 易变 system 的延迟构建：在规划完成后调用，入参是规划器判的科目。
+   * 用于"用户没选科目时拿规划器的判断取跨会话记忆"。与 answerSystemVolatile 二选一，
+   * 同时给时 answerSystemVolatile 优先。
+   */
+  getVolatile?: (plannedSubject?: string) => Promise<string>;
   question: string;
   model?: string;
+  /** 规划器小调用可单独配模型（MODEL_PLAN）；缺省跟 model 走 */
+  planModel?: string;
   maxAnswerTokens?: number;
   route?: string;
+  /** 对 planSystem / answerSystemStable 设缓存断点（仅当两者跨请求字节级稳定时开） */
+  enableCache?: boolean;
 }): Promise<{
   message: Anthropic.Message;
   grepHits: GrepHit[];
   costUsd: number;
   plannedCount: number;
+  /** 规划器顺带判的科目（旧数组形输出时为 undefined） */
+  plannedSubject?: string;
 }> {
   const {
     planSystem,
     answerSystemStable,
     answerSystemVolatile,
+    getVolatile,
     question,
     model = MODELS.ASK,
+    planModel = opts.model ?? MODELS.ASK,
     maxAnswerTokens = 16000,
     route = "ask",
+    enableCache = false,
   } = opts;
 
   await assertBudget();
   let costUsd = 0;
 
-  // ① 规划
-  const planResp = await callWithRetry({
-    model,
-    max_tokens: 1500,
-    system: [{ type: "text", text: planSystem }],
-    messages: [{ role: "user", content: question }],
-  });
-  costUsd += await recordUsage({
-    route: `${route}:plan`,
-    model,
-    usage: usageFromMessage(planResp),
-    meta: { phase: "plan" },
-  });
-  const searches = parsePlan(extractText(planResp));
+  const cacheCtl = enableCache
+    ? ({ cache_control: { type: "ephemeral" } } as const)
+    : {};
 
-  // ② 批量执行 grep（封顶 12 条，防规划器发散）
+  // ① 规划（小调用）。健壮性双保险：
+  //    - planModel 渠道失效（MODEL_PLAN 配错 ID / 七牛云渠道下线）→ 退回作答模型规划，答疑不断；
+  //      日熔断（TPD/预算）原样抛出，换模型救不了限额。
+  //    - 零产出 → 用作答模型重试一次：1500 token 小调用，重试远比让 Opus 大调用"无米硬答"划算。
+  const doPlan = async (m: string, phase: string): Promise<ParsedPlan> => {
+    const planResp = await callWithRetry({
+      model: m,
+      max_tokens: 1500,
+      system: [{ type: "text", text: planSystem, ...cacheCtl }],
+      messages: [{ role: "user", content: question }],
+    });
+    costUsd += await recordUsage({
+      route: `${route}:plan`,
+      model: m,
+      usage: usageFromMessage(planResp),
+      meta: { phase },
+    });
+    return parsePlan(extractText(planResp));
+  };
+  let plan: ParsedPlan;
+  try {
+    plan = await doPlan(planModel, "plan");
+  } catch (err) {
+    if (planModel === model || err instanceof DailyCapError) throw err;
+    console.error(
+      `[runPlanThenAnswer] 规划模型 ${planModel} 调用失败，退回 ${model} 规划：`,
+      err instanceof Error ? err.message : String(err),
+    );
+    plan = await doPlan(model, "plan-fallback");
+  }
+  if (plan.searches.length === 0) {
+    plan = await doPlan(model, "plan-retry");
+  }
+  const searches = dedupeSearches(plan.searches).slice(0, 12); // 封顶 12 条，防规划器发散
+
+  // ② 批量执行 grep（共享镜像缓存：每个 kind 只从 Supabase 拉一次）
+  const mirrorCache = createMirrorCache();
   const grepHits: GrepHit[] = [];
   const executed: { tool: string; query: string; result: string }[] = [];
-  for (const s of searches.slice(0, 12)) {
+  for (const s of searches) {
     const input: Record<string, unknown> =
       s.tool === "search_zhenti"
         ? { year: s.year, question_no: s.question_no }
         : { keyword: s.keyword };
-    const { result, hit } = await executeSearchTool(s.tool, input);
+    const { result, hit } = await executeSearchTool(s.tool, input, mirrorCache);
     if (hit) grepHits.push(hit);
     executed.push({
       tool: s.tool,
@@ -288,10 +380,12 @@ export async function runPlanThenAnswer(opts: {
   await assertBudget();
 
   // ③ 作答
+  const volatile =
+    answerSystemVolatile ?? (getVolatile ? await getVolatile(plan.subject) : undefined);
   const sys: Anthropic.TextBlockParam[] = [
-    { type: "text", text: answerSystemStable },
+    { type: "text", text: answerSystemStable, ...cacheCtl },
   ];
-  if (answerSystemVolatile) sys.push({ type: "text", text: answerSystemVolatile });
+  if (volatile) sys.push({ type: "text", text: volatile });
 
   const ansResp = await callWithRetry({
     model,
@@ -305,10 +399,16 @@ export async function runPlanThenAnswer(opts: {
     route,
     model,
     usage: usageFromMessage(ansResp),
-    meta: { phase: "answer", planned: searches.length, executed: executed.length },
+    meta: { phase: "answer", planned: plan.searches.length, executed: executed.length },
   });
 
-  return { message: ansResp, grepHits, costUsd, plannedCount: searches.length };
+  return {
+    message: ansResp,
+    grepHits,
+    costUsd,
+    plannedCount: plan.searches.length,
+    plannedSubject: plan.subject,
+  };
 }
 
 /**

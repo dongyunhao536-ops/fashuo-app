@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
 
@@ -9,9 +9,20 @@ import { Markdown } from "@/components/Markdown";
  * 调 /api/ask：六步预检 + 四段式/证据卡 + 信心度 + grep 锚定。
  * RPM 慢（案例题 ~2-3 分钟）→ 明显 loading 提示。
  * 答疑沉淀的候选弱项/心得已由路由写 events 待办筐，UI 给一句提示。
+ *
+ * 2026-06-11：
+ * - 请求带最近 2 轮 Q/A（history）——后端原本无状态，追问"那如果…"模型拿不到上文。
+ * - 失败轮次给"重试"按钮（蜂窝网掐断后不用重新打字）。
+ * - turns 存 sessionStorage（切 tab 组件卸载即丢的问题）；挂载后恢复，避免 SSR 水合不一致。
  */
 
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"] as const;
+
+const STORAGE_KEY = "ask-chat-turns";
+/** 持久化/渲染最多保留的轮数（防 sessionStorage 膨胀） */
+const MAX_TURNS = 12;
+/** 随请求上送的历史轮数（与后端 HISTORY_TURNS 对齐） */
+const HISTORY_TURNS = 2;
 
 interface AskResult {
   answer: string;
@@ -40,20 +51,49 @@ export function AskChat() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const restoredRef = useRef(false);
 
-  async function send() {
-    const q = input.trim();
-    if (!q || busy) return;
-    setInput("");
+  // 挂载后从 sessionStorage 恢复（不能放 useState 初始化：SSR 首帧没有 storage，会水合不一致）
+  useEffect(() => {
+    restoredRef.current = true;
+    try {
+      const raw = sessionStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = (JSON.parse(raw) as Turn[]).filter((t) => !t.loading);
+      if (saved.length > 0) setTurns(saved.slice(-MAX_TURNS));
+    } catch {
+      /* 损坏的存档直接放弃 */
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    try {
+      sessionStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify(turns.filter((t) => !t.loading).slice(-MAX_TURNS)),
+      );
+    } catch {
+      /* 超配额等，忽略 */
+    }
+  }, [turns]);
+
+  /** 实际发请求：idx 指向 turns 里要写结果的那一轮（新问或重试） */
+  async function run(q: string, subj: string | undefined, idx: number) {
     setBusy(true);
-    const idx = turns.length;
-    setTurns((t) => [...t, { question: q, subject: subject || undefined, loading: true }]);
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+
+    // 最近几轮成功 Q/A 作为追问上下文（不含当前轮）
+    const history = turns
+      .slice(0, idx)
+      .filter((t) => t.result)
+      .slice(-HISTORY_TURNS)
+      .map((t) => ({ question: t.question, answer: t.result!.answer }));
 
     try {
       const { status, data } = await postStreamedJson<
         AskResult & { error?: string; kind?: string }
-      >("/api/ask", { question: q, subject: subject || undefined });
+      >("/api/ask", { question: q, subject: subj, history });
       if (status >= 400) {
         const msg =
           data.kind === "budget"
@@ -66,7 +106,9 @@ export function AskChat() {
         );
       } else {
         setTurns((t) =>
-          t.map((x, i) => (i === idx ? { ...x, loading: false, result: data } : x)),
+          t.map((x, i) =>
+            i === idx ? { ...x, loading: false, error: undefined, result: data } : x,
+          ),
         );
       }
     } catch (e) {
@@ -81,6 +123,25 @@ export function AskChat() {
       setBusy(false);
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     }
+  }
+
+  function send() {
+    const q = input.trim();
+    if (!q || busy) return;
+    setInput("");
+    const idx = turns.length;
+    setTurns((t) => [...t, { question: q, subject: subject || undefined, loading: true }]);
+    void run(q, subject || undefined, idx);
+  }
+
+  function retry(idx: number) {
+    if (busy) return;
+    const turn = turns[idx];
+    if (!turn) return;
+    setTurns((t) =>
+      t.map((x, i) => (i === idx ? { ...x, loading: true, error: undefined } : x)),
+    );
+    void run(turn.question, turn.subject, idx);
   }
 
   return (
@@ -141,6 +202,13 @@ export function AskChat() {
           {t.error && (
             <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[4px] bg-red/15 px-3.5 py-2.5 text-[13px] text-red">
               {t.error}
+              <button
+                onClick={() => retry(i)}
+                disabled={busy}
+                className="ml-2 rounded-full bg-red/20 px-2.5 py-0.5 text-[12px] font-medium text-red disabled:opacity-40"
+              >
+                重试
+              </button>
             </div>
           )}
           {t.result && <AnswerBubble result={t.result} />}
