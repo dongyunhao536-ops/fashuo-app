@@ -24,7 +24,6 @@ export interface DashboardData {
   cores: {
     plan: {
       total: number;
-      done: number;
       bucketCounts: { 复验: number; 到期: number; 新考点: number };
     };
     ask: { openCount: number; lastConfusion: string | null };
@@ -125,10 +124,6 @@ export async function getDashboard(): Promise<DashboardData> {
     capacity: PLAN_CAPACITY,
     today,
   });
-  // 完成度：今日 detection_log 触及的不同 kp 数（即"今天背了几个考点"）
-  const doneKpIds = new Set((todayDetect.data ?? []).map((d) => d.kp_id));
-  const planDone = plan.items.filter((it) => doneKpIds.has(it.kp_id)).length;
-
   // —— 3. 雷达：按科目聚合 mastered/总数 ——
   const radarMap = new Map<string, { mastered: number; total: number }>();
   for (const s of SUBJECTS) radarMap.set(s, { mastered: 0, total: 0 });
@@ -182,7 +177,6 @@ export async function getDashboard(): Promise<DashboardData> {
     cores: {
       plan: {
         total: plan.items.length,
-        done: planDone,
         bucketCounts: {
           复验: plan.counts.复验,
           到期: plan.counts.到期,
