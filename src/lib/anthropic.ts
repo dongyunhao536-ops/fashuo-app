@@ -23,9 +23,20 @@ import { assertBudget, recordUsage, usageFromMessage, RMB_PER_USD } from "./cost
  *    - Sonnet 4（直连渠道）：支持 `{type:"enabled", budget_tokens:N}` 显式给思考预算，
  *      响应 content 里会真的多一个 thinking 块（实测 budget=1024 时 thinking 输出约 30 token）。
  *    - Opus 4.8（Bedrock 转发）：【只能用 `type:"adaptive"`】，Bedrock 直接拒掉 enabled+budget。
- *      adaptive 由模型自己决定是否思考——探针里它直接选了"不思考"。
+ *      adaptive 由模型自己决定是否思考；简单题直接跳过、复杂案例题真的会触发 thinking 块。
  *    故 ENABLE_THINKING=1 时仍走 adaptive（Opus 唯一可用形态，Sonnet 也接受但等于让模型自主）。
  *    规划器（Sonnet 4 结构化 JSON 任务）不开 thinking 最划算，无收益还多烧 token。
+ *    答疑作答（Opus）也【默认不开】——见下面第 4 条。
+ * 4. 答疑作答开 thinking 的 ROI 负面（2026-06-11 真实案例题探针，probe-thinking.mjs）：
+ *    复杂案例（甲伤乙重伤 + 丙翻动致死的因果中断 + 偶然防卫干扰项）对比 baseline vs adaptive：
+ *    - 延迟：31.7s → 57.6s（翻倍）
+ *    - 成本：¥1.10 → ¥2.25/题（翻倍）
+ *    - 输出 token：1874 → 4000（顶满 max_tokens 被截断，需把作答 max_tokens 提到 24000+ 防截）
+ *    - 思考内容【七牛云抹掉】：content 里有 thinking 块但 thinking 字段=空字符串（redacted），
+ *      花双倍钱拿不到思考过程，没法 debug；推测是 Bedrock→七牛云转发链不透传隐藏思考。
+ *    - 质量改善微弱：baseline 已正确判定主结论（甲不对死亡负责、偶然防卫不适用），
+ *      adaptive 只是干扰项排除更精细一行。
+ *    结论：除非将来七牛云开始透传思考内容、或换 provider 拿到可见思考，否则答疑作答不开。
  * 3. RPM/TPD 限速狠 → 调用包 429 退避重试（callWithRetry）。TPD(每日 token 上限)是七牛云硬顶，重试无效，快速失败并提示。
  */
 export const anthropic = new Anthropic({
