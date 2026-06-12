@@ -18,25 +18,30 @@ export const MODELS = {
   ASK: process.env.MODEL_ASK ?? "anthropic/claude-4.8-opus",
   /**
    * 答疑两段式的"规划器"小调用（读题列检索词的结构化任务，非作答）。
-   * 红线只锁【作答】用 Opus；规划本可降级，但 2026-06-11 探针实测：
-   *   ① 七牛云【无任何 sonnet/haiku 渠道】（4.5/4.6/4.7-sonnet、4.5-haiku 全 no_available_channels）。
-   *   ② 七牛云 Anthropic 兼容端点【可转发非 Claude 模型】，约 60 个候选可选；面向中文
-   *      法律语料、规划器需吐严格 JSON，可考虑的实测候选有：
-   *        moonshotai/kimi-k2-thinking   —— 长上下文+推理，结构化输出稳
-   *        deepseek/deepseek-v3.2-exp    —— 中文强，吐 JSON 稳定
-   *        z-ai/glm-4.7                  —— GLM 系最新
-   *   故 PLAN 默认仍跟随 ASK 不降级（避免突然影响答疑质量）；想省钱时设
-   *   MODEL_PLAN=moonshotai/kimi-k2-thinking 即可生效，runPlanThenAnswer 已带兜底：
-   *   PLAN 渠道失效或调用失败 → 自动退回 ASK 模型重新规划，答疑链路不断。
-   *   ⚠️ pricing.json 按 haiku/sonnet/opus 系族字符串匹配计价，非 Claude 模型名会落到
-   *      最保守的 opus 价（偏贵记账）——这只影响熔断触发时机，对真实账单是过估，安全。
+   * 红线只锁【作答】用 Opus；规划阶段降级安全（结构化 JSON 输出，对深推理无要求）。
+   *
+   * 2026-06-11 第二轮探针纠正第一轮的结论：七牛云【确实有 Sonnet/Haiku 渠道】，
+   * 但必须用 Anthropic 官方【带日期的原版 ID】，不是 `anthropic/claude-X.Y-sonnet` 这类
+   * 七牛云自家命名。实测可用：
+   *   ✅ claude-sonnet-4-20250514        Sonnet 4（推荐：质量够、~5× 成本/速度优势）
+   *   ✅ claude-3-5-haiku-20241022       Haiku 3.5（更便宜但中文法律术语理解风险）
+   *   ❌ claude-3-5-sonnet-20241022 / claude-haiku-4-20250514     无渠道
+   *
+   * .env.local 已设 MODEL_PLAN=claude-sonnet-4-20250514，规划走 Sonnet 4 省钱；
+   * runPlanThenAnswer 带兜底（PLAN 渠道失效/调用失败自动退回 ASK 模型重新规划），
+   * 想随时回滚就改 .env.local 的 MODEL_PLAN 或注释掉即可。
+   *
+   * ⚠️ pricing.json 按 haiku/sonnet/opus 系族字符串匹配计价，dated ID 也能命中
+   *   （含"sonnet"/"haiku"子串），账本计价正确。
    */
   PLAN: process.env.MODEL_PLAN ?? process.env.MODEL_ASK ?? "anthropic/claude-4.8-opus",
   /**
    * L1 检测题草稿 / 低风险生成 —— Haiku。
-   * ⚠️ 2026-06-11 探针实测：七牛云【无 haiku/sonnet 渠道】（anthropic/claude-4.5-haiku 等
-   * 全部 "no available channels"）。背诵 L1 模块上线前必须重新探针或换 provider，
-   * 否则只能落到 opus 默认值——绝不可在生产 L1 大量调用（会贵 ~15×）。
+   * 2026-06-11 第二轮探针：七牛云有 Haiku 3.5 渠道（必须用 Anthropic 原版 dated ID）：
+   *   ✅ claude-3-5-haiku-20241022     Haiku 3.5（实测可用）
+   *   ❌ claude-haiku-4-20250514       无渠道
+   * 背诵 L1 上线时设 MODEL_DRAFT=claude-3-5-haiku-20241022 即可；现仍默认回退到 opus
+   * 防崩，绝不可不设环境变量就在生产 L1 大量调用（会贵 ~15×）。
    */
   DRAFT: process.env.MODEL_DRAFT ?? "anthropic/claude-4.7-opus",
   /** 教练 T1 规划 —— 非红线但需好推理，用 4.7 Opus（单次调用，无 grep 工具循环，成本低）。 */

@@ -14,10 +14,18 @@ import { assertBudget, recordUsage, usageFromMessage, RMB_PER_USD } from "./cost
  * - baseURL 从 ANTHROPIC_BASE_URL 读（七牛云 = https://api.qnaigc.com，Anthropic 原生协议兼容）。
  *   不设则走官方 api.anthropic.com。
  *
- * ⚠️ 七牛云实测约束（来自 2026-05/06 request-logs，见系统设计/10 校准）：
+ * ⚠️ 七牛云实测约束（来自 2026-05/06 request-logs + 2026-06-11 effort/thinking 探针）：
  * 1. Opus 经 AWS Bedrock 转发 → 【不支持 output_config】(实测 400 "Extra inputs are not permitted")。
  *    故不传 output_config.effort。设计 §9 的 effort=high 旋钮在七牛云不可用。
- * 2. thinking 参数 Bedrock 兼容性未知 → 默认【关闭】，仅当 ENABLE_THINKING=1 时开（可实验）。
+ * 2. thinking 旋钮的真实形态（探针实证）：
+ *    - 七牛云文档说的 `thinking.effort=low/medium/high` 在 Anthropic 协议路径【全是死的】
+ *      （那是 OpenAI 兼容包装专用，原生 /v1/messages 一律 400 budget_tokens required）。
+ *    - Sonnet 4（直连渠道）：支持 `{type:"enabled", budget_tokens:N}` 显式给思考预算，
+ *      响应 content 里会真的多一个 thinking 块（实测 budget=1024 时 thinking 输出约 30 token）。
+ *    - Opus 4.8（Bedrock 转发）：【只能用 `type:"adaptive"`】，Bedrock 直接拒掉 enabled+budget。
+ *      adaptive 由模型自己决定是否思考——探针里它直接选了"不思考"。
+ *    故 ENABLE_THINKING=1 时仍走 adaptive（Opus 唯一可用形态，Sonnet 也接受但等于让模型自主）。
+ *    规划器（Sonnet 4 结构化 JSON 任务）不开 thinking 最划算，无收益还多烧 token。
  * 3. RPM/TPD 限速狠 → 调用包 429 退避重试（callWithRetry）。TPD(每日 token 上限)是七牛云硬顶，重试无效，快速失败并提示。
  */
 export const anthropic = new Anthropic({
