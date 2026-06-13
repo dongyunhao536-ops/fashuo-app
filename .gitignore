@@ -17,6 +17,10 @@
 /.next/
 /out/
 
+# standalone 部署产物（云端构建推来，ECS 上的 /opt/fashuo-app/{releases,current}）
+/releases/
+/current
+
 # production
 /build
 

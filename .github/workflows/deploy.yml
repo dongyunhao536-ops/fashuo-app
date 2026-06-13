@@ -1,0 +1,67 @@
+name: build-and-deploy
+
+# 云端构建 + 推产物部署：push 到 main → GitHub runner 编译 standalone → scp 到 ECS → 激活。
+# ECS（2核2G）彻底不参与编译。手动触发用 workflow_dispatch。
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "memory/**"
+  workflow_dispatch:
+
+# 同一时间只跑一个部署，新 push 取消进行中的旧部署
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install deps
+        run: npm ci
+
+      - name: Build (standalone)
+        env:
+          NODE_ENV: production
+          # NEXT_PUBLIC_* 在 build 时内联进客户端 bundle，且 supabase.ts 顶层 createClient 需要 URL
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+        run: npm run build
+
+      - name: Assemble standalone bundle
+        run: |
+          cp -r public .next/standalone/ 2>/dev/null || true
+          cp -r .next/static .next/standalone/.next/
+          tar -czf "fashuo-${GITHUB_SHA}.tgz" -C .next/standalone .
+          ls -lh "fashuo-${GITHUB_SHA}.tgz"
+
+      - name: Copy bundle to ECS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          source: "fashuo-${{ github.sha }}.tgz"
+          target: /tmp
+
+      - name: Activate on ECS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.ECS_HOST }}
+          username: ${{ secrets.ECS_USER }}
+          key: ${{ secrets.ECS_SSH_KEY }}
+          command_timeout: 5m
+          script: |
+            set -e
+            cd /opt/fashuo-app
+            git pull --ff-only
+            bash deploy/12-activate-standalone.sh "/tmp/fashuo-${{ github.sha }}.tgz" "${{ github.sha }}"
