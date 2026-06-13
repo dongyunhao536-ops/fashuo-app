@@ -34,7 +34,7 @@ export default async function DashboardPage() {
       </header>
 
       {/* 倒计时 hero */}
-      <section className="mx-4 mt-3 rounded-[14px] border border-hairline bg-gradient-to-b from-card to-[#161618] p-5">
+      <section className="mx-4 mt-3 rounded-[18px] border border-hairline bg-gradient-to-b from-card to-[#161618] p-5 shadow-[0_8px_28px_rgba(0,0,0,0.35)]">
         <div className="text-[13px] text-label2">距 {d.hero.examDate}</div>
         <div className="mt-1 text-[42px] font-bold leading-none tracking-tight">
           {d.hero.daysLeft}
@@ -63,8 +63,12 @@ export default async function DashboardPage() {
 
       {/* 今日清单 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
-      <section className="mx-4 divide-y divide-hairline rounded-[12px] bg-card">
+      <section className="mx-4 divide-y divide-hairline rounded-[16px] bg-card">
         <Link href="/recite" className="flex min-h-11 items-center px-4 py-3">
+          <IconTile>
+            <rect x="4" y="3" width="16" height="18" rx="2" />
+            <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+          </IconTile>
           <div className="flex-1">
             <div className="text-[17px]">背诵清单</div>
             <div className="mt-0.5 text-[13px] text-label2">
@@ -76,6 +80,12 @@ export default async function DashboardPage() {
           <span className="ml-2 text-[14px] text-label3">›</span>
         </Link>
         <Link href="/ask" className="flex min-h-11 items-center px-4 py-3">
+          <IconTile>
+            <path
+              d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z"
+              strokeLinejoin="round"
+            />
+          </IconTile>
           <div className="flex-1">
             <div className="text-[17px]">答疑</div>
             <div className="mt-0.5 line-clamp-1 text-[13px] text-label2">
@@ -86,6 +96,9 @@ export default async function DashboardPage() {
           <span className="ml-2 text-[14px] text-label3">›</span>
         </Link>
         <Link href="/inbox" className="flex min-h-11 items-center px-4 py-3">
+          <IconTile>
+            <path d="M3 13h4l2 3h6l2-3h4M5 5h14l2 8v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z" strokeLinejoin="round" strokeLinecap="round" />
+          </IconTile>
           <div className="flex-1">
             <div className="text-[17px]">待办筐</div>
             <div className="mt-0.5 line-clamp-1 text-[13px] text-label2">
@@ -101,7 +114,7 @@ export default async function DashboardPage() {
 
       {/* 最需要攻克 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">最需要攻克</h2>
-      <section className="mx-4 rounded-[12px] bg-card">
+      <section className="mx-4 rounded-[16px] bg-card">
         {d.top5.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-label3">
             还没有错次记录——开始背诵后会沉淀进来
@@ -132,7 +145,7 @@ export default async function DashboardPage() {
 
       {/* 五科掌握雷达 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">五科掌握</h2>
-      <section className="mx-4 rounded-[12px] bg-card p-4">
+      <section className="mx-4 rounded-[16px] bg-card p-4">
         <RadarSVG radar={d.radar} />
         <div className="mt-2 flex flex-wrap justify-around gap-1 text-[12px] text-label2">
           {d.radar.map((r) => (
@@ -153,7 +166,7 @@ export default async function DashboardPage() {
           周复盘 ›
         </Link>
       </div>
-      <section className="mx-4 mb-2 rounded-[12px] bg-card p-4">
+      <section className="mx-4 mb-2 rounded-[16px] bg-card p-4">
         <div className="grid grid-cols-7 gap-1.5">
           {d.weekHeat.map((day, i) => {
             const intensity = Math.min(1, day.detections / 10);
@@ -187,6 +200,17 @@ export default async function DashboardPage() {
 
       <TabBar active="dash" />
     </main>
+  );
+}
+
+/** iOS 风列表行图标块：中性底 + 单线图标（守"蓝色唯一强调"纪律，不用彩色块） */
+function IconTile({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="mr-3 grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-fill text-label2">
+      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
+        {children}
+      </svg>
+    </span>
   );
 }
 
