@@ -13,7 +13,9 @@ DB_NAME="${PGDATABASE:-fashuo}"
 # pg_dump 通过 sudo -u postgres 跑：fashuo 库 owner=postgres，peer 认证天然通过；
 # 不用 -U <DB角色>+密码，省一份凭证（cron 里管理密码增加面）。
 BACKUP_REPO="${BACKUP_REPO:-/opt/fashuo-backups}"
-BRANCH="${BACKUP_BRANCH:-master}"
+# GitHub 新建仓默认 main；archive 仓库是从 D:\fashuo（云本地 master）push 上来的所以走 master，
+# 但 backups 是空仓初始化默认 main——分别配置，不混着。
+BRANCH="${BACKUP_BRANCH:-main}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 STAMP="$(date '+%Y%m%d-%H%M')"
 OUT="$BACKUP_REPO/daily/fashuo-$STAMP.sql.gz"
@@ -40,9 +42,10 @@ find "$BACKUP_REPO/daily" -name 'fashuo-*.sql.gz' -mtime +"$KEEP_DAYS" -delete
 cd "$BACKUP_REPO" || exit 1
 git pull --rebase --autostash origin "$BRANCH" >/dev/null 2>&1 || true
 git add -A
-if [[ -n "$(git status --porcelain)" ]]; then
+if [[ -n "$(git status --porcelain)" || -z "$(git rev-parse --verify HEAD 2>/dev/null)" ]]; then
   git commit -m "备份 $STAMP（$SIZE）" >/dev/null
-  if ! git push origin "$BRANCH"; then
+  # 首次推空仓时 -u 创建上游绑定；HEAD:$BRANCH 让本地分支名（初始可能叫 master）也能推到 main
+  if ! git push -u origin "HEAD:$BRANCH"; then
     notify fail "备份推送失败" "本地备份已生成（$SIZE）但 push GitHub 失败——异地副本未更新，请尽快查网络/凭证。"
     exit 1
   fi
