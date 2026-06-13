@@ -10,7 +10,8 @@ set -uo pipefail
 source "$(dirname "$0")/lib-notify.sh"
 
 DB_NAME="${PGDATABASE:-fashuo}"
-DB_USER="${PGUSER:-fashuo}"
+# pg_dump 通过 sudo -u postgres 跑：fashuo 库 owner=postgres，peer 认证天然通过；
+# 不用 -U <DB角色>+密码，省一份凭证（cron 里管理密码增加面）。
 BACKUP_REPO="${BACKUP_REPO:-/opt/fashuo-backups}"
 BRANCH="${BACKUP_BRANCH:-master}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
@@ -25,8 +26,8 @@ if [[ ! -d "$BACKUP_REPO/.git" ]]; then
 fi
 mkdir -p "$BACKUP_REPO/daily"
 
-# pg_dump（仅 localhost，免密 peer/ident 认证；如需密码走 ~/.pgpass）
-if ! pg_dump -U "$DB_USER" "$DB_NAME" | gzip > "$OUT"; then
+# pg_dump（以 postgres OS 用户走 peer 认证）
+if ! sudo -u postgres pg_dump "$DB_NAME" | gzip > "$OUT"; then
   notify fail "数据库备份失败" "pg_dump 出错，本次未生成备份。见 /var/log/fashuo-backup.log。"
   rm -f "$OUT"
   exit 1
