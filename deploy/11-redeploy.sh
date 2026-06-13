@@ -40,17 +40,25 @@ ensure_swap
 sync; echo 3 > /proc/sys/vm/drop_caches 2>/dev/null || true
 echo "    部署前内存："; free -m | awk 'NR==1||/Mem|Swap/'
 
+# 2核2G 关键：build 前停 app 腾内存。app(~300MB)+build 并发会挤爆内存→swap 重度抖→
+# 连 SSH 都没响应（2026-06-13 实测）。代价＝build 期间 ~1-2 分钟不可用，值得。
+# trap 保证无论 build 成败，退出时都把 app 拉回来（防停了起不来）。
+echo "==> 1/4 停 app 腾内存（build 期间短暂不可用 ~1-2 分钟）"
+pm2 stop fashuo >/dev/null 2>&1 || true
+trap 'pm2 start deploy/ecosystem.config.cjs --update-env 2>/dev/null || pm2 restart fashuo 2>/dev/null || true; pm2 save 2>/dev/null || true' EXIT
+
 if [[ "${1:-}" == "--deps" ]]; then
   echo "==> npm ci（依赖有变）"
   nice -n 15 npm ci
 fi
 
-echo "==> 2/4 next build（nice 降优先级，保 sshd/nginx 响应）"
+echo "==> 2/4 next build（app 已停 + nice + swap 兜底）"
 NODE_ENV=production NODE_OPTIONS="--max-old-space-size=1024" nice -n 15 npm run build
 
 echo "==> 3/4 pm2 reload"
 pm2 reload deploy/ecosystem.config.cjs --update-env || pm2 start deploy/ecosystem.config.cjs
 pm2 save
+trap - EXIT  # 成功收尾，撤掉兜底 trap（避免重复 start）
 
 echo "==> 4/4 自检"
 sleep 2
