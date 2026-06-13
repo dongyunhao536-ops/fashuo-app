@@ -38,7 +38,9 @@ async function withRetry(label, fn, max = 5) {
 }
 
 const cfg = JSON.parse(readFileSync("config/mirror-scope.json", "utf8"));
-const ROOT = cfg.root;
+// ARCHIVE_DIR 覆盖档案根（与 register-events.mjs 统一）：PC 不设 → 用 mirror-scope.json 的 root；
+// ECS autosync 设 ARCHIVE_DIR=/opt/fashuo-archive 指向 clone 的档案，两脚本共用同一目录（不必各维护 config）。
+const ROOT = process.env.ARCHIVE_DIR || cfg.root;
 
 /** 把 Windows 反斜杠路径标准化为正斜杠（schema 里 path 字段一致用 / 分隔） */
 const norm = (p) => p.split(sep).join("/");

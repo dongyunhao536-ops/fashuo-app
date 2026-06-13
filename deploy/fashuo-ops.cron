@@ -1,0 +1,15 @@
+# 法硕运维三件套（cp 到 /etc/cron.d/fashuo-ops；chmod 644；systemctl restart cron）
+# 第 6 列 root = 运行用户。各脚本自身把告警推 Bark（设 NOTIFY_URL 后生效）。
+#
+# 一次性准备：
+#   git clone <fashuo-archive 私库>  /opt/fashuo-archive
+#   git clone <fashuo-backups 私库>  /opt/fashuo-backups
+#   在 /etc/default/fashuo-ops 写 NOTIFY_URL=https://api.day.app/<你的key>（可选告警）
+#
+# 时间错开：03:30 登记同步 → 04:00 备份 → 09:00 巡检（你起床前后能收到当天健康汇总）。
+SHELL=/bin/bash
+BACKUP_REPO=/opt/fashuo-backups
+
+30 3 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; cd /opt/fashuo-app && bash deploy/08-archive-autosync.sh >> /var/log/fashuo-autosync.log 2>&1
+0  4 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; bash /opt/fashuo-app/deploy/09-backup.sh >> /var/log/fashuo-backup.log 2>&1
+0  9 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; bash /opt/fashuo-app/deploy/10-healthcheck.sh >> /var/log/fashuo-health.log 2>&1

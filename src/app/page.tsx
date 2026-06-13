@@ -147,7 +147,12 @@ export default async function DashboardPage() {
       </section>
 
       {/* 本周活动 */}
-      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">本周活动</h2>
+      <div className="mt-6 flex items-baseline justify-between px-8 pb-2">
+        <h2 className="text-[13px] text-label2">本周活动</h2>
+        <Link href="/weekly" className="text-[12px] text-blue">
+          周复盘 ›
+        </Link>
+      </div>
       <section className="mx-4 mb-2 rounded-[12px] bg-card p-4">
         <div className="grid grid-cols-7 gap-1.5">
           {d.weekHeat.map((day, i) => {

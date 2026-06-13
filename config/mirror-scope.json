@@ -10,6 +10,9 @@
 
     { "pattern": "真题分析/_刑法做题心得.md",     "kind": "xinde" },
     { "pattern": "真题分析/_民法做题心得.md",     "kind": "xinde" },
+    { "pattern": "真题分析/_法理做题心得.md",     "kind": "xinde" },
+    { "pattern": "真题分析/_宪法做题心得.md",     "kind": "xinde" },
+    { "pattern": "真题分析/_法制史做题心得.md",   "kind": "xinde" },
 
     { "pattern": "真题分析/00_真题学习总结.md",       "kind": "zhenti" },
     { "pattern": "真题分析/01_题型结构与命题趋势.md", "kind": "zhenti" },
