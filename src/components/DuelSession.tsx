@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
 
@@ -127,12 +128,12 @@ export function DuelSession({
           >
             背完了，去对决
           </button>
-          <a
+          <Link
             href="/recite"
             className="mt-2 block w-full py-2 text-center text-[13px] text-blue"
           >
             ‹ 回背诵主页
-          </a>
+          </Link>
         </div>
       )}
 

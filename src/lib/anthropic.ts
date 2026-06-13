@@ -435,7 +435,12 @@ export async function runPlanThenAnswer(opts: {
  * 成本栅栏：进入前 assertBudget()，调用后 recordUsage()。
  */
 export async function runSingleTurn(opts: {
-  system: string;
+  /**
+   * 纯字符串=单块不缓存；{stable, volatile}=稳定前缀加 cache_control、易变块在后。
+   * 缓存只给【不带 tools】的调用用——带 tools 经七牛云/Bedrock 是"只写不读"净亏损（见 ↑runWithSearchTools 备注）；
+   * 本函数无 tools，走的是烟测验证过的透传缓存路径。
+   */
+  system: string | { stable: string; volatile: string };
   user: string;
   model?: string;
   maxTokens?: number;
@@ -443,10 +448,17 @@ export async function runSingleTurn(opts: {
 }): Promise<{ message: Anthropic.Message; costUsd: number }> {
   const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach" } = opts;
   await assertBudget();
+  const systemBlocks: Anthropic.TextBlockParam[] =
+    typeof system === "string"
+      ? [{ type: "text", text: system }]
+      : [
+          { type: "text", text: system.stable, cache_control: { type: "ephemeral" } },
+          { type: "text", text: system.volatile },
+        ];
   const resp = await callWithRetry({
     model,
     max_tokens: maxTokens,
-    system: [{ type: "text", text: system }],
+    system: systemBlocks,
     messages: [{ role: "user", content: user }],
   });
   const costUsd = await recordUsage({

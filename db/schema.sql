@@ -101,16 +101,22 @@ create table if not exists events (
   id           bigserial primary key,
   type         text not null,             -- 弱项候选 / 心得候选 / 复验请求 / 已强化
   subject      text,
-  kp_id        text,                      -- 复验请求(G2)用：背诵下次清单消费它
+  kp_id        text,                      -- 复验请求(G2)/已强化 用：考点级事件按它防重与消费
   knowledge    text,                      -- 知识点（去重键 = subject+knowledge）
   anchor       text,                      -- 锚点（行号/心得号/题号）
   source       text not null,             -- 答疑 / 检测 / 复盘 / PC录入
   payload      jsonb not null default '{}'::jsonb,
-  status       text not null default 'pending', -- pending / consumed
+  status       text not null default 'pending',
+  -- status 状态机：pending（待云拍板）→ confirmed（云收下，待PC登记）/ dismissed（云忽略）→ consumed（PC已登记）
+  --   例外：复验请求不需云拍板，检测完成后在 APP 侧直接 pending→consumed
   created_at   timestamptz not null default now(),
   consumed_at  timestamptz
 );
 create index if not exists idx_events_status on events (status, type);
 
--- 去重键：proposals/events 登记进 当前弱项.md 时按 (subject, knowledge) 去重（仅 PC 登记一处）
+-- 生产/消费约定：
+--   弱项候选＝检测G1/答疑/教练复盘/易混对决投递（投递端 pending 防重统一在 src/lib/events.ts emitEvent）
+--   心得候选＝答疑投递；复验请求＝答疑G2投递、检测完成自动消费（不进 markdown）
+--   已强化＝检测在"曾出错考点首次 mastered"时投递，PC 登记把 当前弱项.md 对应行移入已强化段
+-- 终极去重：登记进 当前弱项.md 时按 (subject, knowledge) 去重，错误频率跨批次+1（仅 PC 登记一处）
 -- detection_log / ask_summary 保留策略：见 04 §9，留到滚动清理脚本定。

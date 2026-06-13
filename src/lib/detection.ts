@@ -1,6 +1,8 @@
 import { runPlanThenAnswer, extractText, fmtCost } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
+import { emitEvent, consumeReviewRequests } from "./events";
+import { computeTransition } from "./kp-transition";
 import schedulerCfg from "../../config/scheduler.json";
 import ankiData from "../data/anki_extracted.json";
 import type { KpRow } from "./scheduler";
@@ -72,10 +74,6 @@ export interface KpStateUpdate {
 }
 
 const CFG = schedulerCfg;
-const INTERVALS: number[] = CFG.间隔档_天 as number[];
-const MAX_INTERVAL = INTERVALS.length - 1;
-const DIFF_MIN = CFG.难度D.min;
-const DIFF_MAX = CFG.难度D.max;
 const G1_THRESHOLD = (CFG as { G1_背诵失败转弱项: { 连续失败阈值: number } }).G1_背诵失败转弱项.连续失败阈值;
 
 /** Anki 全量解析结果（构建一次缓存到 module-level，~860 张卡 ≈ 几 MB） */
@@ -738,8 +736,6 @@ function parseGradeJson(raw: string): GradeJson {
 // kp_state 升降档 + G1
 // ============================================================
 
-const LEVEL_ORDER: Level[] = ["L1", "L2", "L3"];
-
 async function applyStateUpdate(
   kp: KpRow,
   level: Level,
@@ -751,55 +747,19 @@ async function applyStateUpdate(
     difficulty: kp.difficulty,
   };
 
-  let cur_level = prev.cur_level;
-  let interval_idx = prev.interval_idx;
-  let difficulty = prev.difficulty;
-  const cap = kp.cap_level as Level;
-
-  if (grade === "干净通过") {
-    difficulty = clamp(difficulty - 1, DIFF_MIN, DIFF_MAX);
-    interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
-    // 当前档通过 → 升到下一档（未到封顶）
-    const curIdx = LEVEL_ORDER.indexOf(level);
-    const capIdx = LEVEL_ORDER.indexOf(cap);
-    if (curIdx < capIdx) cur_level = LEVEL_ORDER[curIdx + 1];
-  } else if (grade === "勉强") {
-    // 同档重测，难度微升
-    difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
-  } else {
-    // 未过：难度+1，间隔退半档（即 -1），档级不动；error_count++ 在事务里
-    difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
-    interval_idx = Math.max(interval_idx - 1, 0);
-  }
-
-  // 三档全过 = mastered
-  const l1ok = level === "L1" ? grade === "干净通过" : kp.l1_status === "passed";
-  const l2ok = level === "L2" ? grade === "干净通过" : kp.l2_status === "passed";
-  const l3ok = level === "L3" ? grade === "干净通过" : kp.l3_status === "passed";
-  const mastered =
-    cap === "L1" ? l1ok : cap === "L2" ? l1ok && l2ok : l1ok && l2ok && l3ok;
-
-  const today = new Date();
-  const nextDays = INTERVALS[interval_idx];
-  const nextDue = new Date(today.getTime() + nextDays * 86400000)
-    .toISOString()
-    .slice(0, 10);
-  const lastReview = today.toISOString().slice(0, 10);
-
-  const statusField =
-    level === "L1" ? "l1_status" : level === "L2" ? "l2_status" : "l3_status";
-  const statusValue = grade === "干净通过" ? "passed" : grade === "未过" ? "failed" : "untested";
+  // 升降档纯逻辑抽到 kp-transition（单测锁定），这里只负责写库 + 投递事件。
+  const t = computeTransition(kp, level, grade);
 
   const update: Record<string, unknown> = {
-    cur_level,
-    interval_idx,
-    difficulty,
-    last_review: lastReview,
-    next_due: nextDue,
-    mastered,
+    cur_level: t.cur_level,
+    interval_idx: t.interval_idx,
+    difficulty: t.difficulty,
+    last_review: t.lastReview,
+    next_due: t.nextDue,
+    mastered: t.mastered,
     review_count: kp.review_count + 1,
-    error_count: kp.error_count + (grade === "未过" ? 1 : 0),
-    [statusField]: statusValue,
+    error_count: kp.error_count + t.errorCountDelta,
+    [t.statusField]: t.statusValue,
     updated_at: new Date().toISOString(),
   };
   const { error } = await supabaseAdmin
@@ -808,16 +768,35 @@ async function applyStateUpdate(
     .eq("kp_id", kp.kp_id);
   if (error) throw new Error(`kp_state 更新失败：${error.message}`);
 
+  // G2 兑现：本考点完成了一次检测（无论结果），pending 复验请求即消费。
+  // 不消费它会永久 pending、天天占清单复验桶；没过的话间隔退档+G1 会接手跟进。
+  await consumeReviewRequests(kp.kp_id);
+
+  // G1 反向（已强化）：曾出错的考点首次达成 mastered → 投「已强化」。
+  // 云在待办筐收下后，PC 登记把当前弱项.md 里对应行移入"已强化"段——弱项有进有出。
+  if (t.shouldEmitStrengthened) {
+    await emitEvent({
+      type: "已强化",
+      subject: kp.subject,
+      kp_id: kp.kp_id,
+      knowledge: (kp.ext as { name?: string })?.name ?? kp.kp_id,
+      anchor: formatAnchor(kp) || null,
+      source: "检测",
+      payload: { 累计错次: kp.error_count, 触发: "弱项考点三档全过达成 mastered" },
+      dedupBy: "kp",
+    });
+  }
+
   return {
     prev,
-    next: { cur_level, interval_idx, difficulty, next_due: nextDue },
-    mastered,
+    next: { cur_level: t.cur_level, interval_idx: t.interval_idx, difficulty: t.difficulty, next_due: t.nextDue },
+    mastered: t.mastered,
   };
 }
 
 /**
  * G1：检查最近 N 次同档检测是否连续失败，达阈值则向 events 投递弱项候选。
- * 防重：同 kp_id+level 已有 pending 弱项候选 → 不重发。
+ * 防重统一走 emitEvent（同 kp_id 已有 pending 弱项候选 → 不重发）。
  */
 async function maybeEmitWeakEvent(kp: KpRow, level: Level): Promise<boolean> {
   const { data: recent } = await supabaseAdmin
@@ -831,22 +810,11 @@ async function maybeEmitWeakEvent(kp: KpRow, level: Level): Promise<boolean> {
   const allFailed = recent.every((r) => r.passed === false);
   if (!allFailed) return false;
 
-  // 防重：同 kp 已有 pending 弱项候选则跳过
-  const { data: existing } = await supabaseAdmin
-    .from("events")
-    .select("id")
-    .eq("type", "弱项候选")
-    .eq("kp_id", kp.kp_id)
-    .eq("status", "pending")
-    .limit(1);
-  if (existing && existing.length > 0) return false;
-
-  const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
-  const { error } = await supabaseAdmin.from("events").insert({
+  return emitEvent({
     type: "弱项候选",
     subject: kp.subject,
     kp_id: kp.kp_id,
-    knowledge: name,
+    knowledge: (kp.ext as { name?: string })?.name ?? kp.kp_id,
     anchor: formatAnchor(kp) || null,
     source: "检测",
     payload: {
@@ -854,13 +822,8 @@ async function maybeEmitWeakEvent(kp: KpRow, level: Level): Promise<boolean> {
       连续失败次数: G1_THRESHOLD,
       触发: "G1 背诵失败转弱项",
     },
-    status: "pending",
+    dedupBy: "kp",
   });
-  if (error) {
-    console.error("[detection] G1 events 写入失败：", error.message);
-    return false;
-  }
-  return true;
 }
 
 // ============================================================
@@ -875,10 +838,6 @@ async function loadKp(kpId: string): Promise<KpRow> {
     .single();
   if (error || !data) throw new Error(`找不到考点：${kpId}`);
   return data as KpRow;
-}
-
-function clamp(n: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, n));
 }
 
 /** 把 kp.ext.{page,src_line} 拼成"P12·行345"风格的锚点串（供出题/事件标注） */

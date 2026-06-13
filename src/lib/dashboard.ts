@@ -1,5 +1,6 @@
 import { supabaseAdmin, fetchAllRows } from "./supabase";
 import { buildDailyPlan, type KpRow } from "./scheduler";
+import { bjDateStr, bjDayStart, bjDayEnd } from "./dates";
 
 /**
  * 仪表盘数据聚合（RSC 直接调，无需 HTTP 中转）。
@@ -46,7 +47,7 @@ const PLAN_CAPACITY = 30;
 
 export async function getDashboard(): Promise<DashboardData> {
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10);
+  const todayStr = bjDateStr(today); // 北京日历日（UTC 日期会让北京 0-8 点的"今天"错位）
   const week0 = daysAgo(6, today); // 含今天往回 7 天
 
   // 并行拉所有数据
@@ -85,6 +86,7 @@ export async function getDashboard(): Promise<DashboardData> {
       .from("kp_state")
       .select("kp_id, subject, ext, error_count, cur_level")
       .gt("error_count", 0)
+      .eq("mastered", false) // 已强化的退场（与弱项页/教练 Top5 同口径）
       .order("error_count", { ascending: false })
       .limit(5),
     supabaseAdmin
@@ -94,13 +96,13 @@ export async function getDashboard(): Promise<DashboardData> {
     supabaseAdmin
       .from("detection_log")
       .select("ts, kp_id")
-      .gte("ts", week0 + "T00:00:00"),
+      .gte("ts", bjDayStart(week0)),
     supabaseAdmin.from("study_log").select("minutes").eq("log_date", todayStr),
     supabaseAdmin
       .from("detection_log")
       .select("id, kp_id")
-      .gte("ts", todayStr + "T00:00:00")
-      .lte("ts", todayStr + "T23:59:59"),
+      .gte("ts", bjDayStart(todayStr))
+      .lte("ts", bjDayEnd(todayStr)),
   ]);
 
   // —— 1. Hero ——
@@ -163,7 +165,7 @@ export async function getDashboard(): Promise<DashboardData> {
     if (row) row.minutes += s.minutes ?? 0;
   }
   for (const d of weekDetect.data ?? []) {
-    const k = String(d.ts).slice(0, 10);
+    const k = bjDateStr(new Date(String(d.ts))); // ts 是 UTC，切回北京日历日再归桶
     const row = dayMap.get(k);
     if (row) row.detections++;
   }
@@ -196,5 +198,5 @@ export async function getDashboard(): Promise<DashboardData> {
 }
 
 function daysAgo(n: number, base: Date): string {
-  return new Date(base.getTime() - n * 86400000).toISOString().slice(0, 10);
+  return bjDateStr(new Date(base.getTime() - n * 86400000));
 }

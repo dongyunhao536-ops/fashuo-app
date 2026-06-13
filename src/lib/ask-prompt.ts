@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "./supabase";
+import { bjDateStr } from "./dates";
 
 /**
  * 答疑系统提示词组装（build order ② · 系统设计/12 答疑 + Skills/法硕答疑.md v2.3）。
@@ -118,7 +119,7 @@ ${META_CLOSE}
  */
 export async function buildAskSystemVolatile(subject?: string): Promise<string> {
   if (!subject) return "";
-  const today = new Date().toISOString().slice(0, 10);
+  const today = bjDateStr();
   const { data, error } = await supabaseAdmin
     .from("ask_summary")
     .select("kp_id, question_type, step_stuck, confusion, created_at")

@@ -80,9 +80,14 @@ export default async function WeakPage({
                 </div>
 
                 <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
-                  <StatusBadge level="L1" status={w.l1_status} />
-                  <StatusBadge level="L2" status={w.l2_status} />
-                  <StatusBadge level="L3" status={w.l3_status} />
+                  {/* 只展示到封顶档：cap=L1 的考点永远不测 L2/L3，渲染出来像欠账 */}
+                  {levelsUpToCap(w.cap_level).map((lv) => (
+                    <StatusBadge
+                      key={lv}
+                      level={lv}
+                      status={{ L1: w.l1_status, L2: w.l2_status, L3: w.l3_status }[lv]}
+                    />
+                  ))}
                   {(w.page || w.src_line) && (
                     <span className="text-label3">
                       锚 {w.page ? `P${w.page}` : ""}
@@ -103,6 +108,13 @@ export default async function WeakPage({
       <TabBar active="weak" />
     </main>
   );
+}
+
+const LEVELS = ["L1", "L2", "L3"] as const;
+
+function levelsUpToCap(cap: string): (typeof LEVELS)[number][] {
+  const idx = LEVELS.indexOf(cap as (typeof LEVELS)[number]);
+  return idx === -1 ? [...LEVELS] : [...LEVELS.slice(0, idx + 1)];
 }
 
 function StatusBadge({ level, status }: { level: string; status: string }) {

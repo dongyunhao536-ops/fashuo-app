@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase";
+import { bjDateStr } from "@/lib/dates";
 import { TabBar } from "@/components/TabBar";
 import { EventActions } from "@/components/EventActions";
 
@@ -19,6 +20,7 @@ interface EventRow {
   knowledge: string | null;
   anchor: string | null;
   source: string;
+  payload: { vague?: boolean; chapter?: string | null } | null;
   created_at: string;
 }
 
@@ -32,7 +34,7 @@ const TYPE_DESC: Record<string, string> = {
 export default async function InboxPage() {
   const { data, error } = await supabaseAdmin
     .from("events")
-    .select("id, type, subject, kp_id, knowledge, anchor, source, created_at")
+    .select("id, type, subject, kp_id, knowledge, anchor, source, payload, created_at")
     .eq("status", "pending")
     .order("created_at", { ascending: false });
 
@@ -70,11 +72,14 @@ export default async function InboxPage() {
       )}
 
       {rows.length === 0 ? (
-        <div className="mx-4 mt-3 rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
-          待办筐是空的
-          <br />
-          答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。
-        </div>
+        // 读库失败时 rows 也是空的——只在真没数据时展示空态，别和上面的错误框打架
+        error ? null : (
+          <div className="mx-4 mt-3 rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+            待办筐是空的
+            <br />
+            答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。
+          </div>
+        )
       ) : (
         types.map((type) => {
           const items = byType.get(type)!;
@@ -96,8 +101,13 @@ export default async function InboxPage() {
                       {r.kp_id && <span>{r.kp_id}</span>}
                       {r.anchor && <span>锚 {r.anchor}</span>}
                       <span>{r.source}</span>
+                      {r.payload?.vague === true && (
+                        <span className="rounded-[5px] bg-orange/15 px-1.5 py-0.5 text-orange">
+                          模糊困惑
+                        </span>
+                      )}
                       <span className="ml-auto text-label3">
-                        {new Date(r.created_at).toLocaleDateString("zh-CN")}
+                        {bjDateStr(new Date(r.created_at))}
                       </span>
                     </div>
                     {/* 复验请求由 G2 自动进背诵清单，不需云确认；其余候选给收下/忽略 */}

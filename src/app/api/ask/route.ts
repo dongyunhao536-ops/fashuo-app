@@ -1,6 +1,8 @@
 import { runPlanThenAnswer, extractText, fmtCost } from "@/lib/anthropic";
 import { MODELS } from "@/lib/models";
 import { supabaseAdmin } from "@/lib/supabase";
+import { emitEvent } from "@/lib/events";
+import { bjDateStr } from "@/lib/dates";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError } from "@/lib/anthropic";
 import {
@@ -174,7 +176,7 @@ export async function POST(req: Request) {
   });
 }
 
-/** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（去重交给 PC 登记环节） */
+/** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（pending 防重统一在 emitEvent；登记去重在 PC） */
 async function sinkProposals(args: {
   subject: string | null;
   kpId: string | null;
@@ -182,11 +184,10 @@ async function sinkProposals(args: {
   grepLines: number[];
 }) {
   const { subject, kpId, meta, grepLines } = args;
-  const rows: Record<string, unknown>[] = [];
 
   for (const w of meta?.weak_candidates ?? []) {
     if (!w?.knowledge) continue;
-    rows.push({
+    await emitEvent({
       type: "弱项候选",
       subject,
       kp_id: kpId,
@@ -194,12 +195,12 @@ async function sinkProposals(args: {
       anchor: w.anchor ?? null,
       source: "答疑",
       payload: { grep_lines: grepLines, question_type: meta?.question_type ?? null },
-      status: "pending",
+      // 同一 kp 可挂多条不同弱项短语 → 按 subject+knowledge 防重（默认），不能按 kp_id
     });
   }
   for (const x of meta?.xinde_candidates ?? []) {
     if (!x?.rule) continue;
-    rows.push({
+    await emitEvent({
       type: "心得候选",
       subject,
       kp_id: kpId,
@@ -207,42 +208,24 @@ async function sinkProposals(args: {
       anchor: x.anchor ?? null,
       source: "答疑",
       payload: { note: "需真题二次背书才进正文（做题心得规则2）" },
-      status: "pending",
     });
   }
 
-  // G2：复验请求（答疑纠正了对某考点的误解 → 背诵下次清单优先消费）
-  // 防重：同 kp+type=复验请求+pending 已有则跳过（在 /api/ask 路由这一层去重，调度器读时合并）
+  // G2：复验请求（答疑纠正了对某考点的误解 → 背诵下次清单优先消费，检测完成后自动 consumed）
   const reviewCands = (meta?.review_kp_candidates ?? []).filter(
     (r): r is { kp_id: string; reason?: string } => !!r?.kp_id,
   );
-  if (reviewCands.length > 0) {
-    const ids = reviewCands.map((r) => r.kp_id);
-    const { data: existing } = await supabaseAdmin
-      .from("events")
-      .select("kp_id")
-      .eq("type", "复验请求")
-      .eq("status", "pending")
-      .in("kp_id", ids);
-    const skip = new Set((existing ?? []).map((e) => e.kp_id));
-    for (const r of reviewCands) {
-      if (skip.has(r.kp_id)) continue;
-      rows.push({
-        type: "复验请求",
-        subject,
-        kp_id: r.kp_id,
-        knowledge: r.reason ?? null,
-        anchor: null,
-        source: "答疑",
-        payload: { reason: r.reason ?? null, 触发: "G2 答疑澄清后复验" },
-        status: "pending",
-      });
-    }
-  }
-
-  if (rows.length > 0) {
-    const { error } = await supabaseAdmin.from("events").insert(rows);
-    if (error) console.error("[/api/ask] events 写入失败：", error.message);
+  for (const r of reviewCands) {
+    await emitEvent({
+      type: "复验请求",
+      subject,
+      kp_id: r.kp_id,
+      knowledge: r.reason ?? null,
+      anchor: null,
+      source: "答疑",
+      payload: { reason: r.reason ?? null, 触发: "G2 答疑澄清后复验" },
+      dedupBy: "kp",
+    });
   }
 
   // 写跨会话答疑记忆（ask_summary），90 天 TTL。
@@ -268,7 +251,7 @@ async function sinkProposals(args: {
       step_stuck: meta?.step_stuck ?? null,
       confusion,
       status: "open",
-      ttl_until: ttl.toISOString().slice(0, 10),
+      ttl_until: bjDateStr(ttl),
     });
     if (error) console.error("[/api/ask] ask_summary 写入失败：", error.message);
   }

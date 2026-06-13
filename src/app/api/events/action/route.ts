@@ -30,15 +30,20 @@ export async function POST(req: Request) {
   }
 
   const status = action === "confirm" ? "confirmed" : "dismissed";
-  const { error } = await supabaseAdmin
+  const { data: updated, error } = await supabaseAdmin
     .from("events")
     .update({ status, consumed_at: new Date().toISOString() })
     .eq("id", id)
-    .eq("status", "pending"); // 仅处理仍 pending 的（防重复点击/竞态）
+    .eq("status", "pending") // 仅处理仍 pending 的（防重复点击/竞态）
+    .select("id");
 
   if (error) {
     console.error("[/api/events/action] 失败：", error.message);
     return Response.json({ error: error.message }, { status: 502 });
+  }
+  // 0 行命中 = 已在别的设备/标签页处理过（或 id 不存在）——不能回 ok 让前端假确认
+  if (!updated || updated.length === 0) {
+    return Response.json({ error: "该条已被处理过或不存在", kind: "stale" }, { status: 409 });
   }
   return Response.json({ ok: true, id, status });
 }

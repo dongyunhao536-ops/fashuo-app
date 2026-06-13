@@ -8,9 +8,9 @@ import { useState } from "react";
  * 点击 → POST /api/events/action → 该条标记为已处理。
  */
 export function EventActions({ id }: { id: number }) {
-  const [state, setState] = useState<"idle" | "busy" | "confirmed" | "dismissed" | "error">(
-    "idle",
-  );
+  const [state, setState] = useState<
+    "idle" | "busy" | "confirmed" | "dismissed" | "stale" | "error"
+  >("idle");
 
   async function act(action: "confirm" | "dismiss") {
     if (state === "busy") return;
@@ -21,6 +21,10 @@ export function EventActions({ id }: { id: number }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id, action }),
       });
+      if (r.status === 409) {
+        setState("stale"); // 已在别的设备/标签页处理过——重试没有意义
+        return;
+      }
       if (!r.ok) throw new Error();
       setState(action === "confirm" ? "confirmed" : "dismissed");
     } catch {
@@ -33,6 +37,9 @@ export function EventActions({ id }: { id: number }) {
   }
   if (state === "dismissed") {
     return <div className="mt-2 text-[12px] text-label3">已忽略</div>;
+  }
+  if (state === "stale") {
+    return <div className="mt-2 text-[12px] text-label3">已在其他设备处理过，刷新可同步</div>;
   }
 
   return (

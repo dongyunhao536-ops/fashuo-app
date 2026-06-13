@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { supabaseAdmin } from "./supabase";
+import { bjDateStr, bjDayStart } from "./dates";
 import pricing from "../../config/pricing.json";
 
 /**
@@ -71,14 +72,12 @@ export function dailyBudgetUsd(): number {
   return Number.isFinite(v) && v > 0 ? v : 3;
 }
 
-/** 今日（本地 0 点起）已花费的估算美元和 */
+/** 今日（北京 0 点起）已花费的估算美元和——不依赖部署机时区 */
 export async function getTodaySpendUsd(): Promise<number> {
-  const start = new Date();
-  start.setHours(0, 0, 0, 0);
   const { data, error } = await supabaseAdmin
     .from("api_usage")
     .select("est_cost_usd")
-    .gte("ts", start.toISOString());
+    .gte("ts", bjDayStart(bjDateStr()));
   if (error) {
     // 记账表查询失败时，宁可放行也别误杀；但打日志便于排查
     console.error("[cost] getTodaySpendUsd 查询失败：", error.message);

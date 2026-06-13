@@ -26,6 +26,7 @@ interface CoachResult {
   weakEmitted: boolean;
   redlines: string[];
   logId: number | null;
+  logSkipped: boolean; // 纯咨询/解析失败时后端主动不入库；logId=null 且 !logSkipped = 入库失败
   costText?: string;
 }
 
@@ -200,7 +201,12 @@ function CoachReply({ r }: { r: CoachResult }) {
           <span className="text-orange">复盘困惑点已投待办筐（PC 登记后进弱项）</span>
         )}
         <span className="ml-auto">
-          已记入学习日志{r.costText ? ` · ${r.costText}` : ""}
+          {r.logId != null
+            ? "已记入学习日志"
+            : r.logSkipped
+              ? "未记日志（纯咨询，不算学习流水）"
+              : "⚠️ 日志入库失败，本条未记录"}
+          {r.costText ? ` · ${r.costText}` : ""}
         </span>
       </div>
     </div>

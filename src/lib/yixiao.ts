@@ -1,6 +1,7 @@
 import { runSingleTurn, extractText } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
+import { emitEvent } from "./events";
 
 /**
  * 易混对决（系统设计/03 §3.5）——云的头号敌人=概念交叉污染的正面战场。
@@ -179,12 +180,13 @@ export async function gradeDuel(opts: {
     ? (g as DuelGrade["grade"])
     : "勉强";
 
-  // 未过=选错概念/答不出区分依据 → 真实的概念交叉污染信号，投待办筐弱项候选（PC 登记进易混档案历次混淆记录）
+  // 未过=选错概念/答不出区分依据 → 真实的概念交叉污染信号，投待办筐弱项候选
+  // （统一走 emitEvent：同 pair 连败 pending 期间只留一条，PC 登记进易混档案历次混淆记录）
   let weakEmitted = false;
   if (grade === "未过") {
     const pair = parsePair(opts.path);
     if (pair.subject) {
-      const { error } = await supabaseAdmin.from("events").insert({
+      weakEmitted = await emitEvent({
         type: "弱项候选",
         subject: pair.subject,
         kp_id: null,
@@ -192,10 +194,7 @@ export async function gradeDuel(opts: {
         anchor: opts.path,
         source: "检测",
         payload: { from: "易混对决", correctConcept: opts.correctConcept },
-        status: "pending",
       });
-      if (!error) weakEmitted = true;
-      else console.error("[yixiao] events 写入失败：", error.message);
     }
   }
 
