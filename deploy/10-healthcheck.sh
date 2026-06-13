@@ -18,12 +18,14 @@ issues=()
 
 age_of() { [[ -e "$1" ]] && echo $(( now - $(stat -c %Y "$1") )) || echo -1; }
 
-# ① pm2 app 在线
+# ① pm2 app 在线（用 pm2 pid 拿 PID + kill -0 探活；
+#    原版 jlist+grep 误报：jlist 是单行 JSON，name 与 status 字段距离太远，-A2 拿不到 status）
 if command -v pm2 >/dev/null 2>&1; then
-  if ! pm2 jlist 2>/dev/null | grep -q '"name":"fashuo"'; then
+  pid=$(pm2 pid fashuo 2>/dev/null | tail -1)
+  if ! [[ "$pid" =~ ^[0-9]+$ ]]; then
     issues+=("pm2 里没有 fashuo 进程")
-  elif ! pm2 jlist 2>/dev/null | tr ',' '\n' | grep -A2 '"name":"fashuo"' | grep -q '"status":"online"'; then
-    issues+=("Next.js(pm2 fashuo) 不在线")
+  elif ! kill -0 "$pid" 2>/dev/null; then
+    issues+=("Next.js(pm2 fashuo) 进程 $pid 不存活")
   fi
 fi
 
