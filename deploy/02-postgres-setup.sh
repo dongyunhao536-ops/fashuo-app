@@ -64,12 +64,27 @@ SQL
 echo "==> 应用 db/schema.sql"
 sudo -u postgres psql -d fashuo -f "$SCHEMA" >/dev/null
 
-# schema 应用后再补一次默认权限（schema.sql 里 CREATE TABLE 时角色已就位）
+# 应用所有 migrations（按文件名排序；每个都 idempotent，重跑安全）
+# 历史踩坑：api_usage 和 plan_decision 列只在 migrations/ 里，此前未自动跑 →
+# 记账永久失败、日熔断失效；现在补齐。
+MIG_DIR="$REPO_ROOT/db/migrations"
+if [[ -d "$MIG_DIR" ]]; then
+  for f in "$MIG_DIR"/*.sql; do
+    [[ -f "$f" ]] || continue
+    echo "==> 应用 migration: $(basename "$f")"
+    sudo -u postgres psql -d fashuo -f "$f" >/dev/null
+  done
+fi
+
+# schema/migrations 应用后再补一次权限（新建的表/序列也要授权给 service_role）
 sudo -u postgres psql -d fashuo <<SQL
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
 SQL
+
+# 告诉 PostgREST 重读 schema 缓存（NOTIFY 信号；它会在下次请求生效）
+sudo -u postgres psql -d fashuo -c "NOTIFY pgrst, 'reload schema';" >/dev/null 2>&1 || true
 
 echo "==> 验证表已建（应 ≥ 7 张）"
 TBL_COUNT=$(sudo -u postgres psql -d fashuo -tAc \
