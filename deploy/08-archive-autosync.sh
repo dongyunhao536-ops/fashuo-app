@@ -27,10 +27,15 @@ export NODE_TLS_REJECT_UNAUTHORIZED=0   # 本机 PostgREST 自签证书
 echo "===== $(date '+%F %T') archive autosync 开始 ====="
 
 # 1) 先拉云在 PC 上的手工编辑；冲突则保留本地、跳过本轮（不破坏数据）
-if ! git -C "$ARCHIVE_DIR" pull --rebase --autostash origin "$BRANCH"; then
+#    fetch + rebase 分两步：fetch 不挑本地分支名（init.defaultBranch 可能与远端默认分支不一致），
+#    rebase 只针对 origin/<远端分支>，避开 git pull 的歧义。
+if ! git -C "$ARCHIVE_DIR" fetch origin "$BRANCH"; then
+  notify fail "档案 fetch 失败" "git fetch origin $BRANCH 出错（网络/凭证），跳过本次。"
+  exit 1
+fi
+if ! git -C "$ARCHIVE_DIR" rebase --autostash "origin/$BRANCH"; then
   git -C "$ARCHIVE_DIR" rebase --abort 2>/dev/null || true
-  git -C "$ARCHIVE_DIR" merge --abort 2>/dev/null || true
-  notify warn "档案同步暂停" "git pull 与本地冲突，已回滚保留本地、跳过本次登记。confirmed 候选仍在库里，解决冲突后会自动补上。"
+  notify warn "档案同步暂停" "rebase 与本地冲突，已回滚保留本地、跳过本次登记。confirmed 候选仍在库里，解决冲突后会自动补上。"
   exit 0
 fi
 
@@ -50,7 +55,9 @@ cd "$ARCHIVE_DIR" || exit 1
 if [[ -n "$(git status --porcelain)" ]]; then
   git add -A
   git commit -m "档案自动登记 $(date '+%F %T')（ECS autosync）" >/dev/null
-  if ! git push origin "$BRANCH"; then
+  # HEAD:$BRANCH —— 本地分支名不论 main/master 都能推到远端目标分支
+  # （ECS clone 空仓时 init.defaultBranch 可能给 main，而远端 D:\fashuo 推上来是 master）
+  if ! git push origin "HEAD:$BRANCH"; then
     notify fail "档案推送失败" "已本地 commit 但 push GitHub 失败，下次会重试（不丢数据）。"
     exit 1
   fi
