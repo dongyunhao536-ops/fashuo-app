@@ -110,13 +110,15 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
 
   return (
     <div className="flex flex-col gap-3">
-      {/* 阶段指示器（不可点） */}
-      <div className="flex rounded-[9px] bg-fill2 p-0.5">
+      {/* 阶段指示器（不可点）—— iOS segmented：选中态浮起带阴影 */}
+      <div className="flex rounded-[10px] bg-fill2 p-[3px]">
         {["编码", "作答", "评分"].map((s, i) => (
           <div
             key={s}
-            className={`flex-1 rounded-[7px] py-1 text-center text-[12px] font-medium ${
-              i === stage ? "bg-fill text-label" : "text-label3"
+            className={`flex-1 rounded-[8px] py-1.5 text-center text-[12px] font-medium transition ${
+              i === stage
+                ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+                : "text-label3"
             }`}
           >
             {s}
@@ -193,7 +195,7 @@ function EncodePane({
       )}
 
       {material.cards.map((c, ci) => (
-        <div key={ci} className="rounded-[12px] bg-card p-4">
+        <div key={ci} className="rounded-[16px] bg-card p-4">
           <div className="flex items-center gap-2">
             <span className="text-[12px] text-label2">背诵原文 · 考试分析</span>
             <span className="ml-auto text-[11px] text-label3">{c.type}</span>

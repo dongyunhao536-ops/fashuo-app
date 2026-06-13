@@ -129,8 +129,8 @@ export default async function RecitePage({
           </span>
         </div>
 
-        {/* 新背诵 / 待复习 segmented */}
-        <div className="mt-3 flex rounded-[9px] bg-fill2 p-0.5">
+        {/* 新背诵 / 待复习 segmented —— 选中态浮起带阴影 */}
+        <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
           {(
             [
               ["new", `新背诵 · ${newItems.length}`],
@@ -140,8 +140,8 @@ export default async function RecitePage({
             <Link
               key={t}
               href={qs(subject, capacity, t)}
-              className={`flex-1 rounded-[7px] py-1.5 text-center text-[13px] font-medium transition ${
-                tab === t ? "bg-fill text-label" : "text-label2"
+              className={`flex-1 rounded-[8px] py-1.5 text-center text-[13px] font-medium transition ${
+                tab === t ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]" : "text-label2"
               }`}
             >
               {label}
@@ -341,8 +341,13 @@ function ChapterList({
                           {SUB_SHORT[it.subject] ?? it.subject}
                         </span>
                         <span
-                          className={`rounded-[5px] px-1.5 py-0.5 ${FREQ_BADGE[it.zhenti_freq] ?? FREQ_BADGE["低"]}`}
+                          className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 font-medium ${FREQ_BADGE[it.zhenti_freq] ?? FREQ_BADGE["低"]}`}
                         >
+                          {it.zhenti_freq === "高" && (
+                            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor">
+                              <path d="M12 2c1 3-1 4-2 6-1 1.6-.5 3.5 1 4.5.8.5 1-.8.6-1.8 1.8 1 2.8 2.7 2.8 4.3a4 4 0 11-8 0c0-2.4 1.5-4 2.4-5.6C9 13 9.5 11 9 9c2-1 2.5-4 3-7z" />
+                            </svg>
+                          )}
                           {it.zhenti_freq}频
                         </span>
                         {tab === "review" && (

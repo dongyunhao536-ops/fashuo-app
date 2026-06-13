@@ -134,7 +134,7 @@ export interface StudyMaterial {
   capLevel: Level;
   anchor: string;
   zhentiFreq: string;
-  /** 每张关联 Anki 卡的背诵原文（按星级降序，最重要的在前） */
+  /** 每张关联 Anki 卡的背诵原文（按 Anki 卡组顺序：卡组路径=章节序 → note_id=节内序） */
   cards: {
     title: string;
     star: number;
@@ -166,7 +166,10 @@ export async function getStudyMaterial(kpId: string): Promise<StudyMaterial> {
   const cards = noteIds
     .map((id) => anki.get(id))
     .filter((c): c is AnkiCard => !!c)
-    .sort((a, b) => (b.星级 ?? 0) - (a.星级 ?? 0))
+    // 背诵原文顺序必须与 Anki 卡组一字不差：按卡组路径（=章节序）再按 note_id（=节内顺序）。
+    // 不能按星级降序——那样 ✨✨ 高星卡（如"马克思主义法学特征"）会顶到第一节最前面，
+    // 与 Anki 浏览顺序不符。（出题挑卡 generateL1 仍按星级，那是另一回事。）
+    .sort((a, b) => deckPath(a).localeCompare(deckPath(b), "zh") || a.note_id - b.note_id)
     .map((c) => {
       const timu = c.题目HTML ?? "";
       const yuanwen = c.原文HTML ?? "";

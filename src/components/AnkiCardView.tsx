@@ -16,7 +16,7 @@ export function AnkiCardView({ card }: { card: AnkiCardHtml }) {
   return (
     <>
       <article
-        className="anki-html mt-2 rounded-[12px] bg-white p-3"
+        className="anki-html mt-2 rounded-[16px] bg-white p-3.5 shadow-[0_8px_24px_rgba(0,0,0,0.35)]"
         dangerouslySetInnerHTML={{ __html: card.contentHtml }}
       />
       {card.sourceHtml && (
