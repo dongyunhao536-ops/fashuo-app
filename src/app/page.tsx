@@ -33,84 +33,79 @@ export default async function DashboardPage() {
         <span className="text-[12px] text-label3">2026 法硕（非法学）· 375+</span>
       </header>
 
-      {/* 倒计时 hero */}
-      <section className="glass-card mx-4 mt-3 rounded-[18px] border border-hairline p-5 shadow-[0_8px_28px_rgba(0,0,0,0.4)]">
-        <div className="text-[13px] text-label2">距 {d.hero.examDate}</div>
-        <div className="mt-1 flex items-baseline">
-          <span className="text-shine text-[48px] font-bold leading-none tracking-tight tabular-nums">
-            {d.hero.daysLeft}
-          </span>
-          <span className="ml-2 text-[17px] font-medium text-label2">天</span>
-        </div>
-        <div className="mt-3.5 flex gap-4 text-[13px] text-label2">
-          <span>
-            <b className="mr-1 font-medium text-label">{kpTotal}</b>考点
-          </span>
-          <span>
-            <b className="mr-1 font-medium text-label">{kpMastered}</b>已掌握
-          </span>
-          <span>
-            <b className="font-medium text-label">{kpPct}%</b>
-          </span>
-        </div>
-        <div className="mt-1.5 flex gap-4 text-[13px] text-label2">
-          <span>
-            今日已学 <b className="font-medium text-label">{d.hero.todayMinutes}</b> 分钟
-          </span>
-          <span>
-            检测 <b className="font-medium text-label">{d.hero.todayDetections}</b> 次
-          </span>
+      {/* hero：掌握度环 + 倒计时 + 统计 chip */}
+      <section className="glass-card mx-4 mt-3 flex items-center gap-4 rounded-[22px] border border-hairline p-5 shadow-[0_10px_30px_rgba(0,0,0,0.4)]">
+        <MasteryRing pct={kpPct} />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] text-label3">距初试 {d.hero.examDate}</div>
+          <div className="mt-0.5 flex items-baseline">
+            <span className="text-shine text-[40px] font-extrabold leading-none tracking-tight tabular-nums">
+              {d.hero.daysLeft}
+            </span>
+            <span className="ml-1.5 text-[15px] text-label2">天</span>
+          </div>
+          <div className="mt-2.5 flex flex-wrap gap-1.5">
+            <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
+              {kpTotal} 考点
+            </span>
+            <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
+              今日 {d.hero.todayMinutes} 分钟
+            </span>
+            <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
+              检测 {d.hero.todayDetections} 次
+            </span>
+          </div>
         </div>
       </section>
 
       {/* 今日清单 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
-      <section className="glass-card mx-4 divide-y divide-hairline rounded-[16px]">
+      <section className="glass-card mx-4 divide-y divide-hairline rounded-[18px]">
         <Link href="/recite" className="flex min-h-11 items-center px-4 py-3">
-          <IconTile>
+          <IconTile tone="blue">
             <rect x="4" y="3" width="16" height="18" rx="2" />
             <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
           </IconTile>
-          <div className="flex-1">
-            <div className="text-[17px]">背诵清单</div>
-            <div className="mt-0.5 text-[13px] text-label2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px]">背诵清单</div>
+            <div className="mt-0.5 text-[12.5px] text-label3">
               复验 {d.cores.plan.bucketCounts.复验} · 到期 {d.cores.plan.bucketCounts.到期} · 新考点{" "}
               {d.cores.plan.bucketCounts.新考点}
             </div>
           </div>
-          <span className="text-[17px] text-label2">{d.cores.plan.total}</span>
-          <span className="ml-2 text-[14px] text-label3">›</span>
+          <span className="text-[17px] font-medium text-label2">{d.cores.plan.total}</span>
+          <Chevron />
         </Link>
         <Link href="/ask" className="flex min-h-11 items-center px-4 py-3">
-          <IconTile>
+          <IconTile tone="green">
             <path
               d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z"
               strokeLinejoin="round"
             />
           </IconTile>
-          <div className="flex-1">
-            <div className="text-[17px]">答疑</div>
-            <div className="mt-0.5 line-clamp-1 text-[13px] text-label2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px]">答疑</div>
+            <div className="mt-0.5 line-clamp-1 text-[12.5px] text-label3">
               {d.cores.ask.lastConfusion ?? "暂无未收口卡点"}
             </div>
           </div>
-          <span className="text-[17px] text-label2">{d.cores.ask.openCount}</span>
-          <span className="ml-2 text-[14px] text-label3">›</span>
+          <span className="text-[17px] font-medium text-label2">{d.cores.ask.openCount}</span>
+          <Chevron />
         </Link>
         <Link href="/inbox" className="flex min-h-11 items-center px-4 py-3">
-          <IconTile>
+          <IconTile tone="orange">
             <path d="M3 13h4l2 3h6l2-3h4M5 5h14l2 8v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z" strokeLinejoin="round" strokeLinecap="round" />
           </IconTile>
-          <div className="flex-1">
-            <div className="text-[17px]">待办筐</div>
-            <div className="mt-0.5 line-clamp-1 text-[13px] text-label2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px]">待办筐</div>
+            <div className="mt-0.5 line-clamp-1 text-[12.5px] text-label3">
               {Object.entries(d.inbox.byType)
                 .map(([t, n]) => `${n} ${t}`)
                 .join(" · ") || "暂无待登记沉淀"}
             </div>
           </div>
-          <span className="text-[17px] text-blue">{d.inbox.pendingCount}</span>
-          <span className="ml-2 text-[14px] text-label3">›</span>
+          <span className="text-[17px] font-medium text-blue">{d.inbox.pendingCount}</span>
+          <Chevron />
         </Link>
       </section>
 
@@ -205,14 +200,63 @@ export default async function DashboardPage() {
   );
 }
 
-/** iOS 风列表行图标块：中性底 + 单线图标（守"蓝色唯一强调"纪律，不用彩色块） */
-function IconTile({ children }: { children: React.ReactNode }) {
+/** iOS 风列表行图标块：功能分色（背诵蓝/答疑绿/待办橙），15% tint 底 + 单线图标 */
+function IconTile({
+  children,
+  tone = "neutral",
+}: {
+  children: React.ReactNode;
+  tone?: "blue" | "green" | "orange" | "neutral";
+}) {
+  const cls = {
+    blue: "bg-blue/15 text-blue",
+    green: "bg-green/15 text-green",
+    orange: "bg-orange/15 text-orange",
+    neutral: "bg-fill text-label2",
+  }[tone];
   return (
-    <span className="mr-3 grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-fill text-label2">
-      <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
+    <span className={`mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] ${cls}`}>
+      <svg viewBox="0 0 24 24" className="h-[19px] w-[19px]" fill="none" stroke="currentColor" strokeWidth={1.8}>
         {children}
       </svg>
     </span>
+  );
+}
+
+/** 列表行右侧的 chevron（替代纯文字 ›） */
+function Chevron() {
+  return (
+    <svg viewBox="0 0 24 24" className="ml-2 h-4 w-4 shrink-0 text-label3" fill="none" stroke="currentColor" strokeWidth={2.2}>
+      <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** 掌握度环形进度（hero 视觉焦点）。蓝色进度 + 中心百分比，纯 SVG 零依赖。 */
+function MasteryRing({ pct }: { pct: number }) {
+  const R = 36;
+  const C = 2 * Math.PI * R;
+  return (
+    <div className="relative h-[84px] w-[84px] shrink-0">
+      <svg viewBox="0 0 84 84" className="h-[84px] w-[84px] -rotate-90">
+        <circle cx="42" cy="42" r={R} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="7" />
+        <circle
+          cx="42"
+          cy="42"
+          r={R}
+          fill="none"
+          stroke="#0a84ff"
+          strokeWidth="7"
+          strokeLinecap="round"
+          strokeDasharray={C}
+          strokeDashoffset={C * (1 - Math.max(0, Math.min(100, pct)) / 100)}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-[22px] font-bold leading-none">{pct}%</span>
+        <span className="mt-0.5 text-[10px] text-label3">掌握</span>
+      </div>
+    </div>
   );
 }
 
