@@ -22,7 +22,7 @@ const SUB_SHORT: Record<string, string> = {
 };
 
 const FREQ_BADGE: Record<string, string> = {
-  高: "bg-red/15 text-red",
+  高: "freq-hot font-semibold",
   中: "bg-orange/15 text-orange",
   低: "bg-fill text-label2",
 };
@@ -328,7 +328,7 @@ function ChapterList({
                       className={`rounded-[10px] p-2.5 ${nested ? "bg-card" : "bg-card2"}`}
                     >
                       <div className="flex items-start gap-2">
-                        <span className="shrink-0 pt-0.5 font-mono text-[11px] text-label3">
+                        <span className="mt-0.5 inline-flex h-5 shrink-0 items-center rounded-[6px] bg-fill2 px-1.5 font-mono text-[10px] font-semibold tabular-nums text-label2">
                           {String(it.seq).padStart(3, "0")}
                         </span>
                         <span className="flex-1 text-[14px] font-medium leading-snug">

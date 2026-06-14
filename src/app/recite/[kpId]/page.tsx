@@ -68,21 +68,21 @@ export default async function ReciteKpPage({ params }: { params: Params }) {
   );
 }
 
-/** 频率胶囊：高=红焰 / 中=橙 / 低=灰（与今日清单 FREQ_BADGE 同色系） */
+/** 频率胶囊：高=红→橙渐变焰光（freq-hot 工具类）/ 中=橙 / 低=灰 */
 function FreqPill({ freq }: { freq: string }) {
-  const cls =
-    freq === "高"
-      ? "bg-red/15 text-red"
-      : freq === "中"
-        ? "bg-orange/15 text-orange"
-        : "bg-fill text-label2";
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium ${cls}`}>
-      {freq === "高" && (
+  if (freq === "高") {
+    return (
+      <span className="freq-hot inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-semibold">
         <svg viewBox="0 0 24 24" className="h-3 w-3" fill="currentColor">
           <path d="M12 2c1 3-1 4-2 6-1 1.6-.5 3.5 1 4.5.8.5 1-.8.6-1.8 1.8 1 2.8 2.7 2.8 4.3a4 4 0 11-8 0c0-2.4 1.5-4 2.4-5.6C9 13 9.5 11 9 9c2-1 2.5-4 3-7z" />
         </svg>
-      )}
+        高频
+      </span>
+    );
+  }
+  const cls = freq === "中" ? "bg-orange/15 text-orange" : "bg-fill text-label2";
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[12px] font-medium ${cls}`}>
       {freq}频
     </span>
   );

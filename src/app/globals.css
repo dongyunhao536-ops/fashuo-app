@@ -38,6 +38,33 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 玻璃卡：在 bg-card 之上加一道顶部 1px 内高光 + 微妙向下渐变，
+   暗色 UI 下卡片不再"扁平"，有 iOS 控件中心那种材质边缘感。
+   用法：把 className 里的 `bg-card` 换成 `glass-card`（不要叠加，会重复底色）。 */
+.glass-card {
+  background: linear-gradient(180deg, #202022 0%, #1c1c1e 100%);
+  box-shadow:
+    inset 0 0.5px 0 rgba(255, 255, 255, 0.08),
+    0 1px 0 rgba(0, 0, 0, 0.3);
+}
+
+/* 渐变文字（用于大数字 / hero 标题）。家族色保持中性灰阶，不引入彩色。 */
+.text-shine {
+  background: linear-gradient(180deg, #ffffff 0%, #d4d4d6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 高频徽章 · 红→橙 渐变 + 焰光阴影。仅"高频"用，凸显日常最该背的考点。 */
+.freq-hot {
+  background: linear-gradient(135deg, #ff453a 0%, #ff9f0a 100%);
+  color: #fff;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.15) inset,
+    0 2px 8px rgba(255, 69, 58, 0.35);
+}
+
 /* Anki 卡原始 HTML 渲染（背诵原文保真层）。
    卡内 inline 颜色按白底设计 → 容器恒为白底纸卡，暗色 UI 下也不反色。 */
 .anki-html {

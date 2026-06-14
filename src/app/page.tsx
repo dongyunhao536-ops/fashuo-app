@@ -34,11 +34,13 @@ export default async function DashboardPage() {
       </header>
 
       {/* 倒计时 hero */}
-      <section className="mx-4 mt-3 rounded-[18px] border border-hairline bg-gradient-to-b from-card to-[#161618] p-5 shadow-[0_8px_28px_rgba(0,0,0,0.35)]">
+      <section className="glass-card mx-4 mt-3 rounded-[18px] border border-hairline p-5 shadow-[0_8px_28px_rgba(0,0,0,0.4)]">
         <div className="text-[13px] text-label2">距 {d.hero.examDate}</div>
-        <div className="mt-1 text-[42px] font-bold leading-none tracking-tight">
-          {d.hero.daysLeft}
-          <span className="ml-1.5 text-[17px] font-medium text-label2">天</span>
+        <div className="mt-1 flex items-baseline">
+          <span className="text-shine text-[48px] font-bold leading-none tracking-tight tabular-nums">
+            {d.hero.daysLeft}
+          </span>
+          <span className="ml-2 text-[17px] font-medium text-label2">天</span>
         </div>
         <div className="mt-3.5 flex gap-4 text-[13px] text-label2">
           <span>
@@ -63,7 +65,7 @@ export default async function DashboardPage() {
 
       {/* 今日清单 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
-      <section className="mx-4 divide-y divide-hairline rounded-[16px] bg-card">
+      <section className="glass-card mx-4 divide-y divide-hairline rounded-[16px]">
         <Link href="/recite" className="flex min-h-11 items-center px-4 py-3">
           <IconTile>
             <rect x="4" y="3" width="16" height="18" rx="2" />
@@ -114,7 +116,7 @@ export default async function DashboardPage() {
 
       {/* 最需要攻克 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">最需要攻克</h2>
-      <section className="mx-4 rounded-[16px] bg-card">
+      <section className="glass-card mx-4 rounded-[16px]">
         {d.top5.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-label3">
             还没有错次记录——开始背诵后会沉淀进来
@@ -145,7 +147,7 @@ export default async function DashboardPage() {
 
       {/* 五科掌握雷达 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">五科掌握</h2>
-      <section className="mx-4 rounded-[16px] bg-card p-4">
+      <section className="glass-card mx-4 rounded-[16px] p-4">
         <RadarSVG radar={d.radar} />
         <div className="mt-2 flex flex-wrap justify-around gap-1 text-[12px] text-label2">
           {d.radar.map((r) => (
@@ -166,7 +168,7 @@ export default async function DashboardPage() {
           周复盘 ›
         </Link>
       </div>
-      <section className="mx-4 mb-2 rounded-[16px] bg-card p-4">
+      <section className="glass-card mx-4 mb-2 rounded-[16px] p-4">
         <div className="grid grid-cols-7 gap-1.5">
           {d.weekHeat.map((day, i) => {
             const intensity = Math.min(1, day.detections / 10);

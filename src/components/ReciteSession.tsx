@@ -195,7 +195,7 @@ function EncodePane({
       )}
 
       {material.cards.map((c, ci) => (
-        <div key={ci} className="rounded-[16px] bg-card p-4">
+        <div key={ci} className="glass-card rounded-[18px] p-4">
           <div className="flex items-center gap-2">
             <span className="text-[12px] text-label2">背诵原文 · 考试分析</span>
             <span className="ml-auto text-[11px] text-label3">{c.type}</span>
