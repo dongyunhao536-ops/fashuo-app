@@ -195,6 +195,28 @@ for (const card of cards) {
 }
 console.log(`▶ 法条卡罪名挂载：${fatiaoLinkedCards.size} 卡 → ${fatiaoLinked} 关联`);
 
+// 第四轮：节级 kp 收敛到「总览卡」（2026-06-14）。
+// 问题：节级 fallback 把整节的卡全塞给无精确卡的 kp（如「法学的概念」拿到 总览+马克思+西方流派
+// 三张，背诵页"多了很多"）。但那些专题卡各有自己的精确 kp（马克思→FL-0004…）。
+// 修法：若某节级 kp 的卡里存在「总览卡」（chapter 含 ≥2 个"一、二、"子标题 = 节首罗列多个小标题
+// 的那张，正是承载"法学的含义"这类伞形内容的卡），就只留总览卡，剔掉专题卡。
+// 没有总览卡的节（如"法的基本特征"只有一张专题卡）保持原样，不影响共用单卡的情形。
+const cardById = new Map(cards.map((c) => [c.note_id, c]));
+const subTagCount = (c) => (c ? extractKpTagsFromChapter(c.chapter).length : 0);
+let prunedKp = 0;
+let prunedCards = 0;
+for (const [kp_id, notes] of kpToNotes) {
+  if (kpMatchLevel.get(kp_id) !== "section" || notes.size <= 1) continue;
+  const ids = [...notes];
+  const overviews = ids.filter((id) => subTagCount(cardById.get(id)) >= 2);
+  if (overviews.length > 0 && overviews.length < ids.length) {
+    kpToNotes.set(kp_id, new Set(overviews));
+    prunedKp++;
+    prunedCards += ids.length - overviews.length;
+  }
+}
+console.log(`▶ 节级 kp 收敛到总览卡：${prunedKp} 个 kp 共剔除 ${prunedCards} 张专题卡`);
+
 console.log(`\n═══ 索引预览 ${COMMIT ? "· 正式写入" : "· DRY-RUN"} ═══`);
 console.log(`命中卡：${cardMatched} / ${cards.length}（${((cardMatched / cards.length) * 100).toFixed(1)}%）`);
 console.log(`未命中卡：${cardUnmatched}（多为法条卡或 chapter 不含考点名）`);
