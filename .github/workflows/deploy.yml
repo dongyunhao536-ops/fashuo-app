@@ -8,6 +8,7 @@ on:
     paths-ignore:
       - "**/*.md"
       - "memory/**"
+      - "scripts/**" # PC 侧建库/运维工具，不在运行链路，改它不必重部署
   workflow_dispatch:
 
 # 同一时间只跑一个部署，新 push 取消进行中的旧部署
