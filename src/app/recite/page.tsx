@@ -187,7 +187,7 @@ export default async function RecitePage({
 
       <div className="mt-3 flex flex-col gap-3">
         {shown.length === 0 ? (
-          <div className="rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+          <div className="glass-card rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
             {tab === "new" ? (
               <>新背诵已排满或额度用尽<br />（先清掉待复习，余量会自动补新考点）</>
             ) : (
@@ -198,7 +198,7 @@ export default async function RecitePage({
           <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} />
         ) : (
           subjectsInPlan.map((s) => (
-            <details key={s} open className="rounded-[12px] bg-card p-3">
+            <details key={s} open className="glass-card rounded-[16px] p-3">
               <summary className="cursor-pointer px-1 text-[15px] font-semibold">
                 {s}
                 <span className="ml-1.5 text-[12px] font-normal text-label3">
@@ -221,7 +221,7 @@ export default async function RecitePage({
             </h2>
             <div className="flex flex-col gap-2">
               {SUBJECT_ORDER.filter((s) => duelBySubject.has(s)).map((s) => (
-                <details key={s} className="rounded-[12px] bg-card p-3">
+                <details key={s} className="glass-card rounded-[16px] p-3">
                   <summary className="cursor-pointer px-1 text-[14px] font-medium">
                     {s}
                     <span className="ml-1.5 text-[12px] font-normal text-label3">
@@ -264,7 +264,7 @@ export default async function RecitePage({
         {/* 全卡浏览入口（含全部法条卡，考点匹配不上的卡由此兜底） */}
         <Link
           href="/cards"
-          className="flex min-h-11 items-center rounded-[12px] bg-card px-4 py-3"
+          className="glass-card flex min-h-11 items-center rounded-[16px] px-4 py-3"
         >
           <div className="flex-1">
             <div className="text-[15px]">全卡浏览</div>
@@ -303,7 +303,7 @@ function ChapterList({
         <details
           key={`${ch.chapterNo}-${ch.chapterName}`}
           open={chapters.length <= 3}
-          className={nested ? "rounded-[10px] bg-card2 p-2.5" : "rounded-[12px] bg-card p-3"}
+          className={nested ? "rounded-[10px] bg-card2 p-2.5" : "glass-card rounded-[16px] p-3"}
         >
           <summary className="cursor-pointer px-1 text-[14px] font-medium">
             {ch.chapterNo > 0 && (

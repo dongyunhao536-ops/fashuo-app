@@ -50,27 +50,35 @@ export default async function WeakPage({
       </header>
 
       {list.length === 0 ? (
-        <div className="rounded-[12px] bg-card p-8 text-center text-[13px] text-label3">
+        <div className="glass-card rounded-[16px] p-8 text-center text-[13px] text-label3">
           {subject
             ? `${subject} 暂无弱项——这科目前还没有错次记录`
             : "暂无弱项——开始背诵并答错后会沉淀进来"}
         </div>
       ) : (
-        <ul className="divide-y divide-hairline rounded-[12px] bg-card">
+        <ul className="glass-card divide-y divide-hairline rounded-[18px]">
           {list.map((w) => (
-            <li key={w.kp_id} className="px-4 py-3.5">
-              <Link href={`/recite/${w.kp_id}`} className="block">
+            <li key={w.kp_id}>
+              <Link href={`/recite/${w.kp_id}`} className="flex items-start gap-3 px-4 py-3.5">
+                <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-red/15 text-red">
+                  <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
+                    <circle cx="12" cy="12" r="9" />
+                    <path d="M12 8v4.5" strokeLinecap="round" />
+                    <circle cx="12" cy="16" r="0.6" fill="currentColor" stroke="none" />
+                  </svg>
+                </span>
+                <div className="min-w-0 flex-1">
                 <div className="flex items-start gap-2">
                   <span className="flex-1 text-[15px] font-medium leading-snug">{w.name}</span>
-                  <span className="shrink-0 text-[13px] font-semibold text-red">
+                  <span className="shrink-0 rounded-full bg-red/15 px-2 py-0.5 text-[12px] font-semibold text-red">
                     ×{w.error_count}
                   </span>
                 </div>
 
-                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-label2">
+                <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[12px] text-label3">
                   <span>{w.subject}</span>
                   <span>
-                    档位 <b className="font-medium text-label">{w.cur_level}</b> / 封顶{" "}
+                    档位 <b className="font-medium text-label2">{w.cur_level}</b> / 封顶{" "}
                     {w.cap_level}
                   </span>
                   <span>
@@ -98,6 +106,7 @@ export default async function WeakPage({
                   {w.next_due && <span className="text-blue-soft">下次 {w.next_due}</span>}
                   {w.last_review && <span className="text-label3">上次 {w.last_review}</span>}
                   <span className="ml-auto text-label3">{w.kp_id}</span>
+                </div>
                 </div>
               </Link>
             </li>

@@ -84,7 +84,7 @@ export function CoachChat() {
   return (
     <div className="flex flex-col gap-3">
       {turns.length === 0 && (
-        <div className="rounded-[12px] bg-card p-4 text-[13px] leading-relaxed text-label2">
+        <div className="glass-card rounded-[16px] p-4 text-[13px] leading-relaxed text-label2">
           丢一句今天学了啥，我给你四段：① 即时点拨 ② 进度归位 ③ 下一步规划（建议·你拍板）④
           复盘提取。
           <div className="mt-3 flex flex-col gap-1.5">

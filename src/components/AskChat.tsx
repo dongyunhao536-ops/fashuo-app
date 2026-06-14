@@ -170,7 +170,7 @@ export function AskChat() {
       </div>
 
       {turns.length === 0 && (
-        <div className="rounded-[12px] bg-card p-5 text-[13px] leading-relaxed text-label2">
+        <div className="glass-card rounded-[16px] p-5 text-[13px] leading-relaxed text-label2">
           直答版答疑（v2.3）：问一道题或一个概念，我按「六步预检 → 心得/真题/教材 grep 锚定 →
           四段式作答 → 证据卡 + 信心度」回答，结论都可追溯到教材原文 / 真题题号 / 心得规则。
           <div className="mt-2 text-[12px] text-label3">
