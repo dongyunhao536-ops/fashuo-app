@@ -9,8 +9,8 @@ import {
   buildPlanSystem,
   buildAskSystemStable,
   buildAskSystemVolatile,
-  META_OPEN,
-  META_CLOSE,
+  splitMeta,
+  type AskMeta,
 } from "@/lib/ask-prompt";
 import { streamJson } from "@/lib/stream-response";
 
@@ -54,48 +54,8 @@ function buildQuestionWithHistory(
   return `【此前对话（仅供理解追问指代，证据仍以本轮检索为准）】\n${block}\n\n【本轮新问题】\n${question}`;
 }
 
-interface AskMeta {
-  subject?: string | null;
-  /** 考点短语（自由文本，仅展示/记录用） */
-  kp?: string | null;
-  /** XF-0042 式准确编号（提示词要求不能确定就 null，禁止编造）——只有它能进 kp_id 列 */
-  kp_id?: string | null;
-  question_type?: string | null;
-  confidence?: number | null;
-  starred?: boolean | null;
-  step_stuck?: number | null;
-  confusion?: string | null;
-  weak_candidates?: { knowledge: string; anchor?: string }[];
-  xinde_candidates?: { rule: string; anchor?: string }[];
-  /** G2：答疑确实纠正了某个考点的误解 → 投复验请求，背诵下次清单消费 */
-  review_kp_candidates?: { kp_id: string; reason?: string }[];
-}
-
-/** 从答案文本中抽取 META 块并返回 { clean(剥离后展示文本), meta } */
-function splitMeta(full: string): { clean: string; meta: AskMeta | null } {
-  const start = full.indexOf(META_OPEN);
-  if (start === -1) return { clean: full.trim(), meta: null };
-  const end = full.indexOf(META_CLOSE, start);
-  const jsonRaw =
-    end === -1
-      ? full.slice(start + META_OPEN.length)
-      : full.slice(start + META_OPEN.length, end);
-  const clean = full.slice(0, start).trim();
-  try {
-    // 容错：模型偶尔会用 ```json 包裹
-    const cleaned = jsonRaw.replace(/```json|```/g, "").trim();
-    return { clean, meta: JSON.parse(cleaned) as AskMeta };
-  } catch {
-    // META 坏了 = 这一轮的候选弱项/心得/复验全部沉不下去，必须留痕排查模型输出漂移
-    console.error(
-      "[/api/ask] META 块 JSON 解析失败，本轮候选沉淀丢弃。原文片段：",
-      jsonRaw.slice(0, 400),
-    );
-    return { clean, meta: null };
-  }
-}
-
-// 鉴权由 src/middleware.ts 统一网关处理（未登录的 /api/* 直接 401，到不了这里）。
+// AskMeta 接口 + splitMeta 已抽到 @/lib/ask-prompt（与 META 标记同处，纯函数便于单测）。
+// 鉴权由 src/proxy.ts 统一网关处理（未登录的 /api/* 直接 401，到不了这里）。
 
 export async function POST(req: Request) {
   // 心跳流包裹：案例题 Opus 可达 2-3 分钟，手机蜂窝网会掐断静默长请求，故持续吐字节保活。

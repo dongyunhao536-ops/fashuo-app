@@ -186,9 +186,14 @@ function EncodePane({
   material: StudyMaterial;
   onStart: (lv: Level) => void;
 }) {
-  // 无 Anki 卡（法综覆盖率低/冷点）→ L1 出题必缺料、永远判不过；
-  // 直接把主按钮指向 L2 理解检测，避免卡死在空 L1（除非封顶就是 L1）。
-  const noL1Material = material.cards.length === 0;
+  // 无 L1 默写靶点 → L1 出题必空关键词、永远判"缺料勉强★"，直接把主按钮指向 L2。
+  // 两类：①完全没卡（法综冷点）②有卡但全是无 P1/P2/口诀 的纯法条卡/伞形总览考点。
+  // 仍保留"仍试 L1"小入口；封顶就是 L1 的考点不改（只能 L1）。
+  const noL1Material =
+    material.cards.length === 0 ||
+    material.cards.every(
+      (c) => c.p1.length === 0 && c.p2.length === 0 && c.mnemonics.length === 0,
+    );
   const defaultLevel: Level = noL1Material && material.capLevel !== "L1" ? "L2" : material.level;
   return (
     <>
@@ -235,12 +240,12 @@ function EncodePane({
         className="rounded-[14px] bg-blue py-3.5 text-[15px] font-semibold text-white"
       >
         {noL1Material && defaultLevel === "L2"
-          ? "无背诵卡，直接 L2 理解检测"
+          ? "无 L1 默写要点，直接 L2 理解检测"
           : `读完了，开始检测（当前 ${defaultLevel}）`}
       </button>
       {defaultLevel !== "L1" && (
         <button onClick={() => onStart("L1")} className="-mt-1 py-1 text-[13px] text-blue">
-          {noL1Material ? "仍试 L1（本考点无背诵卡，多半判不过）" : "先从 L1 测起"}
+          {noL1Material ? "仍试 L1（本考点无默写要点，多半判不过）" : "先从 L1 测起"}
         </button>
       )}
     </>

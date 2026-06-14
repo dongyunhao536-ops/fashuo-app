@@ -705,7 +705,7 @@ interface GradeJson {
   explanation: string;
 }
 
-function parseGradeJson(raw: string): GradeJson {
+export function parseGradeJson(raw: string): GradeJson {
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
   const fallback: GradeJson = {
@@ -728,7 +728,7 @@ function parseGradeJson(raw: string): GradeJson {
       confidence: typeof obj.confidence === "number" ? obj.confidence : 50,
       starred: !!obj.starred,
       grep_lines: Array.isArray(obj.grep_lines)
-        ? obj.grep_lines.map(Number).filter((n) => Number.isFinite(n))
+        ? obj.grep_lines.map(Number).filter((n) => Number.isFinite(n) && n > 0) // 行号必 ≥1；null→0/负数剔除
         : [],
       explanation: String(obj.explanation ?? ""),
     };

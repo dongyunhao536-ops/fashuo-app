@@ -259,7 +259,7 @@ const PLACEHOLDER_RE = /^[（(\[【]?\s*(无|没有|留空|暂无|不适用|待�
  * 解析 ===块=== 格式（替代 JSON——Opus 中文里偶用 ASCII 引号会破坏 JSON，2026-06-09 实测）。
  * 段内容随便用什么标点都不影响解析。
  */
-function parseBlocks(raw: string): CoachJson | null {
+export function parseBlocks(raw: string): CoachJson | null {
   const parts = raw.split(/===\s*(PARSED|POINTER|PROGRESS|PLAN|REVIEW|WEAK)\s*===/i);
   const map: Record<string, string> = {};
   for (let i = 1; i < parts.length; i += 2) {

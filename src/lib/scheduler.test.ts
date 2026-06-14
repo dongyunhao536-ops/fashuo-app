@@ -91,6 +91,11 @@ describe("isDue 到期判定（off-by-one 修正：到期当天即纳入）", ()
     const kp = mkKp({ kp_id: "X", subject: "刑法", review_count: 1, interval_idx: 2, last_review: daysAgoISO(5) });
     expect(isDue(kp, today)).toBe(false);
   });
+  it("北京凌晨不抖动：6-14 复习(1天档)，6-15 凌晨2点(=UTC 6-14 18:00)即到期", () => {
+    // 旧逻辑按原始 UTC 算 since=0 会漏判；bjSinceDays 按北京日历日算 since=1=到期
+    const kp = mkKp({ kp_id: "X", subject: "刑法", review_count: 1, interval_idx: 0, last_review: "2026-06-14" });
+    expect(isDue(kp, new Date("2026-06-14T18:00:00Z"))).toBe(true);
+  });
 });
 
 describe("考前收敛 effectiveInterval", () => {

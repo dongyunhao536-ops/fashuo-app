@@ -72,7 +72,7 @@ export async function readPairContent(path: string): Promise<string> {
 }
 
 /** 解析 ===KEY=== 块格式 */
-function blocks(raw: string, keys: string[]): Record<string, string> {
+export function blocks(raw: string, keys: string[]): Record<string, string> {
   const re = new RegExp(`===\\s*(${keys.join("|")})\\s*===`, "gi");
   const parts = raw.split(re);
   const map: Record<string, string> = {};
@@ -80,7 +80,7 @@ function blocks(raw: string, keys: string[]): Record<string, string> {
   return map;
 }
 
-const bullets = (s: string) =>
+export const bullets = (s: string) =>
   (s ?? "")
     .split("\n")
     .map((l) => l.replace(/^[\s\t]*[-·•*]+\s*/, "").trim())

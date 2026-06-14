@@ -20,6 +20,50 @@ import { bjDateStr } from "./dates";
 export const META_OPEN = "<<<ASK_META";
 export const META_CLOSE = "ASK_META>>>";
 
+export interface AskMeta {
+  subject?: string | null;
+  /** 考点短语（自由文本，仅展示/记录用） */
+  kp?: string | null;
+  /** XF-0042 式准确编号（提示词要求不能确定就 null，禁止编造）——只有它能进 kp_id 列 */
+  kp_id?: string | null;
+  question_type?: string | null;
+  confidence?: number | null;
+  starred?: boolean | null;
+  step_stuck?: number | null;
+  confusion?: string | null;
+  weak_candidates?: { knowledge: string; anchor?: string }[];
+  xinde_candidates?: { rule: string; anchor?: string }[];
+  /** G2：答疑确实纠正了某个考点的误解 → 投复验请求，背诵下次清单消费 */
+  review_kp_candidates?: { kp_id: string; reason?: string }[];
+}
+
+/**
+ * 从答案文本中抽取 META 块并返回 { clean(剥离后展示文本), meta }。
+ * 纯函数（无 IO），便于单测锁定——模型偶尔用 ```json 包裹/中文引号破坏 JSON 时不静默丢候选。
+ * META 解析失败时返回 meta=null 并打日志（本轮候选弱项/心得/复验全部沉不下去，留痕排查漂移）。
+ */
+export function splitMeta(full: string): { clean: string; meta: AskMeta | null } {
+  const start = full.indexOf(META_OPEN);
+  if (start === -1) return { clean: full.trim(), meta: null };
+  const end = full.indexOf(META_CLOSE, start);
+  const jsonRaw =
+    end === -1
+      ? full.slice(start + META_OPEN.length)
+      : full.slice(start + META_OPEN.length, end);
+  const clean = full.slice(0, start).trim();
+  try {
+    // 容错：模型偶尔会用 ```json 包裹
+    const cleaned = jsonRaw.replace(/```json|```/g, "").trim();
+    return { clean, meta: JSON.parse(cleaned) as AskMeta };
+  } catch {
+    console.error(
+      "[ask] META 块 JSON 解析失败，本轮候选沉淀丢弃。原文片段：",
+      jsonRaw.slice(0, 400),
+    );
+    return { clean, meta: null };
+  }
+}
+
 /**
  * 规划器系统提示（第 1 段·小调用）：读题 → 列出所有要检索的查询，不作答。
  * grep 是逐行子串匹配 → 关键词必须是【单个连续词、不含空格】，需要多个就拆成多条。
