@@ -27,7 +27,7 @@ export default async function CardPage({
   if (!card) {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-6">
-        <div className="rounded-[12px] bg-card p-8 text-center text-[13px] text-label3">
+        <div className="glass-card rounded-[16px] p-8 text-center text-[13px] text-label3">
           找不到卡片 {noteId}
         </div>
         <Link href={backHref} className="text-center text-[13px] text-blue">
@@ -47,7 +47,7 @@ export default async function CardPage({
         <div className="mt-1 text-[12px] text-label3">{card.deck}</div>
       </header>
 
-      <div className="rounded-[12px] bg-card p-4">
+      <div className="glass-card rounded-[16px] p-4">
         <div className="flex items-center gap-2">
           <span className="text-[12px] text-label2">背诵原文 · 考试分析</span>
           <span className="ml-auto text-[11px] text-label3">{card.type}</span>

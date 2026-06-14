@@ -74,7 +74,7 @@ export default async function InboxPage() {
       {rows.length === 0 ? (
         // 读库失败时 rows 也是空的——只在真没数据时展示空态，别和上面的错误框打架
         error ? null : (
-          <div className="mx-4 mt-3 rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+          <div className="glass-card mx-4 mt-3 rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
             待办筐是空的
             <br />
             答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。
@@ -90,7 +90,7 @@ export default async function InboxPage() {
                 {type === "复验请求" && <span className="text-label3">（自动入清单）</span>}
               </h2>
               <div className="px-8 pb-2 text-[11px] text-label3">{TYPE_DESC[type] ?? ""}</div>
-              <div className="mx-4 divide-y divide-hairline rounded-[12px] bg-card">
+              <div className="glass-card mx-4 divide-y divide-hairline rounded-[16px]">
                 {items.map((r) => (
                   <div key={r.id} className="px-4 py-3.5">
                     <div className="text-[15px] leading-snug">

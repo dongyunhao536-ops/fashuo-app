@@ -133,7 +133,7 @@ export default async function DashboardPage() {
                 <span className="ml-2 text-[14px] text-label3">›</span>
               </Link>
             ))}
-            <Link href="/weak" className="block px-4 py-2.5 text-[13px] text-blue">
+            <Link href="/coach?view=weak" className="block px-4 py-2.5 text-[13px] text-blue">
               全部弱项 ›
             </Link>
           </div>

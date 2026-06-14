@@ -145,7 +145,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   return (
     <>
       <h2 className="mt-5 px-8 pb-2 text-[13px] text-label2">{title}</h2>
-      <section className="mx-4 rounded-[12px] bg-card p-4">{children}</section>
+      <section className="glass-card mx-4 rounded-[16px] p-4">{children}</section>
     </>
   );
 }

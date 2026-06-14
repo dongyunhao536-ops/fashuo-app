@@ -54,7 +54,7 @@ export default async function CardsPage({
       </header>
 
       {[...groups.entries()].map(([deck, items]) => (
-        <details key={deck} className="rounded-[12px] bg-card p-3">
+        <details key={deck} className="glass-card rounded-[16px] p-3">
           <summary className="cursor-pointer px-1 text-[14px] font-medium">
             {deck}
             <span className="ml-1.5 text-[12px] font-normal text-label3">{items.length} 卡</span>

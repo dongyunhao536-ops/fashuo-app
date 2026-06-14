@@ -86,7 +86,7 @@ export default async function DuelPage({
       </header>
 
       {pairs.length === 0 ? (
-        <div className="rounded-[12px] bg-card p-8 text-center text-[13px] leading-relaxed text-label3">
+        <div className="glass-card rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
           易混概念库尚未镜像到云端
           <br />
           （PC 跑 sync-content 后这里就有题）
@@ -98,7 +98,7 @@ export default async function DuelPage({
               {sub}
               <span className="ml-1.5 text-label3">{bySubject.get(sub)!.length}</span>
             </h2>
-            <div className="divide-y divide-hairline rounded-[12px] bg-card">
+            <div className="glass-card divide-y divide-hairline rounded-[16px]">
               {bySubject.get(sub)!.map((p) => (
                 <Link
                   key={p.path}

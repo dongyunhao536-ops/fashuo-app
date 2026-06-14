@@ -6,15 +6,15 @@ import Link from "next/link";
  */
 
 export interface TabBarProps {
-  active: "dash" | "recite" | "ask" | "coach" | "weak";
+  active: "dash" | "recite" | "ask" | "coach";
 }
 
+// 弱项 2026-06-14 并入教练模块（/coach?view=weak），底栏从 5 tab 收为 4。
 const TABS = [
   { key: "dash", label: "今日", href: "/" },
   { key: "recite", label: "背诵", href: "/recite" },
   { key: "ask", label: "答疑", href: "/ask" },
   { key: "coach", label: "教练", href: "/coach" },
-  { key: "weak", label: "弱项", href: "/weak" },
 ] as const;
 
 const ICONS: Record<TabBarProps["active"], React.ReactNode> = {
@@ -37,13 +37,6 @@ const ICONS: Record<TabBarProps["active"], React.ReactNode> = {
     <>
       <rect x="3" y="4" width="18" height="16" rx="2" />
       <path d="M8 4v4M16 4v4M3 11h18" strokeLinecap="round" />
-    </>
-  ),
-  weak: (
-    <>
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7.5v5.5" strokeLinecap="round" />
-      <circle cx="12" cy="16.5" r="0.6" fill="currentColor" stroke="none" />
     </>
   ),
 };
