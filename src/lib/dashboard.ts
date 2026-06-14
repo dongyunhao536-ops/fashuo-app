@@ -24,7 +24,8 @@ export interface DashboardData {
   };
   cores: {
     plan: {
-      total: number;
+      total: number; // 今日清单当前剩余（已背的会从桶里退出，故这是"还剩多少"）
+      doneToday: number; // 今天已检测的去重考点数（真实完成度分子）
       bucketCounts: { 复验: number; 到期: number; 新考点: number };
     };
     ask: { openCount: number; lastConfusion: string | null };
@@ -111,6 +112,10 @@ export async function getDashboard(): Promise<DashboardData> {
     0,
   );
   const todayDetections = (todayDetect.data ?? []).length;
+  // 今日完成度分子：今天检测过的【去重考点数】（再测一次同考点不重复计）
+  const todayDoneKp = new Set(
+    (todayDetect.data ?? []).map((r) => r.kp_id).filter((x): x is string => !!x),
+  ).size;
   const daysLeft = Math.max(
     0,
     Math.ceil((new Date(EXAM_DATE).getTime() - today.getTime()) / 86400000),
@@ -179,6 +184,7 @@ export async function getDashboard(): Promise<DashboardData> {
     cores: {
       plan: {
         total: plan.items.length,
+        doneToday: todayDoneKp,
         bucketCounts: {
           复验: plan.counts.复验,
           到期: plan.counts.到期,

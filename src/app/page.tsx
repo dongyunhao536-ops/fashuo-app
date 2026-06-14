@@ -25,6 +25,10 @@ export default async function DashboardPage() {
   const kpPct = kpTotal ? Math.round((kpMastered / kpTotal) * 100) : 0;
   const today = new Date();
   const todayLabel = `${today.getMonth() + 1} 月 ${today.getDate()} 日`;
+  // 今日完成度：分子=今天已背去重考点，分母=已背+当前剩余（剩余会随完成缩小，故加回已背保持稳定）
+  const doneToday = d.cores.plan.doneToday;
+  const todayTarget = doneToday + d.cores.plan.total;
+  const donePct = todayTarget ? Math.round((doneToday / todayTarget) * 100) : 0;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col pb-28 pt-4">
@@ -45,11 +49,11 @@ export default async function DashboardPage() {
             <span className="ml-1.5 text-[15px] text-label2">天</span>
           </div>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
-            <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
-              {kpTotal} 考点
+            <span className="rounded-[8px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft">
+              今日已背 {doneToday}/{todayTarget}
             </span>
             <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
-              今日 {d.hero.todayMinutes} 分钟
+              {d.hero.todayMinutes} 分钟
             </span>
             <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
               检测 {d.hero.todayDetections} 次
@@ -61,20 +65,39 @@ export default async function DashboardPage() {
       {/* 今日清单 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
       <section className="glass-card mx-4 divide-y divide-hairline rounded-[18px]">
-        <Link href="/recite" className="flex min-h-11 items-center px-4 py-3">
-          <IconTile tone="blue">
-            <rect x="4" y="3" width="16" height="18" rx="2" />
-            <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
-          </IconTile>
-          <div className="min-w-0 flex-1">
-            <div className="text-[16px]">背诵清单</div>
-            <div className="mt-0.5 text-[12.5px] text-label3">
-              复验 {d.cores.plan.bucketCounts.复验} · 到期 {d.cores.plan.bucketCounts.到期} · 新考点{" "}
-              {d.cores.plan.bucketCounts.新考点}
+        <Link href="/recite" className="block px-4 py-3">
+          <div className="flex min-h-11 items-center">
+            <IconTile tone="blue">
+              <rect x="4" y="3" width="16" height="18" rx="2" />
+              <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+            </IconTile>
+            <div className="min-w-0 flex-1">
+              <div className="text-[16px]">背诵清单</div>
+              <div className="mt-0.5 text-[12.5px] text-label3">
+                复验 {d.cores.plan.bucketCounts.复验} · 到期 {d.cores.plan.bucketCounts.到期} · 新考点{" "}
+                {d.cores.plan.bucketCounts.新考点}
+              </div>
             </div>
+            <div className="text-right">
+              <div className="text-[17px] font-medium text-label2 leading-none">
+                {d.cores.plan.total}
+              </div>
+              <div className="mt-0.5 text-[10px] text-label3">剩余</div>
+            </div>
+            <Chevron />
           </div>
-          <span className="text-[17px] font-medium text-label2">{d.cores.plan.total}</span>
-          <Chevron />
+          {/* 今日完成进度条 */}
+          <div className="mt-2.5 flex items-center gap-2">
+            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-fill2">
+              <div
+                className="h-full rounded-full bg-blue transition-[width]"
+                style={{ width: `${donePct}%` }}
+              />
+            </div>
+            <span className="shrink-0 text-[11px] tabular-nums text-label3">
+              今天 {doneToday}/{todayTarget} 已背
+            </span>
+          </div>
         </Link>
         <Link href="/ask" className="flex min-h-11 items-center px-4 py-3">
           <IconTile tone="green">
@@ -140,35 +163,19 @@ export default async function DashboardPage() {
         )}
       </section>
 
-      {/* 五科掌握雷达 */}
-      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">五科掌握</h2>
-      <section className="glass-card mx-4 rounded-[16px] p-4">
-        <RadarSVG radar={d.radar} />
-        <div className="mt-2 flex flex-wrap justify-around gap-1 text-[12px] text-label2">
-          {d.radar.map((r) => (
-            <span key={r.subject}>
-              {SUB_SHORT[r.subject]} <b className="font-medium text-label">{r.pct}%</b>{" "}
-              <span className="text-label3">
-                ({r.mastered}/{r.total})
-              </span>
-            </span>
-          ))}
-        </div>
-      </section>
-
-      {/* 本周活动 */}
+      {/* 本周活动（上移到雷达之前：每日打卡热力更值得高频一瞥） */}
       <div className="mt-6 flex items-baseline justify-between px-8 pb-2">
         <h2 className="text-[13px] text-label2">本周活动</h2>
         <Link href="/weekly" className="text-[12px] text-blue">
           周复盘 ›
         </Link>
       </div>
-      <section className="glass-card mx-4 mb-2 rounded-[16px] p-4">
+      <section className="glass-card mx-4 rounded-[16px] p-4">
         <div className="grid grid-cols-7 gap-1.5">
           {d.weekHeat.map((day, i) => {
-            const intensity = Math.min(1, day.detections / 10);
+            const intensity = Math.min(1, day.minutes / 120); // 2 小时满格
             const cls =
-              day.detections === 0
+              day.minutes === 0
                 ? "bg-card2 text-label3"
                 : intensity < 0.3
                   ? "bg-blue/25 text-label"
@@ -183,7 +190,7 @@ export default async function DashboardPage() {
                     isToday ? "ring-1 ring-blue" : ""
                   }`}
                 >
-                  {day.detections || "—"}
+                  {day.minutes || "—"}
                 </div>
                 <div className="text-[10px] text-label3">
                   {isToday ? "今" : "日一二三四五六"[new Date(day.date).getDay()]}
@@ -192,7 +199,23 @@ export default async function DashboardPage() {
             );
           })}
         </div>
-        <div className="mt-2 text-[11px] text-label3">数字 = 当日检测次数</div>
+        <div className="mt-2 text-[11px] text-label3">数字 = 当日学习分钟（教练打卡）</div>
+      </section>
+
+      {/* 五科掌握雷达（移到末尾：变化最慢，无需高频看） */}
+      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">五科掌握</h2>
+      <section className="glass-card mx-4 mb-2 rounded-[16px] p-4">
+        <RadarSVG radar={d.radar} />
+        <div className="mt-2 flex flex-wrap justify-around gap-1 text-[12px] text-label2">
+          {d.radar.map((r) => (
+            <span key={r.subject}>
+              {SUB_SHORT[r.subject]} <b className="font-medium text-label">{r.pct}%</b>{" "}
+              <span className="text-label3">
+                ({r.mastered}/{r.total})
+              </span>
+            </span>
+          ))}
+        </div>
       </section>
 
       <TabBar active="dash" />
