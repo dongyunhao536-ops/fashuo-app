@@ -410,6 +410,7 @@ ${KEYWORD_RULE}
     answerSystemStable: answerSys,
     question: `请为【${name}】出一道${level}级检测题。`,
     model: MODELS.GRADING,
+    planModel: MODELS.PLAN, // 规划阶段（列检索词）降级 Sonnet 省钱；红线只锁作答用 Opus
     route: `detect:gen:${level}`,
     maxAnswerTokens: 1200,
   });
@@ -669,6 +670,7 @@ ${opts.level === "L2" ? CFG.评分rubric.L2 : CFG.评分rubric.L3}
     answerSystemStable: ans,
     question: `【考生作答】\n${opts.userAnswer}`,
     model: MODELS.GRADING,
+    planModel: MODELS.PLAN, // 规划阶段降级 Sonnet 省钱；评分作答仍 Opus 不降级（红线①）
     route: `detect:grade:${opts.level}`,
     maxAnswerTokens: 1500,
   });

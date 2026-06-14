@@ -1,6 +1,7 @@
 // node --env-file=.env.local scripts/apply-schema.mjs
-// 用 pg 直连 Supabase Postgres，应用 db/schema.sql
-import { readFileSync } from "node:fs";
+// 用 pg 直连 Supabase Postgres，应用 db/schema.sql + db/migrations/*.sql
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import path from "node:path";
 import { Client } from "pg";
 
 const password = process.env.SUPABASE_DB_PASSWORD;
@@ -53,6 +54,21 @@ console.log(`Applying db/schema.sql (${sql.length} chars)...`);
 try {
   await connected.client.query(sql);
   console.log("✓ Schema applied successfully.");
+
+  // 再按文件名顺序应用 db/migrations/*.sql（每个都 idempotent，重跑安全）。
+  // 历史踩坑：api_usage + study_log.plan_decision 只在 migrations/ 里——只灌 schema.sql
+  // 会漏建 → 记账永久失败、日熔断失效。逃生通道切回 Supabase 时尤其要带上。
+  const migDir = path.resolve(process.cwd(), "db", "migrations");
+  if (existsSync(migDir)) {
+    const files = readdirSync(migDir)
+      .filter((f) => f.endsWith(".sql"))
+      .sort();
+    for (const f of files) {
+      console.log(`Applying migration: ${f} ...`);
+      await connected.client.query(readFileSync(path.join(migDir, f), "utf8"));
+    }
+    console.log(`✓ ${files.length} migration(s) applied.`);
+  }
 } catch (e) {
   console.error("✗ Schema apply failed:", e.message);
   process.exit(3);

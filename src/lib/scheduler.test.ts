@@ -3,7 +3,7 @@ import {
   currentStage,
   valueOf,
   urgencyOf,
-  paceQuota,
+  isDue,
   buildDailyPlan,
   effectiveInterval,
   type KpRow,
@@ -77,10 +77,19 @@ describe("urgencyOf 遗忘紧迫度", () => {
   });
 });
 
-describe("paceQuota 配速器", () => {
-  it("剩余未学 ÷ 距死线天数，至少 1", () => {
-    expect(paceQuota(0, new Date("2026-06-20T12:00:00Z"))).toBe(1);
-    expect(paceQuota(100, new Date("2026-09-29T12:00:00Z"))).toBe(100); // 距 9-30 仅 1 天
+describe("isDue 到期判定（off-by-one 修正：到期当天即纳入）", () => {
+  const today = new Date("2026-06-20T12:00:00Z");
+  it("未复习过 → 不到期", () => {
+    expect(isDue(mkKp({ kp_id: "X", subject: "刑法", review_count: 0, last_review: null }), today)).toBe(false);
+  });
+  it("到期当天即到期（间隔 7 天，过了 7 天）—— 旧 urgency>0 在这天会漏掉", () => {
+    const kp = mkKp({ kp_id: "X", subject: "刑法", review_count: 1, interval_idx: 2, last_review: daysAgoISO(7) });
+    expect(urgencyOf(kp, today)).toBe(0); // urgency 在到期日恰为 0
+    expect(isDue(kp, today)).toBe(true); // 但 isDue 已纳入（修正）
+  });
+  it("未到期（间隔 7 天，仅过 5 天）→ 不到期", () => {
+    const kp = mkKp({ kp_id: "X", subject: "刑法", review_count: 1, interval_idx: 2, last_review: daysAgoISO(5) });
+    expect(isDue(kp, today)).toBe(false);
   });
 });
 
@@ -147,5 +156,42 @@ describe("buildDailyPlan 清单装配", () => {
     const xf2 = plan.items.find((i) => i.kp_id === "XF-0002")!;
     expect(xf2.urgency).toBe(0);
     expect(xf2.priority).toBe(xf2.value); // value*(1+0)
+  });
+});
+
+describe("buildDailyPlan 新考点科目轮转（5 科并行铺开，不再逐科攻克）", () => {
+  const today = new Date("2026-06-20T12:00:00Z");
+  // 每科 3 个未学新考点
+  const kps: KpRow[] = [];
+  for (const [prefix, subj] of [["XF", "刑法"], ["MF", "民法"], ["FL", "法理"], ["XZ", "宪法"], ["LS", "法制史"]] as const) {
+    for (let i = 1; i <= 3; i++) {
+      kps.push(mkKp({ kp_id: `${prefix}-${String(i).padStart(4, "0")}`, subject: subj }));
+    }
+  }
+
+  it("capacity=5 → 每科恰好取 1 个（刑→民→法理→宪→法史）", () => {
+    const plan = buildDailyPlan({ kps, capacity: 5, today });
+    expect(plan.items.map((i) => i.subject)).toEqual(["刑法", "民法", "法理", "宪法", "法制史"]);
+  });
+
+  it("capacity=10 → round-robin 两轮，各科 2 个、跨科交错", () => {
+    const plan = buildDailyPlan({ kps, capacity: 10, today });
+    const bySubj = new Map<string, number>();
+    for (const it of plan.items) bySubj.set(it.subject, (bySubj.get(it.subject) ?? 0) + 1);
+    expect([...bySubj.values()]).toEqual([2, 2, 2, 2, 2]);
+    expect(plan.items[0].kp_id).toBe("XF-0001"); // 第一轮首个=刑法第一个
+    expect(plan.items[1].subject).toBe("民法"); // 紧跟民法（交错，非连刷刑法）
+  });
+
+  it("某科取尽后其余科继续轮转（不空转、不漏取）", () => {
+    const few: KpRow[] = [
+      mkKp({ kp_id: "XF-0001", subject: "刑法" }),
+      mkKp({ kp_id: "MF-0001", subject: "民法" }),
+      mkKp({ kp_id: "MF-0002", subject: "民法" }),
+      mkKp({ kp_id: "MF-0003", subject: "民法" }),
+    ];
+    const plan = buildDailyPlan({ kps: few, capacity: 10, today });
+    // 刑法只有 1 个：第一轮各取 1（XF,MF），之后刑法取尽 → 民法补完
+    expect(plan.items.map((i) => i.kp_id)).toEqual(["XF-0001", "MF-0001", "MF-0002", "MF-0003"]);
   });
 });

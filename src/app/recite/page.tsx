@@ -276,7 +276,7 @@ export default async function RecitePage({
         </Link>
 
         <p className="text-center text-[11px] text-label3">
-          新背诵按教材章节顺序推进 · 待复习按遗忘紧迫度优先
+          新背诵 5 科轮转·各科按章节顺序并行 · 待复习按遗忘紧迫度优先
         </p>
       </div>
 

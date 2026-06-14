@@ -38,11 +38,13 @@
   },
 
   "模型分层": {
-    "_红线": "评分/答疑=Opus 不降级（评分放水=假掌握，飞轮变自欺机器）；L1秒判/草稿=规则或Haiku",
-    "评分": "claude-opus-4-8",
-    "答疑": "claude-opus-4-8",
-    "L1草稿": "claude-haiku-4-5",
-    "effort": "high"
+    "_注": "⚠️ 本块仅文档参考，代码不读它——真实模型 ID 在 .env 经 src/lib/models.ts 注入（MODEL_GRADING/MODEL_ASK/MODEL_PLAN/MODEL_DRAFT/MODEL_COACH）。改模型改 .env，不是改这里。",
+    "_红线": "评分/答疑=Opus 不降级（评分放水=假掌握，飞轮变自欺机器）；规划/L1草稿=Sonnet或规则",
+    "评分": "MODEL_GRADING（部署=anthropic/claude-4.7-opus）",
+    "答疑": "MODEL_ASK（部署=anthropic/claude-4.8-opus）",
+    "规划器": "MODEL_PLAN（部署=claude-sonnet-4-20250514，仅列检索词非作答）",
+    "L1草稿": "MODEL_DRAFT（规则秒判为主，Haiku 兜底）",
+    "_effort注": "effort=high 七牛云不可用（Bedrock 不支持 output_config），已废弃旋钮，勿当真。"
   },
 
   "G1_背诵失败转弱项": {

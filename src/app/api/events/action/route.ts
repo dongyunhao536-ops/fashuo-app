@@ -30,9 +30,12 @@ export async function POST(req: Request) {
   }
 
   const status = action === "confirm" ? "confirmed" : "dismissed";
+  // 只改 status，不写 consumed_at：confirm→confirmed 尚未被 PC 登记消费，
+  // dismiss→dismissed 也非"消费"。consumed_at 只由真正消费的一方写
+  // （PC register-events.mjs 置 consumed / 检测侧 consumeReviewRequests）。
   const { data: updated, error } = await supabaseAdmin
     .from("events")
-    .update({ status, consumed_at: new Date().toISOString() })
+    .update({ status })
     .eq("id", id)
     .eq("status", "pending") // 仅处理仍 pending 的（防重复点击/竞态）
     .select("id");

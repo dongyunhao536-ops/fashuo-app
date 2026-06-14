@@ -186,6 +186,10 @@ function EncodePane({
   material: StudyMaterial;
   onStart: (lv: Level) => void;
 }) {
+  // 无 Anki 卡（法综覆盖率低/冷点）→ L1 出题必缺料、永远判不过；
+  // 直接把主按钮指向 L2 理解检测，避免卡死在空 L1（除非封顶就是 L1）。
+  const noL1Material = material.cards.length === 0;
+  const defaultLevel: Level = noL1Material && material.capLevel !== "L1" ? "L2" : material.level;
   return (
     <>
       {material.warning && (
@@ -227,14 +231,16 @@ function EncodePane({
       </div>
 
       <button
-        onClick={() => onStart(material.level)}
+        onClick={() => onStart(defaultLevel)}
         className="rounded-[14px] bg-blue py-3.5 text-[15px] font-semibold text-white"
       >
-        读完了，开始检测（当前 {material.level}）
+        {noL1Material && defaultLevel === "L2"
+          ? "无背诵卡，直接 L2 理解检测"
+          : `读完了，开始检测（当前 ${defaultLevel}）`}
       </button>
-      {material.level !== "L1" && (
+      {defaultLevel !== "L1" && (
         <button onClick={() => onStart("L1")} className="-mt-1 py-1 text-[13px] text-blue">
-          先从 L1 测起
+          {noL1Material ? "仍试 L1（本考点无背诵卡，多半判不过）" : "先从 L1 测起"}
         </button>
       )}
     </>
