@@ -156,3 +156,35 @@ describe("generateL1：题面=考点名，靶无不可命中孤儿", () => {
     expect(q.source).toBe("none");
   });
 });
+
+describe("generateL1：考点专属 l1_keypoints 优先（根治靶错位）", () => {
+  const curated = ["公平理念从事民事活动", "权利义务对等", "自愿原则的必要补充"];
+
+  it("有 l1_keypoints → 直接当 answerKey、sourceRef=curated（不再用卡内母靶）", () => {
+    const kp = mkKp(
+      { name: "公平原则", anki_note_ids: [1660964339908], l1_keypoints: curated },
+      "MF-0012",
+      "民法",
+    );
+    const q = generateL1(kp);
+    expect(q.answerKey).toEqual(curated);
+    expect(q.sourceRef).toContain("curated");
+  });
+
+  it("即使无卡，只要有 l1_keypoints 也能出题（不再缺料）", () => {
+    const kp = mkKp({ name: "冷点", anki_note_ids: [], l1_keypoints: curated }, "ZZ-0001");
+    const q = generateL1(kp);
+    expect(q.answerKey).toEqual(curated);
+    expect(q.source).toBe("anki");
+  });
+
+  it("l1_keypoints 非法/不足 2 条 → 回退卡内派生逻辑", () => {
+    const kp = mkKp(
+      { name: "法与社会治理", anki_note_ids: [1671788953686], l1_keypoints: ["x"] },
+      "FL-0094",
+    );
+    const q = generateL1(kp);
+    expect(q.answerKey.length).toBeGreaterThan(0);
+    expect(q.sourceRef).toContain("anki:");
+  });
+});

@@ -287,13 +287,30 @@ export function generateL1(kp: KpRow): DetectQuestion {
   const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
   const anki = loadAnki();
   const cards = noteIds.map((id) => anki.get(id)).filter((c): c is AnkiCard => !!c);
+  const kpName0 = ((kp.ext as { name?: string })?.name ?? "").trim();
+
+  // 根治靶错位（2026-06-15）：优先用【考点专属 L1 要点】ext.l1_keypoints
+  //  —— 由 scripts/build-l1-keypoints.mjs 离线按考点名从小节原文抽取，每个考点有自己的靶，
+  //  不再像旧逻辑那样多个小考点共用同一张母卡的同一句 P1（"公平原则"被判成"民法基本原则"）。
+  //  未抽到的考点（l1_keypoints 缺失）自动回退下面的卡内派生逻辑，平滑兼容。
+  const curated = curatedKeypoints(kp);
 
   if (cards.length === 0) {
+    if (curated.length >= 2) {
+      return {
+        kpId: kp.kp_id,
+        level: "L1",
+        question: `请按要点默写：${kpName0 || kp.kp_id}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
+        answerKey: curated,
+        source: "anki",
+        sourceRef: "curated",
+      };
+    }
     // 缺料：考点没有匹配的 Anki 卡，L1 无法出题 → 让调用方降级到 L2
     return {
       kpId: kp.kp_id,
       level: "L1",
-      question: `[L1 缺料] 考点【${(kp.ext as { name?: string })?.name ?? kp.kp_id}】无关联 Anki 卡`,
+      question: `[L1 缺料] 考点【${kpName0 || kp.kp_id}】无关联 Anki 卡`,
       answerKey: [],
       source: "none",
       sourceRef: "",
@@ -306,7 +323,7 @@ export function generateL1(kp: KpRow): DetectQuestion {
 
   // 一卡多考点（258 张卡含多个编号小节）→ 题目与 answerKey 必须同段，
   // 否则题目只问第一小节、关键词却混入其他小节 → 永远到不了 80% 通过线（2026-06-10 修）。
-  const kpName = ((kp.ext as { name?: string })?.name ?? "").trim();
+  const kpName = kpName0;
   const seg = pickSegment(pick, kpName);
   const segTitle = (seg?.标题 || pick.title).trim();
   // 题面只显示【用户点开的考点名】（与页头 H1 一致）。审计（2026-06-15）证实 96% 的卡里
@@ -323,7 +340,8 @@ export function generateL1(kp: KpRow): DetectQuestion {
   const mnemonics = (seg?.口诀 ?? pick.口诀 ?? []).map((s) => s.replace(/【.+?】/g, ""));
   // 兜底：个别段 P1 为空（只标了 P2）→ 退用本段 P2，避免 L1 无料可测。
   const core = p1.length > 0 ? p1 : (seg?.P2必背 ?? pick.P2必背 ?? []);
-  const keywords = uniqShort([...core, ...mnemonics]);
+  // 考点专属要点优先；缺失才退回卡内派生
+  const keywords = curated.length >= 2 ? curated : uniqShort([...core, ...mnemonics]);
 
   return {
     kpId: kp.kp_id,
@@ -331,8 +349,15 @@ export function generateL1(kp: KpRow): DetectQuestion {
     question: `请按要点默写：${askName}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
     answerKey: keywords,
     source: "anki",
-    sourceRef: `anki:${pick.note_id}`,
+    sourceRef: curated.length >= 2 ? `curated:${pick.note_id}` : `anki:${pick.note_id}`,
   };
+}
+
+/** 读考点专属 L1 默写要点（ext.l1_keypoints，离线 build-l1-keypoints.mjs 产出）；非法/不足回空。 */
+function curatedKeypoints(kp: KpRow): string[] {
+  const raw = (kp.ext as { l1_keypoints?: unknown })?.l1_keypoints;
+  if (!Array.isArray(raw)) return [];
+  return raw.map((s) => String(s).trim()).filter((s) => s.length >= 2 && s.length <= 60);
 }
 
 /**
@@ -660,6 +685,7 @@ async function gradeL1Semantic(
 【判分原则】
 - 按【意思】判，不要求逐字：考生换种说法、答得更细、要点更全，都算覆盖到位。
 - 考生只需回忆出与【${kpName}】直接相关的核心要点即可；本节可能还含其他小考点，别因为他没背别的小考点就判错。
+- 答错题=未过：若考生答的明显是本节【另一个小考点】的内容（而非【${kpName}】本身），即便那段答得对，也判【未过】——这是答错题、不是答得不全。
 - 不放水：与【${kpName}】相关的核心要点缺失 / 关键定性写错 = 未过；核心覆盖但有遗漏 = 勉强；核心都到位 = 干净通过。
 
 【本节参考要点（考生应从中回忆出与考点相关的核心点）】
@@ -693,8 +719,11 @@ ${answerKey.map((k) => "- " + k).join("\n")}
   };
 }
 
-/** 汇集本考点所有关联卡的要点（P1+P2+客观点+口诀）做语义判参考；封顶 40 行防 prompt 膨胀。 */
+/** 汇集本考点要点做语义判参考。考点专属 l1_keypoints 优先（kp-specific，避免语义判看到兄弟小考点
+ *  内容而误给分）；缺失才退回整卡的 P1+P2+客观点+口诀。封顶 40 行防 prompt 膨胀。 */
 function buildL1Reference(kp: KpRow): string {
+  const curated = curatedKeypoints(kp);
+  if (curated.length >= 2) return curated.map((s) => "· " + s).join("\n");
   const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
   const anki = loadAnki();
   const lines: string[] = [];
