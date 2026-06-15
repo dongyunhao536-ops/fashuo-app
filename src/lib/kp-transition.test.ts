@@ -76,6 +76,17 @@ describe("computeTransition 升降档", () => {
     expect(run({ interval_idx: 0 }, "L1", "未过").interval_idx).toBe(0);
   });
 
+  it("真题高频卡失手直接回 1 天档(idx0)，不管之前爬到多高", () => {
+    const t = run({ interval_idx: 4, difficulty: 3, ext: { zhenti_freq: "高" } }, "L1", "未过");
+    expect(t.interval_idx).toBe(0); // 30天档高频失手 → 1天（中低频会是退两档=7天）
+  });
+
+  it("中/低频卡失手仍按退两档（背得越熟退得越少）", () => {
+    expect(run({ interval_idx: 4, ext: { zhenti_freq: "中" } }, "L1", "未过").interval_idx).toBe(2);
+    expect(run({ interval_idx: 4, ext: { zhenti_freq: "低" } }, "L1", "未过").interval_idx).toBe(2);
+    expect(run({ interval_idx: 4, ext: {} }, "L1", "未过").interval_idx).toBe(2); // 缺省=低频
+  });
+
   it("难度门控：正常卡(D≤6)happy path 不变，可一路升到 30 天档", () => {
     expect(run({ interval_idx: 0, difficulty: 5 }, "L1", "干净通过").interval_idx).toBe(1);
     expect(run({ interval_idx: 3, difficulty: 5 }, "L1", "干净通过").interval_idx).toBe(4);

@@ -54,7 +54,7 @@ export interface TransitionResult {
  * - 干净通过：难度-1、间隔升一档【但不超过难度门控 rungCap】、当前档<封顶则升档；status=passed
  *   ·重学档：若该档复习前=failed（刚挂过），本次通过只"确认"不放长、不升档（错错对→明天再背）
  * - 勉强：同档重测，难度+1，间隔/档级不动；status=untested（难度+1 会在下次通过时压低封顶间隔）
- * - 未过(遗忘)：难度+2、间隔【退两档】(忘了就尽快再见)、档级不动、error_count+1；status=failed
+ * - 未过(遗忘)：难度+2、档级不动、error_count+1；status=failed；间隔——真题高频卡回1天档、中/低频退两档
  * - mastered：按 cap_level 看对应档是否都 passed（本次结果实时并入）；失手会复算掉 mastered → 回炉
  * difficulty 是"忘性指数"：错/勉强累加、稳过递减，越高复习间隔封得越近（见 rungCapForDifficulty）。
  */
@@ -88,9 +88,11 @@ export function computeTransition(
   } else if (grade === "勉强") {
     difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
   } else {
-    // 未过=遗忘：难度+2、间隔退两档尽快再见（旧版只退一档，30天的卡忘了还要等15天才回，太松）
+    // 未过=遗忘：难度+2；间隔——真题【高频】卡直接砸回 1 天档（重要的点错了第二天必复，
+    // 不管之前爬到多高），中/低频按"退两档"（背得越熟退得越少，临时失手不浪费 1 天名额）。
     difficulty = clamp(difficulty + 2, DIFF_MIN, DIFF_MAX);
-    interval_idx = Math.max(interval_idx - 2, 0);
+    const isHotFreq = String(kp.ext?.zhenti_freq ?? "低") === "高";
+    interval_idx = isHotFreq ? 0 : Math.max(interval_idx - 2, 0);
   }
 
   // 三档按 cap 全过 = mastered（本次档结果实时并入，其余档读历史 status）
