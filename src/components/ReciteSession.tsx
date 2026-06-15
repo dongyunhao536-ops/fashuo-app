@@ -388,9 +388,26 @@ function ResultPane({
       </div>
 
       <div className="rounded-[12px] bg-card p-4">
-        {result.explanation && (
-          <p className="text-[13px] leading-relaxed text-label">{result.explanation}</p>
-        )}
+        {result.explanation &&
+          (result.passed ? (
+            <p className="text-[13px] leading-relaxed text-label">{result.explanation}</p>
+          ) : (
+            // 未过/勉强：把原因做成醒目块（用户要求"把错误原因写出来"）
+            <div
+              className={`rounded-[10px] p-3 ${
+                result.grade === "勉强" ? "bg-orange/12" : "bg-red/12"
+              }`}
+            >
+              <div
+                className={`text-[11px] font-semibold ${
+                  result.grade === "勉强" ? "text-orange" : "text-red"
+                }`}
+              >
+                {result.grade === "勉强" ? "差一点 · 为什么没满分" : "为什么没过"}
+              </div>
+              <p className="mt-1 text-[13px] leading-relaxed text-label">{result.explanation}</p>
+            </div>
+          ))}
 
         {/* 命中 / 缺失要点 */}
         {result.hits.length > 0 && (

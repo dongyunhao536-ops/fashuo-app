@@ -1,4 +1,4 @@
-import { runPlanThenAnswer, extractText, fmtCost } from "./anthropic";
+import { runPlanThenAnswer, runSingleTurn, extractText, fmtCost } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import { emitEvent, consumeReviewRequests } from "./events";
@@ -283,7 +283,7 @@ export async function generateQuestion(opts: {
   return generateL2L3(kp, level);
 }
 
-function generateL1(kp: KpRow): DetectQuestion {
+export function generateL1(kp: KpRow): DetectQuestion {
   const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
   const anki = loadAnki();
   const cards = noteIds.map((id) => anki.get(id)).filter((c): c is AnkiCard => !!c);
@@ -306,8 +306,14 @@ function generateL1(kp: KpRow): DetectQuestion {
 
   // 一卡多考点（258 张卡含多个编号小节）→ 题目与 answerKey 必须同段，
   // 否则题目只问第一小节、关键词却混入其他小节 → 永远到不了 80% 通过线（2026-06-10 修）。
-  const seg = pickSegment(pick, (kp.ext as { name?: string })?.name ?? "");
+  const kpName = ((kp.ext as { name?: string })?.name ?? "").trim();
+  const seg = pickSegment(pick, kpName);
   const segTitle = (seg?.标题 || pick.title).trim();
+  // 题面只显示【用户点开的考点名】（与页头 H1 一致）。审计（2026-06-15）证实 96% 的卡里
+  // Anki 小节标题 = 考点名 + 噪声（"001."前缀 / ✨ / 【真题年份】），拼进题面又丑又冗；
+  // 少数小节标题是更宽的母节（如"法学的产生和发展"的卡是"第一节 法学"）拼上去反而误导
+  // 用户以为问错题。考点名最干净准确，内容比对交给评分（含 Haiku 语义兜底）。
+  const askName = kpName || segTitle;
 
   // L1 关键词集 = 本段 P1必背高精（核心，"高精"层）+ 本段口诀。
   //   不纳入 P2必背：P2 是要点级展开（往往是整句解释），属 L2 理解检测的料；
@@ -322,7 +328,7 @@ function generateL1(kp: KpRow): DetectQuestion {
   return {
     kpId: kp.kp_id,
     level: "L1",
-    question: `请按要点默写：${segTitle}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
+    question: `请按要点默写：${askName}\n（限 60 秒；列出关键词/要点即可，不必逐字）`,
     answerKey: keywords,
     source: "anki",
     sourceRef: `anki:${pick.note_id}`,
@@ -468,7 +474,7 @@ export async function gradeAnswer(opts: {
   const matchLevel = (kp.ext as { anki_match_level?: string })?.anki_match_level;
   const result =
     opts.level === "L1"
-      ? gradeL1(opts.userAnswer, opts.answerKey, matchLevel)
+      ? await gradeL1WithFallback(kp, opts.userAnswer, opts.answerKey, matchLevel)
       : await gradeL2L3(kp, opts);
 
   // 写 detection_log
@@ -519,7 +525,7 @@ interface L1Internal {
   model: string;
 }
 
-function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: string): L1Internal {
+export function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: string): L1Internal {
   const ans = normalize(userAnswer);
   if (!ans) {
     return {
@@ -567,11 +573,24 @@ function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: string): 
     grade = "干净通过";
     confidence = Math.round(80 + rate * 20);
   } else if (rate >= passT - 0.2) {
-    grade = "勉强"; // TODO: 接 Haiku 复判（成本敏感，先用纯规则）
+    grade = "勉强"; // 边界——交给上层 gradeL1WithFallback 的 Haiku 语义复判收口
     confidence = Math.round(50 + rate * 30);
   } else {
     grade = "未过";
     confidence = Math.round(60 + (1 - rate) * 30);
+  }
+
+  // 失败原因写成人话（用户要求"把错误原因写出来"）：区分 0 命中 / 部分命中 / 通过，
+  // 并点明 L1 是术语默写、缺的就在 missing 里。语义兜底触发时这段会被 Haiku 的理由覆盖。
+  const pct = Math.round(rate * 100);
+  let explanation: string;
+  if (grade === "干净通过") {
+    explanation = `命中 ${hits.length}/${answerKey.length} 个必背关键词（${pct}%），通过。${note}`;
+  } else if (hits.length === 0) {
+    explanation = `没命中任何必背关键词。L1 是核心术语默写——换成你自己的话也行，但要点到下面这些词；若你其实答的是本节别的小点，对照「缺失要点」补背。${note}`;
+  } else {
+    const gap = grade === "勉强" ? "就差一点到通过线" : "离通过线还差不少";
+    explanation = `只命中 ${hits.length}/${answerKey.length} 个必背关键词（${pct}%），${gap}。下面「缺失要点」就是你这次没默到的，重点补这些。${note}`;
   }
 
   return {
@@ -581,11 +600,114 @@ function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: string): 
     missing,
     confidence,
     starred: false,
-    explanation: `关键词命中 ${hits.length}/${answerKey.length}（${Math.round(rate * 100)}%）。${note}`,
+    explanation,
     costUsd: 0,
     grepLines: [],
     model: "rule:l1",
   };
+}
+
+/**
+ * L1 评分（规则秒判 + Haiku 语义兜底）。
+ * 规则命中率对【短关键词靶】可靠且免费；对【整句靶 / 单靶 / 一卡多考点共用靶】会退化成"逐字默写"
+ * （全卡组 ~21% 的 L1 卡只有一句整句靶）。这类不可靠场景下，叫一次便宜的 Haiku 按【意思】复判：
+ * 把考点名 + 本节全部要点（含客观点/口诀，不止那一句 P1）+ 考生作答喂给它，
+ * 修两类误杀——①靶点错位（答对"产生条件"却被"含义那句"判 0）②换句话说/答得更细被逐字门槛卡死。
+ *
+ * 触发兜底（仅在规则【没干净通过】时；干净通过永远走免费秒判）：
+ *   - answerKey 含整句靶（归一长度 > 8）→ 子串匹配天然不可靠；或
+ *   - 命中率落在"勉强"带（rate ≥ passT−0.2）→ 边界值得语义裁决。
+ * 其余（短词靶上确定性零命中 / 空答 / 缺料）一律走规则，0 成本 0 延迟。
+ */
+async function gradeL1WithFallback(
+  kp: KpRow,
+  userAnswer: string,
+  answerKey: string[],
+  matchLevel?: string,
+): Promise<L1Internal> {
+  const rule = gradeL1(userAnswer, answerKey, matchLevel);
+  if (rule.passed) return rule; // 干净通过：免费秒判，不调模型
+  if (!normalize(userAnswer) || answerKey.length === 0) return rule; // 空答 / 缺料：规则已正确处理
+
+  const passT = matchLevel === "section" ? 0.6 : 0.8;
+  const rate = rule.hits.length / answerKey.length;
+  const hasLongKey = answerKey.some((k) => keywordCore(k).length > 8);
+  const borderline = rate >= passT - 0.2; // "勉强"带（此分支 rate < passT 必成立）
+  if (!hasLongKey && !borderline) return rule; // 短词靶确定性零命中 → 信任规则，不浪费 Haiku
+
+  try {
+    return await gradeL1Semantic(kp, userAnswer, answerKey, rule);
+  } catch (err) {
+    console.error(
+      "[gradeL1] 语义兜底失败，退回规则结果：",
+      err instanceof Error ? err.message : String(err),
+    );
+    return rule; // Haiku 渠道/预算/限速异常不阻塞背诵，退回规则结果
+  }
+}
+
+/** L1 语义复判（Haiku 单次调用，无 grep）：按意思判、吃本节全部要点，治"靶点错位/逐字默写"两类误杀。 */
+async function gradeL1Semantic(
+  kp: KpRow,
+  userAnswer: string,
+  answerKey: string[],
+  rule: L1Internal,
+): Promise<L1Internal> {
+  const kpName = (kp.ext as { name?: string })?.name ?? kp.kp_id;
+  const reference = buildL1Reference(kp);
+  const sys = `你在批改一道法硕「L1 记忆默写」题。考生正在背诵考点【${kpName}】（${kp.subject}）。
+
+【判分原则】
+- 按【意思】判，不要求逐字：考生换种说法、答得更细、要点更全，都算覆盖到位。
+- 考生只需回忆出与【${kpName}】直接相关的核心要点即可；本节可能还含其他小考点，别因为他没背别的小考点就判错。
+- 不放水：与【${kpName}】相关的核心要点缺失 / 关键定性写错 = 未过；核心覆盖但有遗漏 = 勉强；核心都到位 = 干净通过。
+
+【本节参考要点（考生应从中回忆出与考点相关的核心点）】
+${reference}
+
+【命题脚本自动抽取的关键词靶（可能只覆盖了本节某一小点，仅供参考；不要因为考生没默到这一条就判错）】
+${answerKey.map((k) => "- " + k).join("\n")}
+
+严格输出 JSON（不要任何额外文字、不要 markdown 代码块）：
+{"grade":"干净通过|勉强|未过","hits":["考生答对的要点"],"missing":["该补的要点"],"confidence":0-100,"explanation":"一句话评分理由"}`;
+
+  const { message, costUsd } = await runSingleTurn({
+    system: sys,
+    user: `【考生作答】\n${userAnswer}`,
+    model: MODELS.DRAFT,
+    maxTokens: 700,
+    route: "detect:grade:L1",
+  });
+  const parsed = parseGradeJson(extractText(message));
+  return {
+    grade: parsed.grade,
+    passed: parsed.grade === "干净通过",
+    hits: parsed.hits.length ? parsed.hits : rule.hits,
+    missing: parsed.missing,
+    confidence: parsed.confidence,
+    starred: false,
+    explanation: `${parsed.explanation || "已按语义复判"}（AI 语义判 · 规则命中 ${rule.hits.length}/${answerKey.length}）`,
+    costUsd,
+    grepLines: [],
+    model: MODELS.DRAFT,
+  };
+}
+
+/** 汇集本考点所有关联卡的要点（P1+P2+客观点+口诀）做语义判参考；封顶 40 行防 prompt 膨胀。 */
+function buildL1Reference(kp: KpRow): string {
+  const noteIds = ((kp.ext as { anki_note_ids?: number[] })?.anki_note_ids ?? []) as number[];
+  const anki = loadAnki();
+  const lines: string[] = [];
+  for (const id of noteIds) {
+    const c = anki.get(id);
+    if (!c) continue;
+    const mn = (c.口诀 ?? []).map((s) => s.replace(/【.+?】/g, ""));
+    for (const s of [...(c.P1必背高精 ?? []), ...(c.P2必背 ?? []), ...(c.客观点 ?? []), ...mn]) {
+      const t = s.trim();
+      if (t) lines.push("· " + t);
+    }
+  }
+  return lines.slice(0, 40).join("\n") || "（本节无结构化要点，按考点名常识判断）";
 }
 
 const PUNCT = /[\s、，。；：;:,.()（）""""''《》<>【】\[\]·]+/g;
@@ -598,7 +720,7 @@ function normalize(s: string): string {
  * 否则用户不写"1."这种序号就被判漏（false negative）。
  * 处理：①前导编号 1. / （1） / (1) / 一、 / Ø / • ②前导标签 概念：/特征：/含义：
  */
-function keywordCore(keyword: string): string {
+export function keywordCore(keyword: string): string {
   let s = keyword.trim();
   // 前导列表标记（可能叠多层，循环剥）
   let prev = "";
@@ -614,7 +736,7 @@ function keywordCore(keyword: string): string {
 }
 
 /** 关键词命中：剥编号→归一化→子串匹配；过短(<2 字)的关键词跳过防误判 */
-function matchKeyword(answer: string, keyword: string): boolean {
+export function matchKeyword(answer: string, keyword: string): boolean {
   const k = keywordCore(keyword);
   if (k.length < 2) return false;
   if (k.length <= 8) return answer.includes(k);
@@ -859,15 +981,19 @@ export function fmtGradeForUI(g: GradeResult): GradeResult & { costText: string 
   return { ...g, costText: fmtCost(g.costUsd) };
 }
 
-function uniqShort(items: string[]): string[] {
+export function uniqShort(items: string[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const raw of items) {
     const s = raw.trim();
     if (!s || s.length > 80) continue; // 过长的整句不当关键词
-    const k = normalize(s);
-    if (k.length < 2 || seen.has(k)) continue;
-    seen.add(k);
+    // 必须用与 matchKeyword 同一个 keywordCore 判"可命中性"：core<2 字的关键词
+    // （如 Anki 拆行拆出的孤儿"1.从"→core"从"）matchKeyword 永远 false，留在靶里
+    // 只会拉低命中率，把【满分默写也判未过】（FL-0094 类自相矛盾，2026-06-15 修）。
+    // 去重也按 core，顺带合并"1.保障"与"保障"这类同义重复。
+    const core = keywordCore(s);
+    if (core.length < 2 || seen.has(core)) continue;
+    seen.add(core);
     out.push(s);
   }
   return out.slice(0, 20); // 关键词集封顶 20
