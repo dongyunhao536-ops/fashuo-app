@@ -52,6 +52,7 @@ export interface TransitionResult {
 /**
  * 给定 (考点当前态, 检测档, 评分) 算出新状态。规则（2026-06-14 优化，难度 D 真正接进间隔）：
  * - 干净通过：难度-1、间隔升一档【但不超过难度门控 rungCap】、当前档<封顶则升档；status=passed
+ *   ·重学档：若该档复习前=failed（刚挂过），本次通过只"确认"不放长、不升档（错错对→明天再背）
  * - 勉强：同档重测，难度+1，间隔/档级不动；status=untested（难度+1 会在下次通过时压低封顶间隔）
  * - 未过(遗忘)：难度+2、间隔【退两档】(忘了就尽快再见)、档级不动、error_count+1；status=failed
  * - mastered：按 cap_level 看对应档是否都 passed（本次结果实时并入）；失手会复算掉 mastered → 回炉
@@ -72,11 +73,18 @@ export function computeTransition(
     // 门控用【复习前】的难度：硬卡这一轮先压住，本次通过把难度降下来，下一轮才解锁更长间隔
     //（"先证明变简单，才放长"）。否则一次通过就立刻 -1 解锁，门控等于没接。
     const rungCap = rungCapForDifficulty(difficulty);
+    const levelWasFailed =
+      (level === "L1" ? kp.l1_status : level === "L2" ? kp.l2_status : kp.l3_status) === "failed";
     difficulty = clamp(difficulty - 1, DIFF_MIN, DIFF_MAX);
-    if (interval_idx < rungCap) interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
-    const curIdx = LEVEL_ORDER.indexOf(level);
-    const capIdx = LEVEL_ORDER.indexOf(cap);
-    if (curIdx < capIdx) cur_level = LEVEL_ORDER[curIdx + 1];
+    if (levelWasFailed) {
+      // 重学档：刚挂过的档，当场又答对只算"确认一次"——间隔不放长、档级不升，留在近端，
+      // 等明天/到期再稳过一次才放长 + 升档。治"错错对当晚就跳长间隔、第二天反而不复习"。
+    } else {
+      if (interval_idx < rungCap) interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
+      const curIdx = LEVEL_ORDER.indexOf(level);
+      const capIdx = LEVEL_ORDER.indexOf(cap);
+      if (curIdx < capIdx) cur_level = LEVEL_ORDER[curIdx + 1];
+    }
   } else if (grade === "勉强") {
     difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
   } else {

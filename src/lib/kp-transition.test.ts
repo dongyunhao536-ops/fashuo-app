@@ -99,6 +99,21 @@ describe("computeTransition 升降档", () => {
     expect(seq).toEqual([1, 2, 3, 4]); // 3→7→15→30 天，逐档解锁不跳级
   });
 
+  it("重学档：刚挂过的档当场答对只确认、不放长不升档（错错对→仍 1 天/明天再背）", () => {
+    // 模拟 FL-0001：连错两次后 l1=failed、idx0、难度高；第三次干净通过
+    const t = run({ cur_level: "L1", l1_status: "failed", interval_idx: 0, difficulty: 9 }, "L1", "干净通过");
+    expect(t.interval_idx).toBe(0); // 仍 1 天档（不跳到 3 天）
+    expect(t.cur_level).toBe("L1"); // 不升档，留 L1 再确认
+    expect(t.statusValue).toBe("passed"); // 该档已答对
+    expect(t.difficulty).toBe(8); // 难度仍 -1
+  });
+
+  it("重学档后再稳过一次（该档已 passed）才放长 + 升档", () => {
+    const t = run({ cur_level: "L1", l1_status: "passed", interval_idx: 0, difficulty: 8 }, "L1", "干净通过");
+    expect(t.interval_idx).toBe(1); // 3 天，正常放长
+    expect(t.cur_level).toBe("L2"); // 升档
+  });
+
   it("勉强累积难度→下次通过被门控压短（不再'原地踏步无后果'）", () => {
     // D6 的卡在 idx3，勉强→D7；下次复习前 D7 → rungCap(7)=3 → idx3 保持不升到 30 天
     const m = run({ interval_idx: 3, difficulty: 6 }, "L1", "勉强");
