@@ -56,22 +56,56 @@ describe("computeTransition 升降档", () => {
     expect(t.errorCountDelta).toBe(0);
   });
 
-  it("未过：难度+1、间隔退一档、档级不动、error+1、status=failed", () => {
+  it("未过：难度+2、间隔退两档、档级不动、error+1、status=failed", () => {
     const t = run({ cur_level: "L2", interval_idx: 3, difficulty: 5 }, "L2", "未过");
-    expect(t.difficulty).toBe(6);
-    expect(t.interval_idx).toBe(2);
+    expect(t.difficulty).toBe(7); // +2（遗忘惩罚比旧版重）
+    expect(t.interval_idx).toBe(1); // 15天(idx3) 忘了 → 3天(idx1)，退两档
     expect(t.cur_level).toBe("L2");
     expect(t.statusValue).toBe("failed");
     expect(t.errorCountDelta).toBe(1);
   });
 
-  it("难度 clamp 在 [1,10]：底部未过不越界、顶部通过不越界", () => {
+  it("难度 clamp 在 [1,10]：底部未过(+2)不越界、顶部通过不越界", () => {
     expect(run({ difficulty: 10 }, "L1", "未过").difficulty).toBe(10);
+    expect(run({ difficulty: 9 }, "L1", "未过").difficulty).toBe(10); // 9+2 clamp 10
     expect(run({ difficulty: 1 }, "L1", "干净通过").difficulty).toBe(1);
   });
 
-  it("间隔退档不低于 0", () => {
+  it("间隔退档不低于 0（退两档也封底）", () => {
+    expect(run({ interval_idx: 1 }, "L1", "未过").interval_idx).toBe(0);
     expect(run({ interval_idx: 0 }, "L1", "未过").interval_idx).toBe(0);
+  });
+
+  it("难度门控：正常卡(D≤6)happy path 不变，可一路升到 30 天档", () => {
+    expect(run({ interval_idx: 0, difficulty: 5 }, "L1", "干净通过").interval_idx).toBe(1);
+    expect(run({ interval_idx: 3, difficulty: 5 }, "L1", "干净通过").interval_idx).toBe(4);
+  });
+
+  it("难度门控：高难卡通过也封在近端档（复习前 D8 → rungCap=7天档，idx3 被按住）", () => {
+    // idx3=15天, 复习前 D8 → rungCap(8)=2(7天)，idx3 不<2 → 保持不升；通过把难度降到 7
+    const t = run({ interval_idx: 3, difficulty: 8 }, "L1", "干净通过");
+    expect(t.difficulty).toBe(7);
+    expect(t.interval_idx).toBe(3); // 被门控按住，没升到 idx4(30天)
+  });
+
+  it("难度门控随通过逐步解锁：D8 硬卡连续通过 3→7→15→30 慢慢爬回", () => {
+    let kp = mkKp({ interval_idx: 0, difficulty: 8 });
+    const seq: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      const t = computeTransition(kp, "L1", "干净通过", NOW);
+      seq.push(t.interval_idx);
+      kp = { ...kp, interval_idx: t.interval_idx, difficulty: t.difficulty };
+    }
+    expect(seq).toEqual([1, 2, 3, 4]); // 3→7→15→30 天，逐档解锁不跳级
+  });
+
+  it("勉强累积难度→下次通过被门控压短（不再'原地踏步无后果'）", () => {
+    // D6 的卡在 idx3，勉强→D7；下次复习前 D7 → rungCap(7)=3 → idx3 保持不升到 30 天
+    const m = run({ interval_idx: 3, difficulty: 6 }, "L1", "勉强");
+    expect(m.difficulty).toBe(7);
+    expect(m.interval_idx).toBe(3);
+    const p = run({ interval_idx: 3, difficulty: 7 }, "L1", "干净通过");
+    expect(p.interval_idx).toBe(3); // 复习前 D7 门控按住
   });
 });
 

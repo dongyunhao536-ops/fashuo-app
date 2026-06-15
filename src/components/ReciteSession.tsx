@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
 import { AnkiCardView } from "./AnkiCardView";
 import { postStreamedJson } from "@/lib/stream-client";
@@ -39,7 +40,21 @@ interface GradeResp {
 
 const INTERVALS = [1, 3, 7, 15, 30];
 
-export function ReciteSession({ material }: { material: StudyMaterial }) {
+export function ReciteSession({
+  material,
+  nextHref,
+  listHref,
+  position,
+}: {
+  material: StudyMaterial;
+  /** 今日清单里本考点的下一个（连续背诵用），无则为 null（已是最后一个） */
+  nextHref: string | null;
+  /** 回清单链接（带科目/背诵量筛选，回去保持原视图） */
+  listHref: string;
+  /** 本考点在今日清单的位次（第 pos/total），不在清单里则 null */
+  position: { pos: number; total: number } | null;
+}) {
+  const router = useRouter();
   const [phase, setPhase] = useState<Phase>("encode");
   const [level, setLevel] = useState<Level>(material.level);
   const [question, setQuestion] = useState<DetectQuestion | null>(null);
@@ -98,14 +113,6 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
     }
   }
 
-  function reset() {
-    setPhase("encode");
-    setQuestion(null);
-    setUserAnswer("");
-    setResult(null);
-    setError(null);
-  }
-
   const stage = phase === "encode" ? 0 : phase === "result" ? 2 : 1;
 
   return (
@@ -158,8 +165,11 @@ export function ReciteSession({ material }: { material: StudyMaterial }) {
           result={result}
           question={question}
           level={level}
+          nextHref={nextHref}
+          position={position}
           onAgain={() => startDetect(level)}
-          onBack={reset}
+          onNext={() => nextHref && router.push(nextHref)}
+          onList={() => router.push(listHref)}
         />
       )}
     </div>
@@ -339,14 +349,20 @@ function ResultPane({
   result,
   question,
   level,
+  nextHref,
+  position,
   onAgain,
-  onBack,
+  onNext,
+  onList,
 }: {
   result: GradeResp;
   question: DetectQuestion;
   level: Level;
+  nextHref: string | null;
+  position: { pos: number; total: number } | null;
   onAgain: () => void;
-  onBack: () => void;
+  onNext: () => void;
+  onList: () => void;
 }) {
   const gradeColor = result.passed
     ? "text-green"
@@ -435,19 +451,34 @@ function ResultPane({
         </div>
       </div>
 
-      <div className="flex gap-2">
-        <button
-          onClick={onAgain}
-          className="flex-1 rounded-[14px] bg-fill py-3 text-[14px] font-medium text-label"
-        >
-          再测一次
-        </button>
-        <button
-          onClick={onBack}
-          className="flex-1 rounded-[14px] bg-blue py-3 text-[14px] font-semibold text-white"
-        >
-          ‹ 回清单选下一个
-        </button>
+      {/* 连续背诵：直接进下一个，不必回菜单 */}
+      <div className="flex flex-col gap-2">
+        {nextHref ? (
+          <button
+            onClick={onNext}
+            className="rounded-[14px] bg-blue py-3.5 text-[15px] font-semibold text-white"
+          >
+            下一个考点 ›{position ? `　今日 ${position.pos}/${position.total}` : ""}
+          </button>
+        ) : (
+          <div className="rounded-[14px] bg-green/15 py-3.5 text-center text-[14px] font-medium text-green">
+            🎉 今日清单已背完
+          </div>
+        )}
+        <div className="flex gap-2">
+          <button
+            onClick={onAgain}
+            className="flex-1 rounded-[14px] bg-fill py-3 text-[14px] font-medium text-label"
+          >
+            再测一次
+          </button>
+          <button
+            onClick={onList}
+            className="flex-1 rounded-[14px] bg-fill py-3 text-[14px] font-medium text-label"
+          >
+            回清单
+          </button>
+        </div>
       </div>
     </div>
   );

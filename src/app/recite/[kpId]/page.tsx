@@ -1,7 +1,11 @@
 import Link from "next/link";
 import { getStudyMaterial } from "@/lib/detection";
+import { getTodayPlan } from "@/lib/plan";
 import { ReciteSession } from "@/components/ReciteSession";
 import { TabBar } from "@/components/TabBar";
+
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
+const CAPS = [10, 30, 50];
 
 /**
  * 考点答题页（RSC 壳 + client 交互）。极简暗色版方案 ④/⑤ 屏。
@@ -12,9 +16,20 @@ import { TabBar } from "@/components/TabBar";
 export const dynamic = "force-dynamic";
 
 type Params = Promise<{ kpId: string }>;
+type Search = Promise<{ subject?: string; n?: string }>;
 
-export default async function ReciteKpPage({ params }: { params: Params }) {
+export default async function ReciteKpPage({
+  params,
+  searchParams,
+}: {
+  params: Params;
+  searchParams: Search;
+}) {
   const { kpId } = await params;
+  const sp = await searchParams;
+  const subject = sp.subject && SUBJECTS.includes(sp.subject) ? sp.subject : undefined;
+  const capacity = CAPS.includes(Number(sp.n)) ? Number(sp.n) : 30;
+
   let material;
   try {
     material = await getStudyMaterial(kpId);
@@ -32,10 +47,29 @@ export default async function ReciteKpPage({ params }: { params: Params }) {
     );
   }
 
+  // 连续背诵：算出今日清单里本考点的下一个 + 位次（带科目/背诵量筛选回传，保持同一视图）
+  const carry = new URLSearchParams();
+  if (subject) carry.set("subject", subject);
+  if (capacity !== 30) carry.set("n", String(capacity));
+  const suffix = carry.toString() ? `?${carry}` : "";
+  const listHref = `/recite${suffix}`;
+  let nextHref: string | null = null;
+  let position: { pos: number; total: number } | null = null;
+  try {
+    const plan = await getTodayPlan(subject, capacity);
+    const ids = plan.items.map((i) => i.kp_id);
+    const idx = ids.indexOf(kpId);
+    const nextId = idx >= 0 ? (ids[idx + 1] ?? null) : (ids[0] ?? null);
+    nextHref = nextId ? `/recite/${nextId}${suffix}` : null;
+    position = idx >= 0 ? { pos: idx + 1, total: ids.length } : null;
+  } catch {
+    // 清单拉取失败不阻塞背诵；仅是没有"下一个"按钮，回清单仍可用
+  }
+
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
       <header className="px-1">
-        <Link href="/recite" className="inline-flex items-center gap-0.5 text-[15px] text-blue">
+        <Link href={listHref} className="inline-flex items-center gap-0.5 text-[15px] text-blue">
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.2}>
             <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -61,7 +95,12 @@ export default async function ReciteKpPage({ params }: { params: Params }) {
         </div>
       </header>
 
-      <ReciteSession material={material} />
+      <ReciteSession
+        material={material}
+        nextHref={nextHref}
+        listHref={listHref}
+        position={position}
+      />
 
       <TabBar active="recite" />
     </main>

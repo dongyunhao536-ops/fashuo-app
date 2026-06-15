@@ -98,6 +98,12 @@ export default async function RecitePage({
     return str ? `/recite?${str}` : "/recite";
   };
 
+  // 卡片链接带上 科目/背诵量（不带 tab）→ 答题页据此算"连续背诵"的下一个，保持同一视图
+  const cardCarry = new URLSearchParams();
+  if (subject) cardCarry.set("subject", subject);
+  if (capacity !== 30) cardCarry.set("n", String(capacity));
+  const cardSuffix = cardCarry.toString() ? `?${cardCarry}` : "";
+
   const [plan, duel] = await Promise.all([getTodayPlan(subject, capacity), getDuelPlan(5)]);
   const newItems = plan.items.filter((it) => it.bucket === "新考点");
   const reviewItems = plan.items.filter((it) => it.bucket !== "新考点");
@@ -195,7 +201,7 @@ export default async function RecitePage({
             )}
           </div>
         ) : subject ? (
-          <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} />
+          <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} hrefSuffix={cardSuffix} />
         ) : (
           subjectsInPlan.map((s) => (
             <details key={s} open className="glass-card rounded-[16px] p-3">
@@ -206,7 +212,7 @@ export default async function RecitePage({
                 </span>
               </summary>
               <div className="mt-2">
-                <ChapterList items={bySubject.get(s)!} tab={tab} nested />
+                <ChapterList items={bySubject.get(s)!} tab={tab} hrefSuffix={cardSuffix} nested />
               </div>
             </details>
           ))
@@ -290,10 +296,12 @@ export default async function RecitePage({
 function ChapterList({
   items,
   tab,
+  hrefSuffix = "",
   nested = false,
 }: {
   items: PlanItem[];
   tab: string;
+  hrefSuffix?: string;
   nested?: boolean;
 }) {
   const chapters = groupByChapter(items);
@@ -324,7 +332,7 @@ function ChapterList({
                   {sec.items.map((it) => (
                     <Link
                       key={it.kp_id}
-                      href={`/recite/${it.kp_id}`}
+                      href={`/recite/${it.kp_id}${hrefSuffix}`}
                       className={`rounded-[10px] p-2.5 ${nested ? "bg-card" : "bg-card2"}`}
                     >
                       <div className="flex items-start gap-2">
