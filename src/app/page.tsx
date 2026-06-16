@@ -25,9 +25,11 @@ export default async function DashboardPage() {
   const kpPct = kpTotal ? Math.round((kpMastered / kpTotal) * 100) : 0;
   const today = new Date();
   const todayLabel = `${today.getMonth() + 1} 月 ${today.getDate()} 日`;
-  // 今日完成度：分子=今天已背去重考点，分母=已背+当前剩余（剩余会随完成缩小，故加回已背保持稳定）
+  // 今日完成度：分子=今天已背去重考点；分母=每日目标(清单容量，稳定不漂移)。
+  // 旧版分母=已背+剩余，因新考点自动补满清单 → 越背分母越大(31→32…)，反直觉，已改。
+  // 超额完成(背得比目标多)则分母跟到已背数，进度显示 100%。
   const doneToday = d.cores.plan.doneToday;
-  const todayTarget = doneToday + d.cores.plan.total;
+  const todayTarget = Math.max(d.cores.plan.dailyGoal, doneToday);
   const donePct = todayTarget ? Math.round((doneToday / todayTarget) * 100) : 0;
 
   return (
@@ -49,9 +51,15 @@ export default async function DashboardPage() {
             <span className="ml-1.5 text-[15px] text-label2">天</span>
           </div>
           <div className="mt-2.5 flex flex-wrap gap-1.5">
-            <span className="rounded-[8px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft">
+            <Link
+              href="/reviewed"
+              className="inline-flex items-center gap-0.5 rounded-[8px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft active:scale-95"
+            >
               今日已背 {doneToday}/{todayTarget}
-            </span>
+              <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth={2.5}>
+                <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </Link>
             <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
               {d.hero.todayMinutes} 分钟
             </span>

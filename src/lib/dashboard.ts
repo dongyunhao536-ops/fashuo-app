@@ -26,6 +26,7 @@ export interface DashboardData {
     plan: {
       total: number; // 今日清单当前剩余（已背的会从桶里退出，故这是"还剩多少"）
       doneToday: number; // 今天已检测的去重考点数（真实完成度分子）
+      dailyGoal: number; // 每日目标 = 清单容量（稳定分母，不随已背漂移）
       bucketCounts: { 复验: number; 到期: number; 新考点: number };
     };
     ask: { openCount: number; lastConfusion: string | null };
@@ -185,6 +186,7 @@ export async function getDashboard(): Promise<DashboardData> {
       plan: {
         total: plan.items.length,
         doneToday: todayDoneKp,
+        dailyGoal: PLAN_CAPACITY,
         bucketCounts: {
           复验: plan.counts.复验,
           到期: plan.counts.到期,
