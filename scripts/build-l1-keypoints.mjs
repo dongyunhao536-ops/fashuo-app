@@ -98,7 +98,7 @@ if (commit) {
 }
 
 console.log(`模型 ${model} | ${commit ? "写库" : "干跑"} | ${targets.length} 个考点\n`);
-let done = 0, empty = 0, skip = 0;
+let done = 0, empty = 0, skip = 0, consec403 = 0;
 for (const kp of targets) {
   // 可重入：已抽过的跳过（被 TPD/中断打断后重跑即续，不重复烧钱）
   if (commit && Array.isArray(kp.ext.l1_keypoints) && kp.ext.l1_keypoints.length >= 2) { skip++; continue; }
@@ -106,19 +106,28 @@ for (const kp of targets) {
   let keypoints = [], reason = "";
   try { ({ keypoints, reason } = await extract(kp)); }
   catch (e) { keypoints = []; reason = "调用异常:" + String(e?.message || e).slice(0, 60); }
+  // key 又被限（403/额度）→ 别空转剩下几百个，连续 6 次就停（已写的保留，下次续跑）
+  if (/403|access denied/.test(reason)) {
+    if (++consec403 >= 6) { console.log(`\n✗ 连续 ${consec403} 次 403——key 又被限额，停跑。已写 ${done}，恢复后重跑即续。`); break; }
+  } else consec403 = 0;
   if (!commit) {
     console.log(`==== ${kp.kp_id} 「${kp.ext.name}」`);
     console.log(`  旧靶(generateL1): ${JSON.stringify((kp.ext.l1_keypoints && []) || "").slice(0, 0)}`);
     console.log(`  新要点: ${keypoints.length ? JSON.stringify(keypoints) : "（空）" + (reason || "")}`);
   }
   if (keypoints.length >= 2) {
-    done++;
     if (commit) {
-      const ext = { ...kp.ext, l1_keypoints: keypoints, l1_keypoints_model: model, l1_keypoints_at: new Date().toISOString().slice(0, 10) };
-      const { error } = await sb.from("kp_state").update({ ext }).eq("kp_id", kp.kp_id);
-      if (error) console.log(`  ✗ ${kp.kp_id} 写库失败:`, error.message);
-      if (done % 25 === 0) console.log(`  …已写 ${done}`);
-    }
+      // 写库也要容错：自签 HTTPS 的 Supabase 偶发 Connection error 会 throw，
+      // 不接住会崩整批（78% 那次就是死在这）。写失败只跳过该点，下次续跑补上。
+      try {
+        const ext = { ...kp.ext, l1_keypoints: keypoints, l1_keypoints_model: model, l1_keypoints_at: new Date().toISOString().slice(0, 10) };
+        const { error } = await sb.from("kp_state").update({ ext }).eq("kp_id", kp.kp_id);
+        if (error) console.log(`  ✗ ${kp.kp_id} 写库失败:`, error.message);
+        else { done++; if (done % 25 === 0) console.log(`  …已写 ${done}`); }
+      } catch (e) {
+        console.log(`  ✗ ${kp.kp_id} 写库异常(跳过):`, String(e?.message || e).slice(0, 50));
+      }
+    } else done++;
   } else { empty++; if (commit && empty <= 20) console.log(`  ⚠ ${kp.kp_id}「${kp.ext.name}」抽空(${reason || ""})→保留旧逻辑`); }
   await new Promise((r) => setTimeout(r, commit ? 3000 : 600)); // 躲 RPM（3s≈20/min，防退避雪崩）
 }
