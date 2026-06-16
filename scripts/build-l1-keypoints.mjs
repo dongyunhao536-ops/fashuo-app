@@ -57,7 +57,11 @@ const model = process.env.MODEL_DRAFT;
 async function callRetry(params, tries = 6) {
   for (let i = 0; i <= tries; i++) {
     try { return await client.messages.create(params); }
-    catch (e) { if (e.status !== 429 || i === tries) throw e; await new Promise((r) => setTimeout(r, 1000 * 2 ** i)); }
+    catch (e) {
+      const retriable = e.status === 429 || e.status >= 500 || !e.status; // 429限速 / 5xx / 网络断(无status)
+      if (!retriable || i === tries) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
+    }
   }
 }
 
@@ -98,7 +102,10 @@ let done = 0, empty = 0, skip = 0;
 for (const kp of targets) {
   // 可重入：已抽过的跳过（被 TPD/中断打断后重跑即续，不重复烧钱）
   if (commit && Array.isArray(kp.ext.l1_keypoints) && kp.ext.l1_keypoints.length >= 2) { skip++; continue; }
-  const { keypoints, reason } = await extract(kp);
+  // 单考点异常（网络断/解析坏/重试耗尽）只跳过该点、回退旧逻辑，绝不让整批崩
+  let keypoints = [], reason = "";
+  try { ({ keypoints, reason } = await extract(kp)); }
+  catch (e) { keypoints = []; reason = "调用异常:" + String(e?.message || e).slice(0, 60); }
   if (!commit) {
     console.log(`==== ${kp.kp_id} 「${kp.ext.name}」`);
     console.log(`  旧靶(generateL1): ${JSON.stringify((kp.ext.l1_keypoints && []) || "").slice(0, 0)}`);
@@ -113,6 +120,6 @@ for (const kp of targets) {
       if (done % 25 === 0) console.log(`  …已写 ${done}`);
     }
   } else { empty++; if (commit && empty <= 20) console.log(`  ⚠ ${kp.kp_id}「${kp.ext.name}」抽空(${reason || ""})→保留旧逻辑`); }
-  await new Promise((r) => setTimeout(r, commit ? 1200 : 600)); // 躲 RPM
+  await new Promise((r) => setTimeout(r, commit ? 3000 : 600)); // 躲 RPM（3s≈20/min，防退避雪崩）
 }
 console.log(`\n=== 完成：${done} 个有要点${commit ? "(已写库)" : ""}，${empty} 个抽空(回退旧逻辑)${commit ? `，${skip} 个已存在跳过` : ""} ===`);

@@ -22,6 +22,9 @@ function uniqShort(items) {
   return out.slice(0, 20);
 }
 function answerKeyOf(kp) {
+  // 镜像 detection.ts：考点专属 l1_keypoints 优先
+  const cur = kp.ext.l1_keypoints;
+  if (Array.isArray(cur) && cur.length >= 2) return cur;
   const ids = kp.ext.anki_note_ids || [];
   const cs = ids.map((i) => byId.get(i)).filter(Boolean);
   if (!cs.length) return [];
@@ -34,6 +37,8 @@ function answerKeyOf(kp) {
   return uniqShort([...core, ...mn]);
 }
 function buildL1Reference(kp) {
+  const cur = kp.ext.l1_keypoints; // 镜像 detection.ts：专属要点优先做参考
+  if (Array.isArray(cur) && cur.length >= 2) return cur.map((s) => "· " + s).join("\n");
   const ids = kp.ext.anki_note_ids || [];
   const lines = [];
   for (const id of ids) {
