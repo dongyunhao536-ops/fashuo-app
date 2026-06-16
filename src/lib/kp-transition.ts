@@ -53,7 +53,7 @@ export interface TransitionResult {
  * 给定 (考点当前态, 检测档, 评分) 算出新状态。规则（2026-06-14 优化，难度 D 真正接进间隔）：
  * - 干净通过：难度-1、间隔升一档【但不超过难度门控 rungCap】、当前档<封顶则升档；status=passed
  *   ·重学档：若该档复习前=failed（刚挂过），本次通过只"确认"不放长、不升档（错错对→明天再背）
- * - 勉强：同档重测，难度+1，间隔/档级不动；status=untested（难度+1 会在下次通过时压低封顶间隔）
+ * - 勉强：间隔按通过推进一档（受难度门控；重学档不放长），难度+1、档级不动、不计 mastered；status=untested
  * - 未过(遗忘)：难度+2、档级不动、error_count+1；status=failed；间隔——真题高频卡回1天档、中/低频退两档
  * - mastered：按 cap_level 看对应档是否都 passed（本次结果实时并入）；失手会复算掉 mastered → 回炉
  * difficulty 是"忘性指数"：错/勉强累加、稳过递减，越高复习间隔封得越近（见 rungCapForDifficulty）。
@@ -86,7 +86,16 @@ export function computeTransition(
       if (curIdx < capIdx) cur_level = LEVEL_ORDER[curIdx + 1];
     }
   } else if (grade === "勉强") {
+    // 勉强：间隔按【通过】推进一档（用户 2026-06-16 指定——勉强不该像未过那样卡在近端反复冒），
+    // 但仍区别于干净通过：难度+1（不降）、不升档、不计入 mastered。难度+1 抬高遗忘指数、收紧
+    // 门控（rungCap），所以勉强的间隔推进比干净通过更保守。重学档（该档刚挂过）同干净通过：
+    // 只算确认一次、不放长，防"挂了→勉强→直接飞到长间隔"。
+    const levelWasFailed =
+      (level === "L1" ? kp.l1_status : level === "L2" ? kp.l2_status : kp.l3_status) === "failed";
     difficulty = clamp(difficulty + 1, DIFF_MIN, DIFF_MAX);
+    if (!levelWasFailed && interval_idx < rungCapForDifficulty(difficulty)) {
+      interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
+    }
   } else {
     // 未过=遗忘：难度+2；间隔——真题【高频】卡直接砸回 1 天档（重要的点错了第二天必复，
     // 不管之前爬到多高），中/低频按"退两档"（背得越熟退得越少，临时失手不浪费 1 天名额）。

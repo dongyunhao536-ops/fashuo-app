@@ -47,13 +47,24 @@ describe("computeTransition 升降档", () => {
     expect(t.interval_idx).toBe(4);
   });
 
-  it("勉强：同档、难度+1、间隔不动、status=untested", () => {
+  it("勉强：间隔按通过升一档、难度+1、不升档、status=untested", () => {
     const t = run({ cur_level: "L2", interval_idx: 2, difficulty: 5 }, "L2", "勉强");
-    expect(t.cur_level).toBe("L2");
-    expect(t.difficulty).toBe(6);
-    expect(t.interval_idx).toBe(2);
-    expect(t.statusValue).toBe("untested");
+    expect(t.cur_level).toBe("L2"); // 不升档
+    expect(t.difficulty).toBe(6); // 难度+1
+    expect(t.interval_idx).toBe(3); // 间隔按通过推进（D6→rungCap4，2<4 升到 3）
+    expect(t.statusValue).toBe("untested"); // 不记 passed
     expect(t.errorCountDelta).toBe(0);
+    expect(t.mastered).toBe(false); // 勉强不计入 mastered
+  });
+
+  it("勉强·重学档（该档刚 failed）：间隔不放长（防挂了→勉强→飞长间隔）", () => {
+    const t = run(
+      { cur_level: "L1", interval_idx: 2, difficulty: 5, l1_status: "failed" },
+      "L1",
+      "勉强",
+    );
+    expect(t.difficulty).toBe(6);
+    expect(t.interval_idx).toBe(2); // 刚挂过 → 勉强只确认、不放长
   });
 
   it("未过：难度+2、间隔退两档、档级不动、error+1、status=failed", () => {
@@ -179,8 +190,8 @@ describe("已强化触发：曾弱 + 首次 mastered", () => {
 
 describe("北京日历日", () => {
   it("lastReview=今日北京日，nextDue=按间隔档天数后", () => {
-    const t = run({ interval_idx: 0 }, "L1", "勉强"); // 间隔档[0]=1 天
+    const t = run({ interval_idx: 0 }, "L1", "勉强"); // 勉强→升到 idx1，间隔档[1]=3 天
     expect(t.lastReview).toBe("2026-06-20");
-    expect(t.nextDue).toBe("2026-06-21");
+    expect(t.nextDue).toBe("2026-06-23");
   });
 });
