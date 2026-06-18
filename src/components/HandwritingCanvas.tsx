@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useRef } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 /**
  * iPad 手写答题画布（2026-06-17，v2 修跳点+放大）。Apple Pencil 压感 + 严格单指针 + 高 DPI。
@@ -30,10 +30,12 @@ function strokeWidth(refW: number, p: number) {
   return Math.max(1.6, refW * WIDTH_FRAC) * (0.55 + p);
 }
 
+type LogRec = { t: string; id: number; pt: string; ts: number; n?: number; pr: number; b: number };
+
 export const HandwritingCanvas = forwardRef<
   HandwritingCanvasHandle,
-  { className?: string; onInkChange?: (hasInk: boolean) => void }
->(function HandwritingCanvas({ className, onInkChange }, ref) {
+  { className?: string; onInkChange?: (hasInk: boolean) => void; debug?: boolean }
+>(function HandwritingCanvas({ className, onInkChange, debug }, ref) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const strokesRef = useRef<Stroke[]>([]);
@@ -43,6 +45,11 @@ export const HandwritingCanvas = forwardRef<
   const activeTypeRef = useRef<string | null>(null);
   const lastDownTsRef = useRef(0); // 最近一次落笔的硬件时间戳，用来识别"过期"的 up/move
   const sizeRef = useRef({ w: 0, h: 0 });
+
+  // ---- 调试日志（debug=true 时挂原始监听，把 iPad 真实发的事件流显示在画布上）----
+  const logRef = useRef<LogRec[]>([]);
+  const logBaseRef = useRef(0);
+  const [logTick, setLogTick] = useState(0);
 
   const notify = () => onInkChange?.(strokesRef.current.length > 0);
 
@@ -102,6 +109,51 @@ export const HandwritingCanvas = forwardRef<
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 调试：挂原始 pointer 监听（passive，只记录不干扰绘制），把真实事件流显示出来
+  useEffect(() => {
+    if (!debug) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    logRef.current = [];
+    logBaseRef.current = 0;
+    const rec = (t: string, e: PointerEvent, isMove: boolean) => {
+      if (logBaseRef.current === 0) logBaseRef.current = e.timeStamp;
+      const ts = Math.round(e.timeStamp - logBaseRef.current);
+      const arr = logRef.current;
+      if (isMove) {
+        const last = arr[arr.length - 1];
+        if (last && last.t === "move" && last.id === e.pointerId) {
+          last.n = (last.n ?? 1) + 1;
+          last.ts = ts;
+          return; // move 不触发重渲染，避免刷屏
+        }
+        arr.push({ t, id: e.pointerId, pt: e.pointerType, ts, n: 1, pr: +e.pressure.toFixed(2), b: e.buttons });
+      } else {
+        arr.push({ t, id: e.pointerId, pt: e.pointerType, ts, pr: +e.pressure.toFixed(2), b: e.buttons });
+      }
+      if (arr.length > 40) arr.shift();
+      setLogTick((x) => x + 1);
+    };
+    const onDown = (e: PointerEvent) => rec("DOWN", e, false);
+    const onMove = (e: PointerEvent) => rec("move", e, true);
+    const onUp = (e: PointerEvent) => rec("UP", e, false);
+    const onCancel = (e: PointerEvent) => rec("CANCEL", e, false);
+    const onLost = (e: PointerEvent) => rec("lostcap", e, false);
+    const opt = { passive: true } as const;
+    canvas.addEventListener("pointerdown", onDown, opt);
+    canvas.addEventListener("pointermove", onMove, opt);
+    canvas.addEventListener("pointerup", onUp, opt);
+    canvas.addEventListener("pointercancel", onCancel, opt);
+    canvas.addEventListener("lostpointercapture", onLost, opt);
+    return () => {
+      canvas.removeEventListener("pointerdown", onDown);
+      canvas.removeEventListener("pointermove", onMove);
+      canvas.removeEventListener("pointerup", onUp);
+      canvas.removeEventListener("pointercancel", onCancel);
+      canvas.removeEventListener("lostpointercapture", onLost);
+    };
+  }, [debug]);
 
   // clientX/Y → 宽度归一化坐标
   function ptFrom(clientX: number, clientY: number, pressure: number): StrokePt {
@@ -256,6 +308,21 @@ export const HandwritingCanvas = forwardRef<
             清空
           </button>
         </div>
+        {debug && (
+          <div
+            data-tick={logTick}
+            className="pointer-events-none absolute inset-x-0 bottom-0 max-h-[58%] overflow-hidden bg-black/80 p-2 font-mono text-[10px] leading-[1.35] text-green-300"
+          >
+            <div className="text-amber-300">
+              捕获到的笔画数 strokes={strokesRef.current.length} · 快写几笔后截图发我
+            </div>
+            {logRef.current.slice(-16).map((r, i) => (
+              <div key={i}>
+                {r.t} #{r.id} {r.pt} {r.ts}ms{r.n && r.n > 1 ? ` ×${r.n}` : ""} p{r.pr} b{r.b}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

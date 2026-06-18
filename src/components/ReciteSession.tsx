@@ -309,6 +309,7 @@ function AnswerPane({
   // iPad 手写优先：默认手写画布；一键切键盘。手写转出的文字回填下方文本框，可改后再判分。
   const [mode, setMode] = useState<"write" | "type">("write");
   const [fullscreen, setFullscreen] = useState(false);
+  const [debug, setDebug] = useState(false);
   const canvasRef = useRef<HandwritingCanvasHandle>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [ocrMsg, setOcrMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -416,6 +417,7 @@ function AnswerPane({
 
           <HandwritingCanvas
             ref={canvasRef}
+            debug={debug}
             className={fullscreen ? "min-h-0 flex-1" : "h-[46vh] min-h-[300px] md:h-[58vh]"}
           />
 
@@ -448,6 +450,13 @@ function AnswerPane({
               {transcribing ? "识别中…" : "转成文字 ↓"}
             </button>
           </div>
+          <button
+            type="button"
+            onClick={() => setDebug((d) => !d)}
+            className="self-start text-[11px] text-label3 underline"
+          >
+            {debug ? "关闭调试" : "🐞 调试（断笔时点开，写几笔截图发我）"}
+          </button>
         </div>
       )}
 
