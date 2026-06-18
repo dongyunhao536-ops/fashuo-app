@@ -308,6 +308,7 @@ function AnswerPane({
 }) {
   // iPad 手写优先：默认手写画布；一键切键盘。手写转出的文字回填下方文本框，可改后再判分。
   const [mode, setMode] = useState<"write" | "type">("write");
+  const [fullscreen, setFullscreen] = useState(false);
   const canvasRef = useRef<HandwritingCanvasHandle>(null);
   const [transcribing, setTranscribing] = useState(false);
   const [ocrMsg, setOcrMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
@@ -393,29 +394,60 @@ function AnswerPane({
       </div>
 
       {mode === "write" && (
-        <>
+        <div
+          className={
+            fullscreen
+              ? "fixed inset-0 z-[60] flex flex-col gap-2 bg-bg p-3 pt-[max(12px,env(safe-area-inset-top))] pb-[max(12px,env(safe-area-inset-bottom))]"
+              : "mt-3 flex flex-col gap-2"
+          }
+        >
+          {fullscreen && (
+            <div className="flex items-center justify-between px-0.5">
+              <span className="text-[13px] text-label2">手写作答 · 全屏（Apple Pencil）</span>
+              <button
+                type="button"
+                onClick={() => setFullscreen(false)}
+                className="rounded-[10px] bg-fill px-4 py-1.5 text-[14px] font-medium text-label"
+              >
+                完成 ✓
+              </button>
+            </div>
+          )}
+
           <HandwritingCanvas
             ref={canvasRef}
-            className="mt-3 h-[300px] md:h-[440px] lg:h-[480px]"
+            className={fullscreen ? "min-h-0 flex-1" : "h-[46vh] min-h-[300px] md:h-[58vh]"}
           />
-          <button
-            type="button"
-            onClick={transcribe}
-            disabled={transcribing || grading}
-            className="mt-2 w-full rounded-[12px] bg-fill py-2.5 text-[14px] font-medium text-blue disabled:opacity-40"
-          >
-            {transcribing ? "识别中…" : "转成文字 ↓"}
-          </button>
-        </>
-      )}
 
-      {ocrMsg && (
-        <div
-          className={`mt-2 rounded-[10px] p-2.5 text-[12px] ${
-            ocrMsg.kind === "ok" ? "bg-blue/12 text-blue-soft" : "bg-orange/15 text-orange"
-          }`}
-        >
-          {ocrMsg.text}
+          {ocrMsg && (
+            <div
+              className={`rounded-[10px] p-2.5 text-[12px] ${
+                ocrMsg.kind === "ok" ? "bg-blue/12 text-blue-soft" : "bg-orange/15 text-orange"
+              }`}
+            >
+              {ocrMsg.text}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {!fullscreen && (
+              <button
+                type="button"
+                onClick={() => setFullscreen(true)}
+                className="shrink-0 rounded-[12px] bg-fill px-4 py-2.5 text-[14px] font-medium text-label"
+              >
+                ⤢ 放大书写
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={transcribe}
+              disabled={transcribing || grading}
+              className="flex-1 rounded-[12px] bg-blue/15 py-2.5 text-[14px] font-semibold text-blue disabled:opacity-40"
+            >
+              {transcribing ? "识别中…" : "转成文字 ↓"}
+            </button>
+          </div>
         </div>
       )}
 
