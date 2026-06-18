@@ -26,7 +26,7 @@ export default async function CardPage({
 
   if (!card) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-6">
+      <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-6">
         <div className="glass-card rounded-[16px] p-8 text-center text-[13px] text-label3">
           找不到卡片 {noteId}
         </div>
@@ -39,7 +39,7 @@ export default async function CardPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
         <Link href={backHref} className="text-[15px] text-blue">
           ‹ 全卡浏览

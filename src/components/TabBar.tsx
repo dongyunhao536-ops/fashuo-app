@@ -44,7 +44,7 @@ const ICONS: Record<TabBarProps["active"], React.ReactNode> = {
 export function TabBar({ active }: TabBarProps) {
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-hairline bg-card/90 backdrop-blur-xl">
-      <div className="mx-auto flex max-w-md items-stretch justify-around pb-[env(safe-area-inset-bottom)]">
+      <div className="mx-auto flex max-w-md md:max-w-3xl items-stretch justify-around pb-[env(safe-area-inset-bottom)]">
         {TABS.map((t) => {
           const on = t.key === active;
           return (

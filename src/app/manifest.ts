@@ -12,7 +12,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "云的定制法硕备考 APP（背诵+答疑+教练）",
     start_url: "/",
     display: "standalone",
-    orientation: "portrait",
+    // iPad 横竖屏自由旋转（2026-06-17）：原锁 portrait，iPad 配键盘横屏用会被卡。
+    orientation: "any",
     background_color: "#000000",
     theme_color: "#000000",
     icons: [

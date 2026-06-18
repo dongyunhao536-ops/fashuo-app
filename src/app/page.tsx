@@ -33,7 +33,7 @@ export default async function DashboardPage() {
   const donePct = todayTarget ? Math.round((doneToday / todayTarget) * 100) : 0;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
       <header className="flex items-baseline justify-between px-5">
         <h1 className="text-[28px] font-bold tracking-tight">今日</h1>
         <span className="text-[12px] text-label3">2026 法硕（非法学）· 375+</span>

@@ -6,7 +6,7 @@
  */
 export default function RootLoading() {
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <div className="h-9 w-32 animate-pulse rounded-[8px] bg-card" />
       <div className="mt-2 h-24 animate-pulse rounded-[14px] bg-card" />
       <div className="mt-3 rounded-[12px] bg-card">

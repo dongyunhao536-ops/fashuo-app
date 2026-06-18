@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
 import { AnkiCardView } from "./AnkiCardView";
+import { HandwritingCanvas, type HandwritingCanvasHandle } from "./HandwritingCanvas";
 import { postStreamedJson } from "@/lib/stream-client";
 
 /**
@@ -305,6 +306,56 @@ function AnswerPane({
   onSubmit: () => void;
   grading: boolean;
 }) {
+  // iPad 手写优先：默认手写画布；一键切键盘。手写转出的文字回填下方文本框，可改后再判分。
+  const [mode, setMode] = useState<"write" | "type">("write");
+  const canvasRef = useRef<HandwritingCanvasHandle>(null);
+  const [transcribing, setTranscribing] = useState(false);
+  const [ocrMsg, setOcrMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  async function transcribe() {
+    const png = canvasRef.current?.exportPng();
+    if (!png) {
+      setOcrMsg({ kind: "err", text: "先在画布上写点东西再转。" });
+      return;
+    }
+    setTranscribing(true);
+    setOcrMsg(null);
+    try {
+      const { status, data } = await postStreamedJson<{
+        text?: string;
+        costText?: string;
+        error?: string;
+      }>("/api/detect/transcribe", {
+        imageBase64: png.base64,
+        mediaType: png.mediaType,
+        level,
+      });
+      if (status >= 400) throw new Error(data.error ?? "转文字失败");
+      const t = (data.text ?? "").trim();
+      if (!t) {
+        setOcrMsg({
+          kind: "err",
+          text: "没识别出文字——写清楚些再试，或切到键盘直接打字。",
+        });
+        return;
+      }
+      // 追加（支持分多次手写）；落到下方文本框，用户可逐字校对
+      setUserAnswer(userAnswer.trim() ? `${userAnswer.trim()}\n${t}` : t);
+      canvasRef.current?.clear();
+      setOcrMsg({
+        kind: "ok",
+        text: `已转成文字${data.costText ? ` · ${data.costText}` : ""}，在下方校对/修改后提交。`,
+      });
+    } catch (e) {
+      setOcrMsg({
+        kind: "err",
+        text: `${e instanceof Error ? e.message : String(e)}（可切键盘直接打字，或用 iPad 系统手写键盘）`,
+      });
+    } finally {
+      setTranscribing(false);
+    }
+  }
+
   return (
     <div className="rounded-[12px] bg-card p-4">
       <span className="text-[12px] uppercase tracking-wide text-label2">
@@ -313,20 +364,74 @@ function AnswerPane({
       {question.warning && (
         <div className="mt-2 text-[11px] text-orange">{question.warning}</div>
       )}
-      <p className="mt-2 whitespace-pre-wrap text-[16px] font-medium leading-relaxed">
+      <p className="mt-2 whitespace-pre-wrap text-[16px] font-medium leading-relaxed md:text-[17px]">
         {question.question}
       </p>
+
+      {/* 输入方式：手写画布 / 键盘 —— iOS segmented 同款，可点 */}
+      <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
+        {(
+          [
+            ["write", "✍️ 手写"],
+            ["type", "⌨️ 键盘"],
+          ] as const
+        ).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => setMode(m)}
+            disabled={grading}
+            className={`flex-1 rounded-[8px] py-1.5 text-center text-[12.5px] font-medium transition ${
+              mode === m
+                ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+                : "text-label3"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {mode === "write" && (
+        <>
+          <HandwritingCanvas
+            ref={canvasRef}
+            className="mt-3 h-[300px] md:h-[440px] lg:h-[480px]"
+          />
+          <button
+            type="button"
+            onClick={transcribe}
+            disabled={transcribing || grading}
+            className="mt-2 w-full rounded-[12px] bg-fill py-2.5 text-[14px] font-medium text-blue disabled:opacity-40"
+          >
+            {transcribing ? "识别中…" : "转成文字 ↓"}
+          </button>
+        </>
+      )}
+
+      {ocrMsg && (
+        <div
+          className={`mt-2 rounded-[10px] p-2.5 text-[12px] ${
+            ocrMsg.kind === "ok" ? "bg-blue/12 text-blue-soft" : "bg-orange/15 text-orange"
+          }`}
+        >
+          {ocrMsg.text}
+        </div>
+      )}
+
       <textarea
         value={userAnswer}
         onChange={(e) => setUserAnswer(e.target.value)}
         disabled={grading}
-        rows={level === "L1" ? 4 : 7}
+        rows={mode === "write" ? 3 : level === "L1" ? 4 : 7}
         placeholder={
-          level === "L1"
-            ? "默写关键词/要点（逐条或用分号隔开即可，不必逐字）…"
-            : "写出你的理解（结论 + 法理依据 + 涵摄）…"
+          mode === "write"
+            ? "识别结果会落在这里——可逐字校对、补漏（也能直接用 iPad 系统手写键盘写）…"
+            : level === "L1"
+              ? "默写关键词/要点（逐条或用分号隔开即可，不必逐字）…"
+              : "写出你的理解（结论 + 法理依据 + 涵摄）…"
         }
-        className="mt-3 w-full resize-none rounded-[10px] border border-hairline bg-card2 p-3 text-[14px] leading-relaxed text-label outline-none placeholder:text-label3 focus:border-blue"
+        className="mt-3 w-full resize-none rounded-[10px] border border-hairline bg-card2 p-3 text-[14px] leading-relaxed text-label outline-none placeholder:text-label3 focus:border-blue md:text-[15px]"
       />
       <button
         onClick={onSubmit}
@@ -337,7 +442,9 @@ function AnswerPane({
           ? level === "L1"
             ? "评分中…"
             : "评分中… Opus grep 教材锚定（约 1-3 分钟）"
-          : "提交评分"}
+          : mode === "write" && !userAnswer.trim()
+            ? "先「转成文字」再提交"
+            : "提交评分"}
       </button>
     </div>
   );

@@ -26,7 +26,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
   const shownWeak = subject ? allWeak.filter((w) => w.subject === subject) : allWeak;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
         <div className="flex items-baseline justify-between px-1">
           <h1 className="text-[28px] font-bold tracking-tight">教练</h1>

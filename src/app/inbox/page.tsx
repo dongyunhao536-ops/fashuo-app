@@ -52,7 +52,7 @@ export default async function InboxPage() {
   const types = [...byType.keys()].sort((a, b) => rank(a) - rank(b));
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
       <header className="flex items-center justify-between px-4">
         <Link href="/" className="text-[15px] text-blue">
           ‹ 今日

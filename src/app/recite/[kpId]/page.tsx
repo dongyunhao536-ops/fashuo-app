@@ -36,7 +36,7 @@ export default async function ReciteKpPage({
     material = await getStudyMaterial(kpId);
   } catch {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-6">
+      <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-6">
         <div className="rounded-[12px] bg-card p-8 text-center text-[13px] text-label3">
           找不到考点 {kpId}
         </div>
@@ -68,7 +68,7 @@ export default async function ReciteKpPage({
   }
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header className="px-1">
         <Link href={listHref} className="inline-flex items-center gap-0.5 text-[15px] text-blue">
           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.2}>

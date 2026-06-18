@@ -27,7 +27,7 @@ export default async function DuelPage({
     const pair = parsePair(path);
     const content = await readPairContent(path);
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+      <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
         <header className="flex items-center justify-between">
           <Link href="/duel" className="text-[15px] text-blue">
             ‹ 易混
@@ -55,7 +55,7 @@ export default async function DuelPage({
   );
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
         <div className="flex items-baseline justify-between px-1">
           <h1 className="text-[28px] font-bold tracking-tight">易混对决</h1>
