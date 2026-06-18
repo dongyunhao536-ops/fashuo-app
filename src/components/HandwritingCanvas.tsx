@@ -114,11 +114,18 @@ export const HandwritingCanvas = forwardRef<
   function onPointerDown(e: React.PointerEvent) {
     if (e.pointerType === "pen") penSeenRef.current = true;
     if (e.pointerType === "touch" && penSeenRef.current) return; // 防手掌/手指
-    // 已在画 → 忽略多余接触点；唯一例外：pen 抢占之前误起的 touch（首笔手掌先落的情形）
-    if (activeIdRef.current !== null) {
-      const supersede = e.pointerType === "pen" && activeTypeRef.current === "touch";
-      if (!supersede) return;
-      strokesRef.current.pop(); // 丢掉那道手掌痕
+
+    if (activeIdRef.current !== null && activeIdRef.current !== e.pointerId) {
+      // 已有活动指针。第二个【非笔】接触点（手掌/二指）→ 忽略，保护当前笔画。
+      if (e.pointerType !== "pen") return;
+      // 是笔：单支 Pencil 不可能同时两点落屏 → 上一笔其实已抬起（只是 pointerup 慢/丢了，
+      // 快速一笔一划时尤甚）。这里直接【接管】成新笔画，绝不丢掉这一笔（修"写快了就断"）。
+      try {
+        canvasRef.current?.releasePointerCapture(activeIdRef.current);
+      } catch {
+        /* ignore */
+      }
+      if (activeTypeRef.current === "touch") strokesRef.current.pop(); // 上一道是手掌痕才丢
       curRef.current = null;
     }
     e.preventDefault();
