@@ -41,6 +41,7 @@ export const HandwritingCanvas = forwardRef<
   const penSeenRef = useRef(false);
   const activeIdRef = useRef<number | null>(null);
   const activeTypeRef = useRef<string | null>(null);
+  const lastDownTsRef = useRef(0); // 最近一次落笔的硬件时间戳，用来识别"过期"的 up/move
   const sizeRef = useRef({ w: 0, h: 0 });
 
   const notify = () => onInkChange?.(strokesRef.current.length > 0);
@@ -129,6 +130,7 @@ export const HandwritingCanvas = forwardRef<
       curRef.current = null;
     }
     e.preventDefault();
+    lastDownTsRef.current = e.nativeEvent.timeStamp;
     activeIdRef.current = e.pointerId;
     activeTypeRef.current = e.pointerType;
     try {
@@ -146,6 +148,7 @@ export const HandwritingCanvas = forwardRef<
 
   function onPointerMove(e: React.PointerEvent) {
     if (activeIdRef.current === null || e.pointerId !== activeIdRef.current) return;
+    if (e.nativeEvent.timeStamp < lastDownTsRef.current) return; // 过期 move（属上一笔，防污染/跳点）
     const s = curRef.current;
     if (!s) return;
     e.preventDefault();
@@ -165,6 +168,9 @@ export const HandwritingCanvas = forwardRef<
 
   function endStroke(e: React.PointerEvent) {
     if (e.pointerId !== activeIdRef.current) return;
+    // 过期的 up/cancel（同一 pointerId 被复用 + 延迟到达，其实属于上一笔）→ 别拿它切断当前这一笔。
+    // 这才是"快速一笔一划写就断"的真正根因：上一笔的 pointerup 比这一笔的 pointerdown 还晚到。
+    if (e.nativeEvent.timeStamp < lastDownTsRef.current) return;
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
