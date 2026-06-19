@@ -42,10 +42,8 @@ export const HandwritingCanvas = forwardRef<
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const strokesRef = useRef<Stroke[]>([]);
   const curRef = useRef<Stroke | null>(null);
-  const penSeenRef = useRef(false);
   const activeIdRef = useRef<number | null>(null);
   const activeTypeRef = useRef<string | null>(null);
-  const lastDownTsRef = useRef(0); // 最近一次落笔的硬件时间戳，用来识别"过期"的 up/move
   const sizeRef = useRef({ w: 0, h: 0 });
 
   // ---- 调试日志（debug=true 时挂原始监听，把 iPad 真实发的事件流显示在画布上）----
@@ -176,32 +174,34 @@ export const HandwritingCanvas = forwardRef<
     return { x: lx / rect.width, y: ly / rect.width, p };
   }
 
-  function onPointerDown(e: React.PointerEvent) {
-    if (e.pointerType === "pen") penSeenRef.current = true;
-    if (e.pointerType === "touch" && penSeenRef.current) {
-      dlog("skip DOWN: touch(防手掌)");
-      return; // 防手掌/手指
-    }
+  function appendPoint(s: Stroke, clientX: number, clientY: number, pressure: number) {
+    const pt = ptFrom(clientX, clientY, pressure);
+    const prev = s[s.length - 1];
+    s.push(pt);
+    const c = ctx();
+    if (c) segTo(c, prev, pt, sizeRef.current.w);
+  }
 
+  // 极简路径（和"手指能用"完全同款）：只认单个活动指针；不按 pointerType 全局拒绝、不按时间戳丢弃。
+  // 之前那些守卫是基于错误假设加的，正在误杀电容笔的事件（手指因为走简单路径才没事）。
+  function onPointerDown(e: React.PointerEvent) {
     if (activeIdRef.current !== null && activeIdRef.current !== e.pointerId) {
-      // 已有活动指针。第二个【非笔】接触点（手掌/二指）→ 忽略，保护当前笔画。
-      if (e.pointerType !== "pen") {
-        dlog(`skip DOWN: 2nd ${e.pointerType}`);
+      // 已在画。第二个接触点（多为手掌）默认忽略；唯一例外：pen 可抢占正在画的非 pen（手掌）。
+      const supersede = e.pointerType === "pen" && activeTypeRef.current !== "pen";
+      if (!supersede) {
+        dlog(`ignore 2nd ${e.pointerType}#${e.pointerId}`);
         return;
       }
-      dlog(`TAKEOVER prev#${activeIdRef.current}`);
-      // 是笔：单支 Pencil 不可能同时两点落屏 → 上一笔其实已抬起（只是 pointerup 慢/丢了，
-      // 快速一笔一划时尤甚）。这里直接【接管】成新笔画，绝不丢掉这一笔（修"写快了就断"）。
+      dlog(`pen takeover ${activeTypeRef.current}#${activeIdRef.current}`);
       try {
         canvasRef.current?.releasePointerCapture(activeIdRef.current);
       } catch {
         /* ignore */
       }
-      if (activeTypeRef.current === "touch") strokesRef.current.pop(); // 上一道是手掌痕才丢
+      strokesRef.current.pop(); // 抢占掉的那道（手掌痕）丢弃
       curRef.current = null;
     }
     e.preventDefault();
-    lastDownTsRef.current = e.nativeEvent.timeStamp;
     activeIdRef.current = e.pointerId;
     activeTypeRef.current = e.pointerType;
     try {
@@ -218,38 +218,21 @@ export const HandwritingCanvas = forwardRef<
   }
 
   function onPointerMove(e: React.PointerEvent) {
-    if (activeIdRef.current === null || e.pointerId !== activeIdRef.current) return;
-    if (e.nativeEvent.timeStamp < lastDownTsRef.current) {
-      dlog("skip move: stale");
-      return; // 过期 move（属上一笔，防污染/跳点）
-    }
+    if (e.pointerId !== activeIdRef.current) return; // 只画活动指针，其它接触点（手掌）忽略
     const s = curRef.current;
     if (!s) return;
     e.preventDefault();
-    const c = ctx();
-    const w = sizeRef.current.w;
     const native = e.nativeEvent as PointerEvent;
     const coalesced =
       typeof native.getCoalescedEvents === "function" ? native.getCoalescedEvents() : [];
     const evs = coalesced.length ? coalesced : [native];
-    for (const ev of evs) {
-      const pt = ptFrom(ev.clientX, ev.clientY, ev.pressure);
-      const prev = s[s.length - 1];
-      s.push(pt);
-      if (c) segTo(c, prev, pt, w);
-    }
+    for (const ev of evs) appendPoint(s, ev.clientX, ev.clientY, ev.pressure);
   }
 
   function endStroke(e: React.PointerEvent) {
-    if (e.pointerId !== activeIdRef.current) {
-      dlog(`skip UP: #${e.pointerId}≠active#${activeIdRef.current}`);
-      return;
-    }
-    // 过期的 up/cancel（同一 pointerId 被复用 + 延迟到达，其实属于上一笔）→ 别拿它切断当前这一笔。
-    if (e.nativeEvent.timeStamp < lastDownTsRef.current) {
-      dlog("skip UP: stale");
-      return;
-    }
+    if (e.pointerId !== activeIdRef.current) return; // 非活动指针的 up（手掌抬起等），不收尾
+    const s = curRef.current;
+    if (s) appendPoint(s, e.clientX, e.clientY, e.pressure); // 抬笔点也补进笔画，别丢快笔的尾巴
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -265,7 +248,6 @@ export const HandwritingCanvas = forwardRef<
     curRef.current = null;
     activeIdRef.current = null;
     activeTypeRef.current = null;
-    penSeenRef.current = false;
     redraw();
     notify();
   }
