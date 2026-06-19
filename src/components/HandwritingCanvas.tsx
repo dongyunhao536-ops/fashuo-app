@@ -20,6 +20,8 @@ export interface HandwritingCanvasHandle {
   exportPng: () => { base64: string; mediaType: "image/png" } | null;
   isEmpty: () => boolean;
   clear: () => void;
+  /** 调试：导出当前事件日志文本（给"复制日志"用） */
+  getLog: () => string;
 }
 
 const INK = "#111111";
@@ -50,6 +52,15 @@ export const HandwritingCanvas = forwardRef<
   const logRef = useRef<LogRec[]>([]);
   const logBaseRef = useRef(0);
   const [logTick, setLogTick] = useState(0);
+
+  // 我自己代码里的决策日志（synthetic：pt="" 标识）—— 断笔时能看到是哪条逻辑丢了事件
+  function dlog(tag: string) {
+    if (!debug) return;
+    const ts = logBaseRef.current ? Math.round(performance.now() - logBaseRef.current) : 0;
+    logRef.current.push({ t: tag, id: -1, pt: "", ts, pr: 0, b: 0 });
+    if (logRef.current.length > 60) logRef.current.shift();
+    setLogTick((x) => x + 1);
+  }
 
   const notify = () => onInkChange?.(strokesRef.current.length > 0);
 
@@ -98,6 +109,7 @@ export const HandwritingCanvas = forwardRef<
     const c = canvas.getContext("2d");
     if (c) c.setTransform(dpr, 0, 0, dpr, 0, 0);
     redraw();
+    dlog(`RESIZE/clear w=${w}`); // 若断笔时出现它 = 写字途中被意外重绘清屏
   }
 
   useEffect(() => {
@@ -132,7 +144,7 @@ export const HandwritingCanvas = forwardRef<
       } else {
         arr.push({ t, id: e.pointerId, pt: e.pointerType, ts, pr: +e.pressure.toFixed(2), b: e.buttons });
       }
-      if (arr.length > 40) arr.shift();
+      if (arr.length > 60) arr.shift();
       setLogTick((x) => x + 1);
     };
     const onDown = (e: PointerEvent) => rec("DOWN", e, false);
@@ -166,11 +178,18 @@ export const HandwritingCanvas = forwardRef<
 
   function onPointerDown(e: React.PointerEvent) {
     if (e.pointerType === "pen") penSeenRef.current = true;
-    if (e.pointerType === "touch" && penSeenRef.current) return; // 防手掌/手指
+    if (e.pointerType === "touch" && penSeenRef.current) {
+      dlog("skip DOWN: touch(防手掌)");
+      return; // 防手掌/手指
+    }
 
     if (activeIdRef.current !== null && activeIdRef.current !== e.pointerId) {
       // 已有活动指针。第二个【非笔】接触点（手掌/二指）→ 忽略，保护当前笔画。
-      if (e.pointerType !== "pen") return;
+      if (e.pointerType !== "pen") {
+        dlog(`skip DOWN: 2nd ${e.pointerType}`);
+        return;
+      }
+      dlog(`TAKEOVER prev#${activeIdRef.current}`);
       // 是笔：单支 Pencil 不可能同时两点落屏 → 上一笔其实已抬起（只是 pointerup 慢/丢了，
       // 快速一笔一划时尤甚）。这里直接【接管】成新笔画，绝不丢掉这一笔（修"写快了就断"）。
       try {
@@ -200,7 +219,10 @@ export const HandwritingCanvas = forwardRef<
 
   function onPointerMove(e: React.PointerEvent) {
     if (activeIdRef.current === null || e.pointerId !== activeIdRef.current) return;
-    if (e.nativeEvent.timeStamp < lastDownTsRef.current) return; // 过期 move（属上一笔，防污染/跳点）
+    if (e.nativeEvent.timeStamp < lastDownTsRef.current) {
+      dlog("skip move: stale");
+      return; // 过期 move（属上一笔，防污染/跳点）
+    }
     const s = curRef.current;
     if (!s) return;
     e.preventDefault();
@@ -219,10 +241,15 @@ export const HandwritingCanvas = forwardRef<
   }
 
   function endStroke(e: React.PointerEvent) {
-    if (e.pointerId !== activeIdRef.current) return;
+    if (e.pointerId !== activeIdRef.current) {
+      dlog(`skip UP: #${e.pointerId}≠active#${activeIdRef.current}`);
+      return;
+    }
     // 过期的 up/cancel（同一 pointerId 被复用 + 延迟到达，其实属于上一笔）→ 别拿它切断当前这一笔。
-    // 这才是"快速一笔一划写就断"的真正根因：上一笔的 pointerup 比这一笔的 pointerdown 还晚到。
-    if (e.nativeEvent.timeStamp < lastDownTsRef.current) return;
+    if (e.nativeEvent.timeStamp < lastDownTsRef.current) {
+      dlog("skip UP: stale");
+      return;
+    }
     try {
       canvasRef.current?.releasePointerCapture(e.pointerId);
     } catch {
@@ -243,9 +270,17 @@ export const HandwritingCanvas = forwardRef<
     notify();
   }
 
+  function fmtRec(r: LogRec) {
+    return r.pt === ""
+      ? `» ${r.t} ${r.ts}ms`
+      : `${r.t} #${r.id} ${r.pt} ${r.ts}ms${r.n && r.n > 1 ? ` ×${r.n}` : ""} p${r.pr} b${r.b}`;
+  }
+
   useImperativeHandle(ref, () => ({
     isEmpty: () => strokesRef.current.length === 0,
     clear: resetAll,
+    getLog: () =>
+      `strokes=${strokesRef.current.length}\n` + logRef.current.map(fmtRec).join("\n"),
     exportPng: () => {
       if (strokesRef.current.length === 0) return null;
       const { w, h } = sizeRef.current;
@@ -314,11 +349,11 @@ export const HandwritingCanvas = forwardRef<
             className="pointer-events-none absolute inset-x-0 bottom-0 max-h-[58%] overflow-hidden bg-black/80 p-2 font-mono text-[10px] leading-[1.35] text-green-300"
           >
             <div className="text-amber-300">
-              捕获到的笔画数 strokes={strokesRef.current.length} · 快写几笔后截图发我
+              捕获笔画数 strokes={strokesRef.current.length} · 写到断的那笔后「复制日志」发我
             </div>
-            {logRef.current.slice(-16).map((r, i) => (
-              <div key={i}>
-                {r.t} #{r.id} {r.pt} {r.ts}ms{r.n && r.n > 1 ? ` ×${r.n}` : ""} p{r.pr} b{r.b}
+            {logRef.current.slice(-22).map((r, i) => (
+              <div key={i} className={r.pt === "" ? "text-cyan-300" : undefined}>
+                {fmtRec(r)}
               </div>
             ))}
           </div>

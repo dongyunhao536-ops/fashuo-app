@@ -450,13 +450,32 @@ function AnswerPane({
               {transcribing ? "识别中…" : "转成文字 ↓"}
             </button>
           </div>
-          <button
-            type="button"
-            onClick={() => setDebug((d) => !d)}
-            className="self-start text-[11px] text-label3 underline"
-          >
-            {debug ? "关闭调试" : "🐞 调试（断笔时点开，写几笔截图发我）"}
-          </button>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setDebug((d) => !d)}
+              className="text-[11px] text-label3 underline"
+            >
+              {debug ? "关闭调试" : "🐞 调试（断笔时点开）"}
+            </button>
+            {debug && (
+              <button
+                type="button"
+                onClick={async () => {
+                  const t = canvasRef.current?.getLog() ?? "";
+                  try {
+                    await navigator.clipboard.writeText(t);
+                    setOcrMsg({ kind: "ok", text: "日志已复制，粘贴发我即可。" });
+                  } catch {
+                    setOcrMsg({ kind: "err", text: "复制失败，截图发我也行。" });
+                  }
+                }}
+                className="text-[11px] text-blue underline"
+              >
+                📋 复制日志
+              </button>
+            )}
+          </div>
         </div>
       )}
 
