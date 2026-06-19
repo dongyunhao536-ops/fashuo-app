@@ -28,12 +28,20 @@ export type Level = "L1" | "L2" | "L3";
 export type QuestionSource = "anki" | "real" | "adapted" | "ai" | "none";
 export type Grade = "干净通过" | "勉强" | "未过";
 
+/** L1 关键词填空的一条：挖空句（每个空用 ▢ 占位）+ 各空标准答案（顺序与 ▢ 对应）。 */
+export interface ClozeItem {
+  s: string;
+  a: string[];
+}
+
 export interface DetectQuestion {
   kpId: string;
   level: Level;
   question: string;
-  /** L1=参考关键词集（评分用）；L2/L3=参考答案要点 */
+  /** L1=参考关键词集（评分用，填空时=各空答案展平）；L2/L3=参考答案要点 */
   answerKey: string[];
+  /** L1 关键词填空：有则前端渲染挖空填写，answerKey=各空答案展平（顺序一致）；无则退回普通 L1 文本框 */
+  cloze?: ClozeItem[];
   source: QuestionSource;
   /** 来源标注：anki note_id / 真题 "2024-48" / 教材行号区间 / "ai-generated"，供抽查 */
   sourceRef: string;
@@ -279,7 +287,7 @@ export async function generateQuestion(opts: {
 }): Promise<DetectQuestion> {
   const kp = await loadKp(opts.kpId);
   const level: Level = opts.level ?? (kp.cur_level as Level);
-  if (level === "L1") return generateL1(kp);
+  if (level === "L1") return generateL1WithCloze(kp);
   return generateL2L3(kp, level);
 }
 
@@ -358,6 +366,97 @@ function curatedKeypoints(kp: KpRow): string[] {
   const raw = (kp.ext as { l1_keypoints?: unknown })?.l1_keypoints;
   if (!Array.isArray(raw)) return [];
   return raw.map((s) => String(s).trim()).filter((s) => s.length >= 2 && s.length <= 60);
+}
+
+/**
+ * L1 出题 + 关键词填空（generateQuestion 的 L1 入口，2026-06-18）。
+ * 要点是整句，故"关键词填空"= 把句中关键术语挖空让用户填。挖空用 Haiku 现造、缓存到
+ * ext.l1_cloze（首次慢、之后免费秒出）。挖空失败/缺料 → 退回普通 L1（前端文本框）。
+ */
+async function generateL1WithCloze(kp: KpRow): Promise<DetectQuestion> {
+  const base = generateL1(kp);
+  if (base.answerKey.length === 0) return base; // 缺料：无法填空，原样返回（含 warning，前端走文本框/提示跳 L2）
+  const cloze = await getOrBuildCloze(kp, base.answerKey);
+  if (cloze.length === 0) return base; // 挖空失败：退回普通 L1
+  const kpName = ((kp.ext as { name?: string })?.name ?? "").trim() || kp.kp_id;
+  return {
+    ...base,
+    question: `关键词填空：${kpName}\n（把每个空缺的关键术语填上即可）`,
+    answerKey: cloze.flatMap((c) => c.a), // 评分/回传：各空答案展平，顺序=渲染顺序
+    cloze,
+  };
+}
+
+/** 读缓存的 l1_cloze；没有就用 Haiku 现造并写回 kp_state.ext.l1_cloze。 */
+async function getOrBuildCloze(kp: KpRow, keypoints: string[]): Promise<ClozeItem[]> {
+  const cached = (kp.ext as { l1_cloze?: unknown })?.l1_cloze;
+  if (Array.isArray(cached) && cached.length > 0) {
+    const valid = cached.filter(
+      (it): it is ClozeItem =>
+        !!it &&
+        typeof (it as ClozeItem).s === "string" &&
+        Array.isArray((it as ClozeItem).a) &&
+        (it as ClozeItem).a.length > 0,
+    );
+    if (valid.length > 0) return valid;
+  }
+  const built = await clozeFromKeypoints(keypoints);
+  if (built.length > 0) {
+    const newExt = { ...(kp.ext as object | null), l1_cloze: built };
+    try {
+      await supabaseAdmin.from("kp_state").update({ ext: newExt }).eq("kp_id", kp.kp_id);
+      (kp as { ext?: unknown }).ext = newExt; // 让本次请求拿到一致结果
+    } catch {
+      /* 写缓存失败不影响本次出题 */
+    }
+  }
+  return built;
+}
+
+/**
+ * 把"整句要点"用 Haiku 挖空成填空题（要点句没预标关键词，需 LLM 挑）。非红线（出题/输入法，
+ * 判分仍是确定性规则）→ 用 MODELS.DRAFT(Haiku) 降级省钱。产物非法/失败 → 返回 []。
+ */
+async function clozeFromKeypoints(keypoints: string[]): Promise<ClozeItem[]> {
+  const picked = keypoints.slice(0, 8);
+  const list = picked.map((k, i) => `${i + 1}. ${k}`).join("\n");
+  const system = `你把中文法考"背诵要点"改成"填空题"。规则：①逐条处理，保留整句结构，只把每条里【最该记的 1~2 个关键术语/数字】挖空，用全角符号 ▢ 占位（一个空一个 ▢）；②不要挖虚词、连词、"的/是/为/在/和"之类，也不要把整句都挖空；③输出严格 JSON 数组，每条形如 {"s":"挖空后的句子","a":["被挖掉的词1","被挖掉的词2"]}，a 的顺序与句中 ▢ 从左到右一一对应、个数相等；④只输出 JSON，不要任何解释。`;
+  const user = `把下面每条要点改成填空：\n${list}`;
+  try {
+    const { message } = await runSingleTurn({
+      system,
+      user,
+      model: MODELS.DRAFT,
+      maxTokens: 1500,
+      route: "cloze",
+    });
+    return parseCloze(extractText(message));
+  } catch {
+    return [];
+  }
+}
+
+/** 容错解析 cloze JSON，并校验 ▢ 个数==答案个数、答案非空。 */
+function parseCloze(text: string): ClozeItem[] {
+  const start = text.indexOf("[");
+  const end = text.lastIndexOf("]");
+  if (start === -1 || end <= start) return [];
+  let arr: unknown;
+  try {
+    arr = JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(arr)) return [];
+  const out: ClozeItem[] = [];
+  for (const it of arr) {
+    const obj = it as { s?: unknown; a?: unknown };
+    const s = typeof obj?.s === "string" ? obj.s.trim() : "";
+    const a = Array.isArray(obj?.a) ? obj.a.map((x) => String(x).trim()).filter(Boolean) : [];
+    const blanks = (s.match(/▢/g) ?? []).length;
+    if (s && a.length > 0 && blanks === a.length) out.push({ s, a });
+  }
+  return out;
 }
 
 /**
@@ -494,13 +593,20 @@ export async function gradeAnswer(opts: {
   sourceRef: string;
   /** 答题耗时秒数（题目呈现→提交）；UI 未传则 null */
   seconds?: number | null;
+  /** L1 关键词填空：各空填入（顺序与 answerKey 一致）。有则走确定性逐空判分 */
+  clozeFilled?: string[];
 }): Promise<GradeResult> {
   const kp = await loadKp(opts.kpId);
   const matchLevel = (kp.ext as { anki_match_level?: string })?.anki_match_level;
-  const result =
-    opts.level === "L1"
-      ? await gradeL1WithFallback(kp, opts.userAnswer, opts.answerKey, matchLevel)
-      : await gradeL2L3(kp, opts);
+  let result: L1Internal;
+  if (opts.level === "L1") {
+    result =
+      opts.clozeFilled && opts.clozeFilled.length > 0
+        ? gradeL1Cloze(opts.clozeFilled, opts.answerKey, matchLevel)
+        : await gradeL1WithFallback(kp, opts.userAnswer, opts.answerKey, matchLevel);
+  } else {
+    result = await gradeL2L3(kp, opts);
+  }
 
   // 写 detection_log
   await supabaseAdmin.from("detection_log").insert({
@@ -629,6 +735,72 @@ export function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: st
     costUsd: 0,
     grepLines: [],
     model: "rule:l1",
+  };
+}
+
+/**
+ * L1 关键词填空判分（确定性规则，免费秒判，保 L1 红线不放水）：逐空比对填入 vs 标准答案。
+ * 容差：归一化后"填入含标准答案"，或"标准答案含填入且填入达 6 成长度"，即算对（容多写字/近义短写）。
+ * 通过线（用户定）：填对 ≥75% → 干净通过；≥50% → 勉强；否则未过。节级共用题源放宽到 60%。
+ */
+function gradeL1Cloze(filled: string[], answers: string[], matchLevel?: string): L1Internal {
+  if (answers.length === 0) {
+    return {
+      grade: "勉强",
+      passed: false,
+      hits: [],
+      missing: [],
+      confidence: 30,
+      starred: true,
+      explanation: "本题无填空答案（缺料），评分不可靠，标★。",
+      costUsd: 0,
+      grepLines: [],
+      model: "rule:l1-cloze",
+    };
+  }
+  const hits: string[] = [];
+  const missing: string[] = [];
+  for (let i = 0; i < answers.length; i++) {
+    const na = keywordCore(answers[i]);
+    const nf = normalize(filled[i] ?? "");
+    const ok =
+      na.length > 0 &&
+      nf.length > 0 &&
+      (nf === na ||
+        nf.includes(na) ||
+        (na.includes(nf) && nf.length >= Math.max(2, Math.ceil(na.length * 0.6))));
+    (ok ? hits : missing).push(answers[i]);
+  }
+  const rate = hits.length / answers.length;
+  const passT = matchLevel === "section" ? 0.6 : 0.75;
+  let grade: Grade;
+  let confidence: number;
+  if (rate >= passT) {
+    grade = "干净通过";
+    confidence = Math.round(80 + rate * 20);
+  } else if (rate >= 0.5) {
+    grade = "勉强";
+    confidence = Math.round(50 + rate * 30);
+  } else {
+    grade = "未过";
+    confidence = Math.round(60 + (1 - rate) * 30);
+  }
+  const pct = Math.round(rate * 100);
+  const explanation =
+    grade === "干净通过"
+      ? `填对 ${hits.length}/${answers.length} 个空（${pct}%），通过。`
+      : `只填对 ${hits.length}/${answers.length} 个空（${pct}%）。下面「缺失要点」是没填对的关键术语，重点补这些。`;
+  return {
+    grade,
+    passed: grade === "干净通过",
+    hits,
+    missing,
+    confidence,
+    starred: false,
+    explanation,
+    costUsd: 0,
+    grepLines: [],
+    model: "rule:l1-cloze",
   };
 }
 

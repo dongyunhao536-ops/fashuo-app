@@ -35,6 +35,7 @@ export async function POST(req: Request) {
       source?: string;
       sourceRef?: string;
       seconds?: unknown;
+      clozeFilled?: unknown;
     };
     try {
       body = await req.json();
@@ -53,6 +54,9 @@ export async function POST(req: Request) {
       typeof body.seconds === "number" && Number.isFinite(body.seconds) && body.seconds > 0
         ? Math.round(body.seconds)
         : null;
+    const clozeFilled = Array.isArray(body.clozeFilled)
+      ? body.clozeFilled.map((x) => String(x))
+      : undefined;
 
     if (!kpId) return { status: 400, body: { error: "kpId 不能为空" } };
     if (!level || !VALID_LEVELS.includes(level as Level)) {
@@ -74,6 +78,7 @@ export async function POST(req: Request) {
         source: source as QuestionSource,
         sourceRef,
         seconds,
+        clozeFilled,
       });
       return { status: 200, body: fmtGradeForUI(result) };
     } catch (err) {

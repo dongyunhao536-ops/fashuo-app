@@ -2,7 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { StudyMaterial, DetectQuestion, Level } from "@/lib/detection";
+import type { StudyMaterial, DetectQuestion, Level, ClozeItem } from "@/lib/detection";
 import { AnkiCardView } from "./AnkiCardView";
 import { HandwritingCanvas, type HandwritingCanvasHandle } from "./HandwritingCanvas";
 import { postStreamedJson } from "@/lib/stream-client";
@@ -60,6 +60,7 @@ export function ReciteSession({
   const [level, setLevel] = useState<Level>(material.level);
   const [question, setQuestion] = useState<DetectQuestion | null>(null);
   const [userAnswer, setUserAnswer] = useState("");
+  const [clozeFilled, setClozeFilled] = useState<string[]>([]); // L1 关键词填空各空填入（顺序同 answerKey）
   const [result, setResult] = useState<GradeResp | null>(null);
   const [error, setError] = useState<string | null>(null);
   // 答题计时：从「题目呈现」到「提交」的秒数 → detection_log.seconds（周报算答题耗时趋势）
@@ -76,6 +77,9 @@ export function ReciteSession({
       );
       if (status >= 400) throw new Error(data.error ?? "出题失败");
       setQuestion(data);
+      setUserAnswer("");
+      // L1 关键词填空：按总空数初始化空串数组；否则清空
+      setClozeFilled(data.cloze && data.cloze.length ? new Array(data.answerKey.length).fill("") : []);
       answerStartRef.current = Date.now(); // 题目呈现即开始计时
       setPhase("answering");
     } catch (e) {
@@ -85,7 +89,13 @@ export function ReciteSession({
   }
 
   async function submit() {
-    if (!question || !userAnswer.trim()) return;
+    if (!question) return;
+    const isCloze = !!(question.cloze && question.cloze.length > 0);
+    // 填空答案拼成可读串写 detection_log；判分走 clozeFilled 逐空比对
+    const ua = isCloze
+      ? clozeFilled.map((x, i) => `${i + 1}.${x.trim()}`).join("  ")
+      : userAnswer;
+    if (isCloze ? clozeFilled.every((x) => !x.trim()) : !userAnswer.trim()) return;
     setError(null);
     setPhase("grading");
     const seconds = answerStartRef.current
@@ -98,11 +108,12 @@ export function ReciteSession({
           kpId: material.kpId,
           level,
           question: question.question,
-          userAnswer,
+          userAnswer: ua,
           answerKey: question.answerKey,
           source: question.source,
           sourceRef: question.sourceRef,
           seconds,
+          clozeFilled: isCloze ? clozeFilled : undefined,
         },
       );
       if (status >= 400) throw new Error(data.error ?? "评分失败");
@@ -156,6 +167,8 @@ export function ReciteSession({
           level={level}
           userAnswer={userAnswer}
           setUserAnswer={setUserAnswer}
+          clozeFilled={clozeFilled}
+          setClozeFilled={setClozeFilled}
           onSubmit={submit}
           grading={phase === "grading"}
         />
@@ -296,6 +309,8 @@ function AnswerPane({
   level,
   userAnswer,
   setUserAnswer,
+  clozeFilled,
+  setClozeFilled,
   onSubmit,
   grading,
 }: {
@@ -303,6 +318,8 @@ function AnswerPane({
   level: Level;
   userAnswer: string;
   setUserAnswer: (s: string) => void;
+  clozeFilled: string[];
+  setClozeFilled: (v: string[]) => void;
   onSubmit: () => void;
   grading: boolean;
 }) {
@@ -358,10 +375,14 @@ function AnswerPane({
     }
   }
 
+  // L1 关键词填空：有 cloze 就走填空 UI；否则（L2/L3，或 L1 无法挖空时）走手写/键盘。
+  const isCloze = level === "L1" && !!(question.cloze && question.cloze.length > 0);
+  const hasInput = isCloze ? clozeFilled.some((x) => x.trim()) : !!userAnswer.trim();
+
   return (
     <div className="rounded-[12px] bg-card p-4">
       <span className="text-[12px] uppercase tracking-wide text-label2">
-        检测 · {level} {level === "L1" ? "记忆" : level === "L2" ? "理解" : "应用"}
+        检测 · {level} {level === "L1" ? (isCloze ? "记忆 · 填空" : "记忆") : level === "L2" ? "理解" : "应用"}
       </span>
       {question.warning && (
         <div className="mt-2 text-[11px] text-orange">{question.warning}</div>
@@ -370,8 +391,19 @@ function AnswerPane({
         {question.question}
       </p>
 
-      {/* 输入方式：手写画布 / 键盘 —— iOS segmented 同款，可点 */}
-      <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
+      {isCloze && (
+        <ClozePane
+          cloze={question.cloze!}
+          filled={clozeFilled}
+          setFilled={setClozeFilled}
+          grading={grading}
+        />
+      )}
+
+      {!isCloze && (
+        <>
+          {/* 输入方式：手写画布 / 键盘 —— iOS segmented 同款，可点 */}
+          <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
         {(
           [
             ["write", "✍️ 手写"],
@@ -493,19 +525,81 @@ function AnswerPane({
         }
         className="mt-3 w-full resize-none rounded-[10px] border border-hairline bg-card2 p-3 text-[14px] leading-relaxed text-label outline-none placeholder:text-label3 focus:border-blue md:text-[15px]"
       />
+        </>
+      )}
       <button
         onClick={onSubmit}
-        disabled={grading || !userAnswer.trim()}
+        disabled={grading || !hasInput}
         className="mt-3 w-full rounded-[14px] bg-blue py-3.5 text-[15px] font-semibold text-white disabled:opacity-40"
       >
         {grading
           ? level === "L1"
             ? "评分中…"
             : "评分中… Opus grep 教材锚定（约 1-3 分钟）"
-          : mode === "write" && !userAnswer.trim()
+          : !isCloze && mode === "write" && !userAnswer.trim()
             ? "先「转成文字」再提交"
             : "提交评分"}
       </button>
+    </div>
+  );
+}
+
+/* ---------------- L1 关键词填空 ---------------- */
+
+function ClozePane({
+  cloze,
+  filled,
+  setFilled,
+  grading,
+}: {
+  cloze: ClozeItem[];
+  filled: string[];
+  setFilled: (v: string[]) => void;
+  grading: boolean;
+}) {
+  const setAt = (i: number, v: string) => {
+    const next = filled.slice();
+    next[i] = v;
+    setFilled(next);
+  };
+  // 每条要点的起始空号（空在 filled 里是全局展平的，顺序同 answerKey）
+  const offsets: number[] = [];
+  let acc = 0;
+  for (const it of cloze) {
+    offsets.push(acc);
+    acc += it.a.length;
+  }
+  return (
+    <div className="mt-3 flex flex-col gap-2.5">
+      <div className="text-[12px] text-label2">把每个 ▢ 处的关键术语填上（共 {acc} 空）：</div>
+      {cloze.map((item, ci) => {
+        const segs = item.s.split("▢"); // segs 数 = 空数 + 1
+        return (
+          <div
+            key={ci}
+            className="rounded-[10px] bg-card2 p-3 text-[15px] leading-[2.2] text-label md:text-[16px]"
+          >
+            <span className="mr-1 select-none text-[12px] text-label3">{ci + 1}.</span>
+            {segs.map((seg, si) => (
+              <span key={si}>
+                {seg}
+                {si < segs.length - 1 && (
+                  <input
+                    value={filled[offsets[ci] + si] ?? ""}
+                    onChange={(e) => setAt(offsets[ci] + si, e.target.value)}
+                    disabled={grading}
+                    placeholder="？"
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    className="mx-1 inline-block w-[7em] rounded-[6px] border-b-2 border-blue/50 bg-blue/10 px-1.5 py-0.5 text-center align-baseline text-[15px] text-blue-soft outline-none focus:border-blue md:text-[16px]"
+                  />
+                )}
+              </span>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

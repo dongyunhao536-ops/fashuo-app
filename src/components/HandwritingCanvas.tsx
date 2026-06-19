@@ -45,6 +45,7 @@ export const HandwritingCanvas = forwardRef<
   const activeIdRef = useRef<number | null>(null);
   const activeTypeRef = useRef<string | null>(null);
   const sizeRef = useRef({ w: 0, h: 0 });
+  const rectRef = useRef<DOMRect | null>(null); // 缓存画布位置，避免每个点都 getBoundingClientRect（拖慢 handler → Safari 丢事件）
 
   // ---- 调试日志（debug=true 时挂原始监听，把 iPad 真实发的事件流显示在画布上）----
   const logRef = useRef<LogRec[]>([]);
@@ -106,6 +107,7 @@ export const HandwritingCanvas = forwardRef<
     canvas.height = Math.round(h * dpr);
     const c = canvas.getContext("2d");
     if (c) c.setTransform(dpr, 0, 0, dpr, 0, 0);
+    rectRef.current = canvas.getBoundingClientRect();
     redraw();
     dlog(`RESIZE/clear w=${w}`); // 若断笔时出现它 = 写字途中被意外重绘清屏
   }
@@ -167,7 +169,7 @@ export const HandwritingCanvas = forwardRef<
 
   // clientX/Y → 宽度归一化坐标
   function ptFrom(clientX: number, clientY: number, pressure: number): StrokePt {
-    const rect = canvasRef.current!.getBoundingClientRect();
+    const rect = rectRef.current ?? canvasRef.current!.getBoundingClientRect();
     const lx = Math.max(0, Math.min(rect.width, clientX - rect.left));
     const ly = Math.max(0, Math.min(rect.height, clientY - rect.top));
     const p = pressure > 0 ? pressure : 0.5;
@@ -210,6 +212,7 @@ export const HandwritingCanvas = forwardRef<
       curRef.current = null;
     }
     e.preventDefault();
+    rectRef.current = canvasRef.current?.getBoundingClientRect() ?? rectRef.current; // 每笔刷新一次位置
     activeIdRef.current = e.pointerId;
     activeTypeRef.current = e.pointerType;
     try {
