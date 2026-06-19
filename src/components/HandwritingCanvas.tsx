@@ -186,19 +186,27 @@ export const HandwritingCanvas = forwardRef<
   // 之前那些守卫是基于错误假设加的，正在误杀电容笔的事件（手指因为走简单路径才没事）。
   function onPointerDown(e: React.PointerEvent) {
     if (activeIdRef.current !== null && activeIdRef.current !== e.pointerId) {
-      // 已在画。第二个接触点（多为手掌）默认忽略；唯一例外：pen 可抢占正在画的非 pen（手掌）。
-      const supersede = e.pointerType === "pen" && activeTypeRef.current !== "pen";
+      // 是否接管当前活动指针：
+      //  · 新接触是【笔】→ 一定接管（单支笔不可能同时两点；快写时上一笔的 UP 还没送达，
+      //    activeId 还占着，这一笔不接管就会被整条丢掉＝"整笔消失"的根因）。
+      //  · 与当前【同类型】（如都手指）→ 接管（手指快写抬手再落同理）。
+      //  · 否则（笔正在画时落下的手指/手掌）→ 忽略，保护当前这一笔。
+      const supersede =
+        e.pointerType === "pen" || e.pointerType === activeTypeRef.current;
       if (!supersede) {
         dlog(`ignore 2nd ${e.pointerType}#${e.pointerId}`);
         return;
       }
-      dlog(`pen takeover ${activeTypeRef.current}#${activeIdRef.current}`);
+      dlog(`takeover ${activeTypeRef.current}#${activeIdRef.current}→${e.pointerType}`);
       try {
         canvasRef.current?.releasePointerCapture(activeIdRef.current);
       } catch {
         /* ignore */
       }
-      strokesRef.current.pop(); // 抢占掉的那道（手掌痕）丢弃
+      // 只有"笔接管手掌痕"时才丢弃上一道；笔接管笔 / 指接管指 = 上一笔是真笔画，必须保留
+      if (e.pointerType === "pen" && activeTypeRef.current !== "pen") {
+        strokesRef.current.pop();
+      }
       curRef.current = null;
     }
     e.preventDefault();
