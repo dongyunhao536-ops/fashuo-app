@@ -48,17 +48,6 @@ export const MODELS = {
   DRAFT: process.env.MODEL_DRAFT ?? "claude-3-5-haiku-20241022",
   /** 教练 T1 规划 —— 非红线但需好推理，用 4.7 Opus（单次调用，无 grep 工具循环，成本低）。 */
   COACH: process.env.MODEL_COACH ?? "anthropic/claude-4.7-opus",
-  /**
-   * 手写答题 OCR —— iPad 墨迹图转文字（背诵检测手写输入法，2026-06-17）。
-   * 非红线：OCR 只是"输入法"，转出的文字仍走原评分链路（用户可改），不参与判分逻辑 → 可降级。
-   * ⚠️ 必须是【带视觉】的渠道：
-   *   - MODEL_DRAFT 的 Haiku 3.5（claude-3-5-haiku-20241022）【纯文本、无图像输入】，不能用于 OCR。
-   *   - 七牛云已确认可用且带视觉、且比 Opus 便宜 ~5× 的渠道 = Sonnet 4（dated ID，见 PLAN 注释）。
-   * ⚠️ 七牛云 Sonnet 4 渠道是否透传 image block 未经线上验证 → transcribeHandwriting 内 try/catch，
-   *    失败前端退回"打字 / 系统手写键盘"，不阻塞答题。部署后建议跑一次 OCR 探针确认。
-   * pricing.json 按 "sonnet" 子串计价，dated ID 命中正确。
-   */
-  OCR: process.env.MODEL_OCR ?? "claude-sonnet-4-20250514",
 } as const;
 
 export type ModelId = (typeof MODELS)[keyof typeof MODELS];

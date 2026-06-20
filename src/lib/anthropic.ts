@@ -470,63 +470,6 @@ export async function runSingleTurn(opts: {
   return { message: resp, costUsd };
 }
 
-/**
- * 手写答题 OCR（iPad 墨迹图 → 文字，2026-06-17）。
- * 非红线"输入法"：只把手写转成文字填进答题框，用户可改，再走原 L1/L2/L3 评分链路 → 与判分解耦。
- *
- * 模型 = MODELS.OCR（带视觉的 Sonnet 4；DRAFT 的 Haiku 3.5 纯文本不能用，见 models.ts）。
- * 成本栅栏：进入前 assertBudget()，调用后 recordUsage(route="ocr")。
- * 提示词只要"逐字转写、别帮忙润色/补全"——补全会让用户没背出的内容被"脑补"进去，污染判分。
- */
-export async function transcribeHandwriting(opts: {
-  /** 去掉 data URL 前缀的纯 base64 */
-  imageBase64: string;
-  mediaType: "image/png" | "image/jpeg" | "image/webp";
-  /** 仅用于给模型一点排版预期（L1 多为分条关键词，L2/L3 多为整段论述）；不改判分 */
-  level?: string;
-}): Promise<{ text: string; costUsd: number }> {
-  await assertBudget();
-
-  const layoutHint =
-    opts.level === "L1"
-      ? "考生多半是分条默写关键词/要点（每行一条或用分号分隔），按原样保留分行与序号。"
-      : "考生多半是整段论述（结论+法理+涵摄），按原样保留分段与标点。";
-
-  const system =
-    "你是中文法律考试手写答卷的转写器。只做一件事：把图片里的手写中文【逐字如实转写成文本】。" +
-    "严格纪律：①只输出转写出来的文字本身，不要任何前后说明、评价、翻译或润色；" +
-    "②绝不替考生补全、改写或纠正——他没写的就不要写，写错的别名/错字也照抄（这是在检测他背没背出来，补全=污染判分）；" +
-    "③保留原有的分行、序号、分段；④实在辨认不出的字用〔?〕占位。" +
-    layoutHint;
-
-  const resp = await callWithRetry({
-    model: MODELS.OCR,
-    max_tokens: 3000,
-    system: [{ type: "text", text: system }],
-    messages: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: opts.mediaType, data: opts.imageBase64 },
-          },
-          { type: "text", text: "把这张手写答卷逐字转写成文本（只输出文字本身）。" },
-        ],
-      },
-    ],
-  });
-
-  const costUsd = await recordUsage({
-    route: "ocr",
-    model: MODELS.OCR,
-    usage: usageFromMessage(resp),
-    meta: { level: opts.level ?? null },
-  });
-
-  return { text: extractText(resp).trim(), costUsd };
-}
-
 export function extractText(message: Anthropic.Message): string {
   return message.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
