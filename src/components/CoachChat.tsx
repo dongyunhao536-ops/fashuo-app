@@ -24,6 +24,7 @@ interface CoachResult {
   plan: string;
   review: string;
   weakEmitted: boolean;
+  errorsRecorded: { knowledge: string; matched: boolean }[];
   redlines: string[];
   logId: number | null;
   logSkipped: boolean; // 纯咨询/解析失败时后端主动不入库；logId=null 且 !logSkipped = 入库失败
@@ -196,6 +197,22 @@ function CoachReply({ r }: { r: CoachResult }) {
       <Seg title="复盘提取" body={r.review} />
 
       {/* 系统侧 */}
+      {r.errorsRecorded?.length > 0 && (
+        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-label2">
+          已记录 {r.errorsRecorded.length} 个错题到弱项档：
+          {r.errorsRecorded.map((e, i) => (
+            <span key={i}>
+              {i > 0 && "、"}
+              {e.knowledge}
+              {e.matched ? (
+                <span className="text-green">✓</span>
+              ) : (
+                <span className="text-label3">（待指认）</span>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-label3">
         {r.weakEmitted && (
           <span className="text-orange">复盘困惑点已投待办筐（PC 登记后进弱项）</span>

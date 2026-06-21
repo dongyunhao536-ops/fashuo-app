@@ -81,6 +81,23 @@ create index if not exists idx_study_log_date on study_log (log_date);
 -- 既有库补列（schema.sql 重复执行时 create table if not exists 不会加列，故显式 alter）
 alter table study_log add column if not exists plan_decision text;
 
+-- 自报错题独立通道（教练错题闭环·迁移 003）：云汇报的"做错的题"逐条入此，教练账本回读驱动规划。
+-- 【约束】只给教练用——与 kp_state.error_count 隔离，绝不影响背诵引擎排期。append-only。
+create table if not exists study_error (
+  id           bigserial primary key,
+  log_date     date not null default current_date,
+  subject      text,                       -- 刑法/民法/法理/宪法/法制史 或 null
+  kp_id        text,                       -- 匹配到的考点（可空=未匹配）；不加 FK
+  knowledge    text not null,              -- 错题/知识点短语
+  source       text not null default 'coach',
+  study_log_id bigint,
+  raw_input    text,
+  created_at   timestamptz not null default now()
+);
+create index if not exists idx_study_error_date on study_error (log_date);
+create index if not exists idx_study_error_kp on study_error (kp_id);
+create index if not exists idx_study_error_subject on study_error (subject);
+
 -- 跨会话答疑摘要（12 §五：结构化字段 + TTL，检索式注入，不回 markdown）
 create table if not exists ask_summary (
   id           bigserial primary key,
