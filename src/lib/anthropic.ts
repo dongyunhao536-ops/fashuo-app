@@ -14,9 +14,11 @@ import { assertBudget, recordUsage, usageFromMessage, RMB_PER_USD } from "./cost
  * - baseURL 从 ANTHROPIC_BASE_URL 读（七牛云 = https://api.qnaigc.com，Anthropic 原生协议兼容）。
  *   不设则走官方 api.anthropic.com。
  *
- * ⚠️ 七牛云实测约束（来自 2026-05/06 request-logs + 2026-06-11 effort/thinking 探针）：
- * 1. Opus 经 AWS Bedrock 转发 → 【不支持 output_config】(实测 400 "Extra inputs are not permitted")。
- *    故不传 output_config.effort。设计 §9 的 effort=high 旋钮在七牛云不可用。
+ * ⚠️ 七牛云实测约束（来自 2026-05/06 request-logs + 2026-06-11 与 2026-06-21 两轮 effort/thinking 探针）：
+ * 1. effort=high 旋钮在七牛云【无真实效果，别接】（2026-06-21 probe-effort.mjs 复探）：
+ *    - 2026-06-11：output_config.effort → 400 "Extra inputs are not permitted"（Bedrock 不收 output_config）。
+ *    - 2026-06-21：output_config.effort 与顶层 effort 都变成【200 但静默忽略】——无 thinking 块、
+ *      in/out token 与延迟同 baseline = 收下参数不干活。比 400 更坑（造"已调高"假象），故一律不传。
  * 2. thinking 旋钮的真实形态（探针实证）：
  *    - 七牛云文档说的 `thinking.effort=low/medium/high` 在 Anthropic 协议路径【全是死的】
  *      （那是 OpenAI 兼容包装专用，原生 /v1/messages 一律 400 budget_tokens required）。

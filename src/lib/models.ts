@@ -10,10 +10,11 @@ export const MODELS = {
   /** 背诵 L2/L3 评分 —— Opus 不降级（红线） */
   GRADING: process.env.MODEL_GRADING ?? "anthropic/claude-4.7-opus",
   /**
-   * 答疑 —— Opus 不降级（红线）。云的答疑都是复杂问题 → 用最强 Opus 4.8（2026-06-09 升级）。
-   * ⚠️ "effort=high" 旋钮在七牛云不可用：Opus 经 AWS Bedrock 转，不支持 output_config（实测 400）；
-   *    且七牛云无带 -high 后缀的模型名（探针确认）。模型本身已升 4.8（质量主来源）。
-   *    如需 high reasoning，须探测 4.8 是否接受 extended thinking（thinking 参数）后在答疑路径开启。
+   * 答疑 —— Opus 不降级（红线）。云的答疑都是复杂问题 → 用可用最强 Opus 4.8（2026-06-09 升级）。
+   * ⚠️ "effort=high" 在七牛云【无真实效果，别接】：2026-06-21 复探，output_config.effort / 顶层 effort
+   *    都从旧版 400 变成【200 但静默忽略】（无 thinking 块、token/延迟同 baseline）；带 budget_tokens 的
+   *    extended thinking 在 4.8 直接 400（Bedrock 不支持）；adaptive thinking 能触发但思考被七牛云抹空
+   *    (redacted) 且案例题 ROI 负（见 anthropic.ts 详注）。结论：答疑已在真实最强档，无更高旋钮可调。
    */
   ASK: process.env.MODEL_ASK ?? "anthropic/claude-4.8-opus",
   /**
@@ -49,8 +50,12 @@ export const MODELS = {
    * 💰 pricing.json 的 haiku 档(input0.33/output1.67) 正好=Haiku4.5官方价($1/$5)×0.334，迁后计价更准。
    */
   DRAFT: process.env.MODEL_DRAFT ?? "claude-haiku-4-5-20251001",
-  /** 教练 T1 规划 —— 非红线但需好推理，用 4.7 Opus（单次调用，无 grep 工具循环，成本低）。 */
-  COACH: process.env.MODEL_COACH ?? "anthropic/claude-4.7-opus",
+  /**
+   * 教练 T1 规划 —— 非红线但需好推理。2026-06-21 从 4.7 升 4.8 Opus：用户要"把教练调 high"，
+   * 而 effort=high 在七牛云是空操作（见 ASK 注），唯一真实的"更强"杠杆就是换最强模型 → 4.8。
+   * 单次调用、无 grep 工具循环，成本仍低（≈¥0.1-0.2/次）。回滚省钱：改回 4.7 或设 MODEL_COACH。
+   */
+  COACH: process.env.MODEL_COACH ?? "anthropic/claude-4.8-opus",
 } as const;
 
 export type ModelId = (typeof MODELS)[keyof typeof MODELS];
