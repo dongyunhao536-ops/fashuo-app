@@ -37,15 +37,18 @@ export const MODELS = {
   PLAN: process.env.MODEL_PLAN ?? process.env.MODEL_ASK ?? "anthropic/claude-4.8-opus",
   /**
    * L1 检测题草稿 / L1 语义兜底评分 —— Haiku（红线允许：L1 秒判/草稿可降级，见 §红线）。
-   * 2026-06-11 第二轮探针：七牛云有 Haiku 3.5 渠道（必须用 Anthropic 原版 dated ID）：
-   *   ✅ claude-3-5-haiku-20241022     Haiku 3.5（实测可用；SDK 报 deprecated 但七牛云仍透传服务）
-   *   ❌ claude-haiku-4-20250514       无渠道
+   * 七牛云 Haiku 渠道必须用 Anthropic 原版 dated ID（自家 anthropic/claude-X.Y-haiku 命名无渠道）。
+   * 2026-06-21 探针（scripts/probe-haiku-channels.mjs）—— 3.5 即将被七牛云下线，迁到 4.5：
+   *   ✅ claude-haiku-4-5-20251001     Haiku 4.5（现役默认；中文法律术语理解远胜 3.5）
+   *   ⚠️ claude-3-5-haiku-20241022     仍能调但 SDK 已报 EOL(2026-02-19) + 七牛云即将下线 → 弃用
+   *   ❌ claude-haiku-4-20250514 / anthropic/claude-{4.5-haiku,haiku-4.5}      无渠道
    * 2026-06-14 背诵 L1 语义兜底上线 → 默认值从 opus 改为 Haiku：DRAFT 此前从未被实际调用
    *   （L1 一直纯规则），opus 默认只是占位；现 detection.gradeL1Semantic 会真调它，默认必须是
    *   Haiku，否则 L1 兜底误用 opus → 慢 ~15×、贵 ~50×。.env 设 MODEL_DRAFT 仍可覆盖。
    *   若七牛云某天下线 Haiku 渠道：gradeL1WithFallback 的 try/catch 会自动退回规则结果，不崩。
+   * 💰 pricing.json 的 haiku 档(input0.33/output1.67) 正好=Haiku4.5官方价($1/$5)×0.334，迁后计价更准。
    */
-  DRAFT: process.env.MODEL_DRAFT ?? "claude-3-5-haiku-20241022",
+  DRAFT: process.env.MODEL_DRAFT ?? "claude-haiku-4-5-20251001",
   /** 教练 T1 规划 —— 非红线但需好推理，用 4.7 Opus（单次调用，无 grep 工具循环，成本低）。 */
   COACH: process.env.MODEL_COACH ?? "anthropic/claude-4.7-opus",
 } as const;
