@@ -44,6 +44,7 @@ export interface CoachResult {
   // 系统侧
   weakEmitted: boolean; // 复盘困惑点是否投了 events 弱项候选
   errorsRecorded: { knowledge: string; matched: boolean }[]; // 自报错题写入 study_error 的清单（matched=钉到考点否）
+  absorbedRecorded: string[]; // 云说"懂了"→标记 absorbed 销账退场的考点
   redlines: string[]; // 命中的红线预警
   logId: number | null; // study_log 行 id（前端回写规划建议采纳/改/不按用，周报算采纳率）
   logSkipped: boolean; // true=识别为纯咨询/解析失败，主动不入库（区别于入库失败：logId=null 且 logSkipped=false）
@@ -76,8 +77,6 @@ async function loadLedger(today: Date) {
   const bounds = Array.from({ length: nWeeks }, (_, i) =>
     bjDateStr(new Date(today.getTime() - (7 * (i + 1) - 1) * DAY)),
   );
-  const since14 = bjDateStr(new Date(today.getTime() - 13 * DAY)); // 自报错题近14天窗（含今天）
-
   const [weakRes, studyRes, progressRes, recentRes, selfErrRes] = await Promise.all([
     supabaseAdmin
       .from("kp_state")
@@ -101,11 +100,11 @@ async function loadLedger(today: Date) {
       .select("log_date, subject, chapter, activity, minutes, raw_input")
       .order("id", { ascending: false })
       .limit(3),
-    // 自报错题（独立通道，仅教练读；不碰 kp_state）：近14天拉回内存聚合
+    // 自报错题（独立通道，仅教练读；不碰 kp_state）：拉【未吸收】的全部（不按天数），内存聚合
     supabaseAdmin
       .from("study_error")
-      .select("subject, kp_id, knowledge")
-      .gte("log_date", since14),
+      .select("id, subject, kp_id, knowledge, log_date")
+      .eq("status", "open"),
   ]);
 
   // Top5 弱项：label 给 prompt/红线文案，errorCount 给阈值判定（不再从展示串里反向正则抠数字）
@@ -151,19 +150,43 @@ async function loadLedger(today: Date) {
     return `${head}${quote}`;
   });
 
-  // 自报错题近2周高频：优先按 kp_id 聚合，未匹配的按 subject+knowledge（②③规划据此）
-  const selfErrMap = new Map<string, { label: string; n: number }>();
-  for (const r of selfErrRes.data ?? []) {
+  // 自报错题闭环·自动退场：匹配到的考点已在背诵里 mastered → 标记 absorbed（仅【读】kp_state 判定，不写它）。
+  const openErrs = selfErrRes.data ?? [];
+  const openKpIds = [...new Set(openErrs.map((r) => r.kp_id).filter((x): x is string => !!x))];
+  let masteredIds = new Set<string>();
+  if (openKpIds.length) {
+    const { data: mas } = await supabaseAdmin
+      .from("kp_state")
+      .select("kp_id")
+      .in("kp_id", openKpIds)
+      .eq("mastered", true);
+    masteredIds = new Set((mas ?? []).map((r) => r.kp_id as string));
+    if (masteredIds.size) {
+      await supabaseAdmin
+        .from("study_error")
+        .update({ status: "absorbed", absorbed_via: "kp_mastered", absorbed_at: new Date().toISOString() })
+        .in("kp_id", [...masteredIds])
+        .eq("status", "open");
+    }
+  }
+
+  // 聚合【仍未吸收】的：按 kp_id（未匹配按 subject+knowledge）计频次 + 记最近日期；频次→新近排序。
+  const escT = coachCfg.红线.同弱项错次转专题;
+  const errMap = new Map<string, { label: string; n: number; last: string }>();
+  for (const r of openErrs) {
+    if (r.kp_id && masteredIds.has(r.kp_id)) continue; // 本轮已自动退场的不再展示
     const subj = (r.subject as string | null) ?? "未分类";
     const key = (r.kp_id as string | null) ?? `${subj}::${r.knowledge}`;
-    const cur = selfErrMap.get(key) ?? { label: `${subj}·${r.knowledge}`, n: 0 };
+    const cur = errMap.get(key) ?? { label: `${subj}·${r.knowledge}`, n: 0, last: "" };
     cur.n++;
-    selfErrMap.set(key, cur);
+    const d = String(r.log_date ?? "");
+    if (d > cur.last) cur.last = d;
+    errMap.set(key, cur);
   }
-  const selfErrorLines = [...selfErrMap.values()]
-    .sort((a, b) => b.n - a.n)
-    .slice(0, 6)
-    .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}`);
+  const selfErrorLines = [...errMap.values()]
+    .sort((a, b) => b.n - a.n || (a.last < b.last ? 1 : -1))
+    .slice(0, 8)
+    .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}${e.n >= escT ? " 🔺转专题" : ""}（最近${e.last || "?"}）`);
 
   return { stage, daysToExam, daysToBase, topWeak, windowHours, progressLines, recentLines, selfErrorLines };
 }
@@ -239,13 +262,15 @@ confusion: 最不懂的点（没有就留空）
 ===PROGRESS===
 ② 进度归位：按 Rule4 轮次表+账本里的【已学进度】把这章标进进度，对照当前阶段判断在不在轨——以流水为事实依据，没学过的别说在轨。一两句。
 ===PLAN===
-③ 下一步规划（建议·云可改）：结合双轨节奏+当前阶段+Top5弱项+账本【自报错题近2周高频】给明天/今晚建议（高频自报错题优先安排专题/复盘）。是建议不是命令。
+③ 下一步规划（建议·云可改）：结合双轨节奏+当前阶段+Top5弱项+账本【未吸收自报错题】给明天/今晚建议（标🔺的反复错点优先安排专题/复盘）。是建议不是命令。
 ===REVIEW===
 ④ 复盘提取：引导云说今天最不懂/最有把握（Rule6）。若云已提到困惑点，点出它将进弱项档。
 ===WEAK===
 若云明确表达某个不懂的考点，填知识点短语；否则留空
 ===WRONGS===
 逐行列出云今天明确说【做错/没做对/错了】的题对应的考点短语（每行一个，2-8字法律术语最佳，如"正当防卫""因果关系认定"）——这是客观错题，区别于上面主观的 confusion/WEAK。没有就留空。
+===ABSORBED===
+逐行列出云今天明确说【已经懂了/掌握了/搞明白了/会了】的考点短语（每行一个）——用于把它从"未吸收错题清单"销账退场。没有就留空。
 注意：subject 只能是5科之一或留空（政英不归你管）。留空就是真的空着，不要写"无"。建议要具体可执行，别空泛喊口号。`;
 }
 
@@ -263,8 +288,8 @@ function buildSystemVolatile(
 【已学进度·学习流水聚合（每科最多6章、最近在前；②进度归位以此为事实依据）】
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，归位时按「尚未铺开」判断）"}
 
-【自报错题·近2周高频（云口头汇报做错的题，按次数；与检测错题分离，仅供③规划安排专题/复盘）】
-${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （近两周无自报错题）"}
+【自报错题·未吸收清单（云汇报做错的题，按频次×新近；🔺=反复错建议转专题；与检测错题分离，吸收前一直挂着）】
+${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}
 
 【最近3条学习流水（云的省略句如「那民法呢」按此上下文理解）】
 ${ledger.recentLines.length ? ledger.recentLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
@@ -278,6 +303,7 @@ interface CoachJson {
   review?: string;
   weak_candidate?: string | null;
   wrongs?: string[];
+  absorbed?: string[];
 }
 
 /** 模型不听"留空"指令时的占位词——一律视为空，防"无/留空"污染弱项候选 */
@@ -288,7 +314,7 @@ const PLACEHOLDER_RE = /^[（(\[【]?\s*(无|没有|留空|暂无|不适用|待�
  * 段内容随便用什么标点都不影响解析。
  */
 export function parseBlocks(raw: string): CoachJson | null {
-  const parts = raw.split(/===\s*(PARSED|POINTER|PROGRESS|PLAN|REVIEW|WEAK|WRONGS)\s*===/i);
+  const parts = raw.split(/===\s*(PARSED|POINTER|PROGRESS|PLAN|REVIEW|WEAK|WRONGS|ABSORBED)\s*===/i);
   const map: Record<string, string> = {};
   for (let i = 1; i < parts.length; i += 2) {
     map[parts[i].toUpperCase()] = (parts[i + 1] ?? "").trim();
@@ -308,10 +334,13 @@ export function parseBlocks(raw: string): CoachJson | null {
     return t && !PLACEHOLDER_RE.test(t) ? t : null;
   };
   // WRONGS：逐行错题考点短语，剥行首符号/序号、去占位词
-  const wrongs = (map.WRONGS ?? "")
-    .split("\n")
-    .map((s) => s.replace(/^[\s\-•·*]+/, "").replace(/^\d+\s*[.、)]\s*/, "").trim())
-    .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s));
+  const lineList = (block: string | undefined) =>
+    (block ?? "")
+      .split("\n")
+      .map((s) => s.replace(/^[\s\-•·*]+/, "").replace(/^\d+\s*[.、)]\s*/, "").trim())
+      .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s));
+  const wrongs = lineList(map.WRONGS);
+  const absorbed = lineList(map.ABSORBED);
   // 取首个数字（"1-2小时"若整串去非数字会变成 12）
   const num = (s: string | undefined) => {
     const m = (s ?? "").match(/\d+(\.\d+)?/);
@@ -334,6 +363,7 @@ export function parseBlocks(raw: string): CoachJson | null {
     review: map.REVIEW ?? "",
     weak_candidate: val(map.WEAK),
     wrongs,
+    absorbed,
   };
 }
 
@@ -369,6 +399,7 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
       review: "",
       weakEmitted: false,
       errorsRecorded: [],
+      absorbedRecorded: [],
       redlines: checkRedlines(ledger.windowHours, ledger.topWeak),
       logId: null,
       logSkipped: true,
@@ -480,6 +511,26 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     errorsRecorded.push({ knowledge: phrase, matched: !!kpId });
   }
 
+  // 销账（闭环合上）：云说"懂了"的考点 → 把对应【未吸收】的 study_error 标记 absorbed（手动退场）。
+  const absorbedRecorded: string[] = [];
+  for (const phrase of (j.absorbed ?? []).slice(0, 12)) {
+    let kpId: string | null = null;
+    try {
+      kpId = (await matchKpByName(parsed.subject, phrase))?.kp_id ?? null;
+    } catch {
+      /* 匹配失败 → 退回按 knowledge 模糊销账 */
+    }
+    let q = supabaseAdmin
+      .from("study_error")
+      .update({ status: "absorbed", absorbed_via: "manual", absorbed_at: new Date().toISOString() })
+      .eq("status", "open");
+    if (parsed.subject) q = q.eq("subject", parsed.subject);
+    q = kpId ? q.eq("kp_id", kpId) : q.ilike("knowledge", `%${phrase}%`);
+    const { error: absErr } = await q;
+    if (absErr) console.error("[coach] 销账失败：", absErr.message);
+    else absorbedRecorded.push(phrase);
+  }
+
   return {
     parsed,
     pointer: j.pointer ?? "",
@@ -488,6 +539,7 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     review: j.review ?? "",
     weakEmitted,
     errorsRecorded,
+    absorbedRecorded,
     redlines,
     logId,
     logSkipped: !isStudyRecord,

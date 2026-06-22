@@ -25,6 +25,7 @@ interface CoachResult {
   review: string;
   weakEmitted: boolean;
   errorsRecorded: { knowledge: string; matched: boolean }[];
+  absorbedRecorded: string[];
   redlines: string[];
   logId: number | null;
   logSkipped: boolean; // 纯咨询/解析失败时后端主动不入库；logId=null 且 !logSkipped = 入库失败
@@ -211,6 +212,11 @@ function CoachReply({ r }: { r: CoachResult }) {
               )}
             </span>
           ))}
+        </div>
+      )}
+      {r.absorbedRecorded?.length > 0 && (
+        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-green">
+          已销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} ✓退出未吸收清单
         </div>
       )}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-label3">

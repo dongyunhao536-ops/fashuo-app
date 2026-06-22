@@ -31,4 +31,17 @@ activity: 做题
     const j = parseBlocks(`===PARSED===\nsubject: 民法\n===POINTER===\nx`);
     expect(j!.wrongs).toEqual([]);
   });
+
+  it("解析 ABSORBED 块为 absorbed 列表（销账用），与 wrongs 并存", () => {
+    const raw = `===PARSED===
+subject: 民法
+===WRONGS===
+正当防卫
+===ABSORBED===
+- 因果关系
+紧急避险`;
+    const j = parseBlocks(raw);
+    expect(j!.wrongs).toEqual(["正当防卫"]);
+    expect(j!.absorbed).toEqual(["因果关系", "紧急避险"]);
+  });
 });

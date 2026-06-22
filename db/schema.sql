@@ -92,11 +92,19 @@ create table if not exists study_error (
   source       text not null default 'coach',
   study_log_id bigint,
   raw_input    text,
+  status       text not null default 'open', -- open（未吸收）/ absorbed（已吸收→退场，闭环·迁移004）
+  absorbed_at  timestamptz,
+  absorbed_via text,                        -- manual（云说懂了）/ kp_mastered（考点背诵已掌握）
   created_at   timestamptz not null default now()
 );
+-- 既有库补列（迁移 004）
+alter table study_error add column if not exists status text not null default 'open';
+alter table study_error add column if not exists absorbed_at timestamptz;
+alter table study_error add column if not exists absorbed_via text;
 create index if not exists idx_study_error_date on study_error (log_date);
 create index if not exists idx_study_error_kp on study_error (kp_id);
 create index if not exists idx_study_error_subject on study_error (subject);
+create index if not exists idx_study_error_status on study_error (status);
 
 -- 跨会话答疑摘要（12 §五：结构化字段 + TTL，检索式注入，不回 markdown）
 create table if not exists ask_summary (
