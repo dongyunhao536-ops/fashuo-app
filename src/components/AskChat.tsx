@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
+import { XindeQuickAdd } from "@/components/XindeQuickAdd";
 
 /**
  * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
@@ -168,6 +169,9 @@ export function AskChat() {
           </button>
         ))}
       </div>
+
+      {/* 讲义拓展点答疑不认 → 主动存进心得候选（待真题背书后答疑就认） */}
+      <XindeQuickAdd defaultSubject={subject} />
 
       {turns.length === 0 && (
         <div className="glass-card rounded-[16px] p-5 text-[13px] leading-relaxed text-label2">

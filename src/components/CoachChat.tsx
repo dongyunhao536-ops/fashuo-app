@@ -15,6 +15,7 @@ interface CoachResult {
   weakEmitted: boolean;
   errorsRecorded: { knowledge: string; matched: boolean }[];
   absorbedRecorded: string[];
+  askWeakAbsorbed: number;
   memorized: string[];
   redlines: string[];
   logId: number | null;
@@ -174,6 +175,11 @@ function CoachReply({ r }: { r: CoachResult }) {
       {r.absorbedRecorded?.length > 0 && (
         <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-green">
           已销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} ✓退出未吸收清单
+        </div>
+      )}
+      {r.askWeakAbsorbed > 0 && (
+        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-green">
+          顺带吸收 {r.askWeakAbsorbed} 个「答疑暴露弱项」✓退出待办筐
         </div>
       )}
       {r.memorized?.length > 0 && (

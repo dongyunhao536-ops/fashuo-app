@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase";
 import { bjDateStr } from "@/lib/dates";
 import { TabBar } from "@/components/TabBar";
 import { EventActions } from "@/components/EventActions";
+import { XindeQuickAdd } from "@/components/XindeQuickAdd";
 
 /**
  * 待办筐（events status=pending）。极简暗色版方案 ⑧ 屏。
@@ -20,7 +21,7 @@ interface EventRow {
   knowledge: string | null;
   anchor: string | null;
   source: string;
-  payload: { vague?: boolean; chapter?: string | null } | null;
+  payload: { vague?: boolean; chapter?: string | null; 拓展?: boolean } | null;
   created_at: string;
 }
 
@@ -65,6 +66,10 @@ export default async function InboxPage() {
         答疑、教练、检测中沉淀的候选。「收下」后会在你 PC 端登记进档案；去重只在 PC 一处。
       </p>
 
+      <div className="px-4 pt-2">
+        <XindeQuickAdd />
+      </div>
+
       {error && (
         <div className="mx-4 mt-2 rounded-[10px] bg-red/15 p-3 text-[12.5px] text-red">
           读取失败：{error.message}
@@ -104,6 +109,11 @@ export default async function InboxPage() {
                       {r.payload?.vague === true && (
                         <span className="rounded-[5px] bg-orange/15 px-1.5 py-0.5 text-orange">
                           模糊困惑
+                        </span>
+                      )}
+                      {r.payload?.拓展 === true && (
+                        <span className="rounded-[5px] bg-blue/15 px-1.5 py-0.5 text-blue-soft">
+                          讲义拓展·待背书
                         </span>
                       )}
                       <span className="ml-auto text-label3">

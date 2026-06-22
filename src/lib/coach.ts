@@ -18,6 +18,8 @@ import coachCfg from "../../config/coach.json";
  *   META.memory_updates 增量同步（进易变块，小、每轮重发）。
  * 闭环不动（A 期）：错题→study_error(独立通道，不碰 kp_state)、销账、复盘弱项→待办筐，均从 META 喂。
  * 检验=理解层（有没有吸收），逐字默写是背诵系统(L1/L2/L3)的事，教练不判分。
+ * 复习闭环（2026-06-21 概念1）：答疑暴露的【非背诵】弱项候选（events,source=答疑,pending）并入账本，
+ *   教练聊到相关时理解层捞回考；云吸收后报进 absorbed → 同时销 study_error + 把该答疑弱项置 consumed 退出待办筐。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
@@ -69,6 +71,7 @@ export interface CoachResult {
   reply: string; // 自然对话正文（markdown，展示用，已剥离 META）
   errorsRecorded: { knowledge: string; matched: boolean }[]; // 自报错题写入 study_error（matched=钉到考点否）
   absorbedRecorded: string[]; // 云说"懂了"→标 absorbed 销账退场
+  askWeakAbsorbed: number; // 顺带吸收掉的「答疑暴露弱项」条数（从待办筐消费）
   weakEmitted: boolean; // 困惑点是否投待办筐
   memorized: string[]; // 本轮新记住的长期事实（UI 轻提示）
   redlines: string[]; // 命中的红线预警
@@ -130,7 +133,7 @@ async function loadLedger(today: Date) {
     bjDateStr(new Date(today.getTime() - (7 * (i + 1) - 1) * DAY)),
   );
 
-  const [weakRes, studyRes, progressRes, recentRes, selfErrRes, msgRes, memRes] =
+  const [weakRes, studyRes, progressRes, recentRes, selfErrRes, askWeakRes, msgRes, memRes] =
     await Promise.all([
       supabaseAdmin
         .from("kp_state")
@@ -156,6 +159,15 @@ async function loadLedger(today: Date) {
         .from("study_error")
         .select("id, subject, kp_id, knowledge, log_date")
         .eq("status", "open"),
+      // 答疑暴露、尚未处理的弱项候选（非背诵点）——并入教练复习闭环：聊天里理解层捞回考、吸收即销账
+      supabaseAdmin
+        .from("events")
+        .select("subject, knowledge, anchor, created_at")
+        .eq("type", "弱项候选")
+        .eq("status", "pending")
+        .eq("source", "答疑")
+        .order("created_at", { ascending: false })
+        .limit(8),
       // 近 8 条对话（对话连续性）
       supabaseAdmin
         .from("coach_message")
@@ -238,6 +250,13 @@ async function loadLedger(today: Date) {
     .slice(0, 8)
     .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}${e.n >= escT ? " 🔺转专题" : ""}（最近${e.last || "?"}）`);
 
+  // 答疑暴露弱项（非背诵点）：并入复习闭环，聊到相关时理解层捞回考、吸收即销账
+  const askWeakLines = (askWeakRes.data ?? []).map((r) => {
+    const subj = (r.subject as string | null) ?? "未分类";
+    const d = r.created_at ? bjDateStr(new Date(r.created_at)) : "?";
+    return `${subj}·${r.knowledge}${r.anchor ? `（锚${r.anchor}）` : ""}（答疑${d}）`;
+  });
+
   // 对话历史（chronological：旧→新；每条截断防爆）
   const conversationLines = (msgRes.data ?? [])
     .slice()
@@ -250,7 +269,7 @@ async function loadLedger(today: Date) {
 
   return {
     stage, daysToExam, daysToBase, topWeak, windowHours,
-    progressLines, recentLines, selfErrorLines, conversationLines, memoryFacts,
+    progressLines, recentLines, selfErrorLines, askWeakLines, conversationLines, memoryFacts,
   };
 }
 
@@ -324,7 +343,10 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
 【自报错题·未吸收清单（云汇报做错的，按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）】
-${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}`;
+${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}
+
+【答疑暴露·待复习吸收（云在答疑里卡过/可能答错的【非背诵点】，吸收前一直挂着——聊到相关时顺手用【理解层】考他、帮他打通；他用自己话讲清/会辨析了，就在 absorbed 里报上来销账）】
+${ledger.askWeakLines.length ? ledger.askWeakLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
 }
 
 /** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息（仿答疑做法，runSingleTurn 只收单条 user）。 */
@@ -446,6 +468,7 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
 
   // 销账：云说"懂了"→ 把未吸收的对应 study_error 标 absorbed（手动退场）
   const absorbedRecorded: string[] = [];
+  let askWeakAbsorbed = 0;
   for (const phrase of absorbed.slice(0, 12)) {
     let kpId: string | null = null;
     try {
@@ -462,6 +485,19 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     const { error: absErr } = await q;
     if (absErr) console.error("[coach] 销账失败：", absErr.message);
     else absorbedRecorded.push(phrase);
+
+    // 同步关掉「答疑暴露弱项」里被吸收的那条（教练理解层吸收 = 一种合法消费，退出待办筐）
+    let ev = supabaseAdmin
+      .from("events")
+      .update({ status: "consumed", consumed_at: new Date().toISOString() })
+      .eq("type", "弱项候选")
+      .eq("status", "pending")
+      .eq("source", "答疑")
+      .ilike("knowledge", `%${phrase}%`);
+    if (parsed.subject) ev = ev.eq("subject", parsed.subject);
+    const { data: closedEv, error: evErr } = await ev.select("id");
+    if (evErr) console.error("[coach] 答疑弱项消费失败：", evErr.message);
+    else askWeakAbsorbed += closedEv?.length ?? 0;
   }
 
   // 长期记忆增量同步（云要的"随时同步记忆"）：只写新事实，精确去重
@@ -492,6 +528,7 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     reply,
     errorsRecorded,
     absorbedRecorded,
+    askWeakAbsorbed,
     weakEmitted,
     memorized,
     redlines,
