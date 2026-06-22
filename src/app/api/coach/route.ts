@@ -26,8 +26,8 @@ export async function POST(req: Request) {
     }
     const input = (body.input ?? "").trim();
     if (!input) return { status: 400, body: { error: "input 不能为空" } };
-    if (input.length > 500) {
-      return { status: 400, body: { error: "一句话就好（≤500 字），别写长文" } };
+    if (input.length > 2000) {
+      return { status: 400, body: { error: "一次别超 2000 字（对话/背给我听都够用了）" } };
     }
 
     try {

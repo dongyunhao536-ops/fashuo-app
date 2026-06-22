@@ -8,121 +8,180 @@ import { bjDateStr } from "./dates";
 import coachCfg from "../../config/coach.json";
 
 /**
- * 教练 T1（系统设计/13）：宏观层规划。
- * 云丢一句自然语言（"今天刑法第5章听课"）→ 一次 Opus 调用：
- *   ① 解析出 科目/章节/形式/用时/正确率/感受/困惑点
- *   ② 基于经验帖 Rule1-6 + 当前账本（阶段/死线/Top5弱项/两周投入/已学进度）生成四段
- *   ③ 写 study_log（流水，不回 markdown；纯咨询不入库）
- *   ④ 复盘"最不懂" → events(弱项候选)（复用待办筐，PC 登记进当前弱项.md）
+ * 教练 T1（系统设计/13）—— 2026-06-21 重做为【个性化对话式法硕家教】。
+ * 不再填四段表：自然对话（论策略 / 查理解 / 做规划，随云当下需要），结构化数据走尾部
+ * <<<COACH_META>>> 块后台抽取（仿答疑 splitMeta，ask-prompt.ts）。
  *
- * 红线（13 §1 决策）：推荐+云拍板，不全自动排死计划（全自动=练不到主动思考）。
- *   故四段③永远是"建议"，前端给 [采纳]/[改一改]/[不按这个]。
- * 成本：单次 Opus 调用（无 grep 工具循环）≈ ¥0.1-0.2/次；
- *   system 拆 稳定前缀（cache_control）+ 易变账本，同一坐席连发多句时命中缓存。
+ * 个性化地基（缓存稳定前缀，七牛云不带工具时 caching 生效）：家教人设 + 经验帖方法论综述
+ *   （参考非法条，浓缩自 docs/经验帖方法论对比.md）+ config 轮次/双轨节奏。
+ * 持续更新：账本每轮重查 + 对话(coach_message)每轮追加并回喂 + 长期记忆(coach_memory)按
+ *   META.memory_updates 增量同步（进易变块，小、每轮重发）。
+ * 闭环不动（A 期）：错题→study_error(独立通道，不碰 kp_state)、销账、复盘弱项→待办筐，均从 META 喂。
+ * 检验=理解层（有没有吸收），逐字默写是背诵系统(L1/L2/L3)的事，教练不判分。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
 const BASE_DEADLINE = coachCfg.基础结业死线;
-
-export interface CoachParsed {
-  subject: string | null; // 刑法/民法/法理/宪法/法制史 或 null（无法识别）
-  chapter: string | null;
-  activity: string | null; // 听课/做题/背诵/复盘/其他
-  minutes: number | null;
-  accuracy: number | null; // 0-100
-  feeling: string | null;
-  confusion: string | null; // 最不懂/困惑点（→ 候选弱项）
-}
-
-export interface CoachResult {
-  parsed: CoachParsed;
-  // 四段
-  pointer: string; // ① 即时点拨
-  progress: string; // ② 进度归位
-  plan: string; // ③ 下一步规划（建议，可改）
-  review: string; // ④ 复盘提取
-  // 系统侧
-  weakEmitted: boolean; // 复盘困惑点是否投了 events 弱项候选
-  errorsRecorded: { knowledge: string; matched: boolean }[]; // 自报错题写入 study_error 的清单（matched=钉到考点否）
-  absorbedRecorded: string[]; // 云说"懂了"→标记 absorbed 销账退场的考点
-  redlines: string[]; // 命中的红线预警
-  logId: number | null; // study_log 行 id（前端回写规划建议采纳/改/不按用，周报算采纳率）
-  logSkipped: boolean; // true=识别为纯咨询/解析失败，主动不入库（区别于入库失败：logId=null 且 logSkipped=false）
-  costUsd: number;
-  raw?: string; // 解析失败时的原文（调试）
-  stopReason?: string | null; // 调试：max_tokens=截断 / end_turn=正常
-}
-
 const DAY = 86400000;
 const daysBetween = (a: Date, b: Date) => Math.ceil((a.getTime() - b.getTime()) / DAY);
 const round1 = (n: number) => Math.round(n * 10) / 10;
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
-
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const ACTIVITIES = ["听课", "做题", "背诵", "复盘", "其他"];
+
+/** 机器块标记（路由据此抽取并从展示文本剥离，仿 ask-prompt 的 ASK_META） */
+export const COACH_META_OPEN = "<<<COACH_META";
+export const COACH_META_CLOSE = "COACH_META>>>";
+
+/**
+ * 方法论参考（浓缩自 docs/经验帖方法论对比.md，10+ 篇高分/在职/多战经验帖）。
+ * 【是参考不是法条】——教练按云处境权衡，可不照搬。改这里即改教练方法论依据。
+ */
+const METHODOLOGY = `【方法论参考·浓缩自 10+ 篇高分/在职/多战经验帖（参考，按云处境权衡，可不照搬）】
+共识（强信号）：
+- 刑民"理解为本"：看分析→做题→理解→再背；《考试分析》是官方教材、99%答案在内，法综尤以它为准。
+- 前期理解、9-10月起全面背（"普遍撒网重点打捞"，不只背重点）。
+- 刑民最重(150分)给最多时间；法理偏难多给点；宪法超纲需另记法条；法制史纯背、可放后期突破。
+- 背书梳理框架别死记（"背书强迫症"是坑）+ 难点编口诀；冲刺 4-5 天背一遍。
+- 真题反复 2-3 遍；做题发现薄弱→回书补漏。
+- 复盘是高分隐性共性、也是失败者最大教训（背了就忘 / 错题重复错）。
+- 模考不可缺（没模考→考场时间分配崩、大题写不完）。
+- 在职晚 3-5h + 碎片可多滚 1-2 轮；早开始、规律作息。
+- 避坑：不盲信押题(机构每年≤3题)、不迷信辅导班、资料别盲从跟风。
+分歧（判断项，按云处境定，别一刀切）：启动时长 / 全面背vs重点背 / 串学vs学透——经验帖无统一定论。
+针对云（在职·五战）：最大风险不是学得不细，而是【重复犯老错 + 启动晚 + 不复盘】(=云自述病根)。
+故教练优先级：复盘 > 错题闭环 > 模考节奏 > 进度铺开。"串学还是学透"的答案是【双轨】(刑民精学+法综碎片背)落地到今晚/明天，别空谈原则。`;
+
+interface CoachMeta {
+  subject?: string | null;
+  chapter?: string | null;
+  activity?: string | null;
+  minutes?: number | null;
+  accuracy?: number | null;
+  feeling?: string | null;
+  confusion?: string | null;
+  wrongs?: string[];
+  absorbed?: string[];
+  memory_updates?: { fact: string; category?: string | null }[];
+}
+
+export interface CoachResult {
+  reply: string; // 自然对话正文（markdown，展示用，已剥离 META）
+  errorsRecorded: { knowledge: string; matched: boolean }[]; // 自报错题写入 study_error（matched=钉到考点否）
+  absorbedRecorded: string[]; // 云说"懂了"→标 absorbed 销账退场
+  weakEmitted: boolean; // 困惑点是否投待办筐
+  memorized: string[]; // 本轮新记住的长期事实（UI 轻提示）
+  redlines: string[]; // 命中的红线预警
+  logId: number | null; // study_log 行 id（采纳率回写用）
+  logSkipped: boolean; // true=纯咨询/无学习要素，主动不入库
+  costUsd: number;
+  metaParsed: boolean; // META 是否解析成功（debug）
+}
+
+/** 模型不听"留空"时的占位词——一律视为空 */
+const PLACEHOLDER_RE = /^[（(\[【]?\s*(无|没有|留空|暂无|不适用|待定|null|n\/?a|none|-|—)\s*[）)\]】]?$/i;
+
+/**
+ * 从回复中抽 <<<COACH_META{json}>>> 块，返回 { clean(剥离后展示文本), meta }。纯函数（仿 splitMeta），便于单测。
+ * 解析失败 → meta=null + 打日志（本轮结构化沉淀丢弃，但对话正文照常展示，不阻塞）。
+ */
+export function splitCoachMeta(full: string): { clean: string; meta: CoachMeta | null } {
+  const start = full.indexOf(COACH_META_OPEN);
+  if (start === -1) return { clean: full.trim(), meta: null };
+  const end = full.indexOf(COACH_META_CLOSE, start);
+  const jsonRaw =
+    end === -1
+      ? full.slice(start + COACH_META_OPEN.length)
+      : full.slice(start + COACH_META_OPEN.length, end);
+  const clean = full.slice(0, start).trim();
+  try {
+    const cleaned = jsonRaw.replace(/```json|```/g, "").trim();
+    return { clean, meta: JSON.parse(cleaned) as CoachMeta };
+  } catch {
+    console.error("[coach] META 块 JSON 解析失败，本轮结构化沉淀丢弃。片段：", jsonRaw.slice(0, 300));
+    return { clean, meta: null };
+  }
+}
+
+/** 行列表清洗：剥行首符号/序号、去占位词（wrongs/absorbed 容错） */
+const cleanList = (arr: unknown): string[] =>
+  Array.isArray(arr)
+    ? arr
+        .map((s) => String(s).replace(/^[\s\-•·*]+/, "").replace(/^\d+\s*[.、)]\s*/, "").trim())
+        .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s))
+    : [];
 
 interface WeakItem {
   label: string;
   errorCount: number;
 }
 
-/** 读账本：当前阶段/距死线/Top5弱项/近N周投入（红线连续判定）/各科已学章节/最近流水 */
+/**
+ * 读账本：阶段/死线/Top5弱项/近N周投入/已学章节/最近流水/未吸收自报错题
+ *   + 近 N 轮对话(coach_message) + 长期记忆(coach_memory)。每轮重查 → 数据/记忆持续更新。
+ */
 async function loadLedger(today: Date) {
   const stage = currentStage(today);
   const daysToExam = Math.max(0, daysBetween(new Date(EXAM_DATE), today));
   const daysToBase = daysBetween(new Date(BASE_DEADLINE), today);
 
-  // 周窗下界（北京日历日）：bounds[0]=近7天起点，bounds[1]=再前7天起点……窗数=红线"连续低投入"阈值
   const nWeeks = Math.max(2, coachCfg.红线.连续低投入周阈值_周);
   const bounds = Array.from({ length: nWeeks }, (_, i) =>
     bjDateStr(new Date(today.getTime() - (7 * (i + 1) - 1) * DAY)),
   );
-  const [weakRes, studyRes, progressRes, recentRes, selfErrRes] = await Promise.all([
-    supabaseAdmin
-      .from("kp_state")
-      .select("subject, ext, error_count")
-      .gt("error_count", 0)
-      .eq("mastered", false) // 已强化的不再算弱项（与弱项页/仪表盘 Top5 同口径）
-      .order("error_count", { ascending: false })
-      .limit(5),
-    supabaseAdmin
-      .from("study_log")
-      .select("log_date, minutes")
-      .gte("log_date", bounds[nWeeks - 1]),
-    supabaseAdmin
-      .from("study_log")
-      .select("log_date, subject, chapter")
-      .not("chapter", "is", null)
-      .order("log_date", { ascending: false })
-      .limit(200),
-    supabaseAdmin
-      .from("study_log")
-      .select("log_date, subject, chapter, activity, minutes, raw_input")
-      .order("id", { ascending: false })
-      .limit(3),
-    // 自报错题（独立通道，仅教练读；不碰 kp_state）：拉【未吸收】的全部（不按天数），内存聚合
-    supabaseAdmin
-      .from("study_error")
-      .select("id, subject, kp_id, knowledge, log_date")
-      .eq("status", "open"),
-  ]);
 
-  // Top5 弱项：label 给 prompt/红线文案，errorCount 给阈值判定（不再从展示串里反向正则抠数字）
+  const [weakRes, studyRes, progressRes, recentRes, selfErrRes, msgRes, memRes] =
+    await Promise.all([
+      supabaseAdmin
+        .from("kp_state")
+        .select("subject, ext, error_count")
+        .gt("error_count", 0)
+        .eq("mastered", false)
+        .order("error_count", { ascending: false })
+        .limit(5),
+      supabaseAdmin.from("study_log").select("log_date, minutes").gte("log_date", bounds[nWeeks - 1]),
+      supabaseAdmin
+        .from("study_log")
+        .select("log_date, subject, chapter")
+        .not("chapter", "is", null)
+        .order("log_date", { ascending: false })
+        .limit(200),
+      supabaseAdmin
+        .from("study_log")
+        .select("log_date, subject, chapter, activity, minutes, raw_input")
+        .order("id", { ascending: false })
+        .limit(3),
+      // 未吸收自报错题（独立通道，仅教练读；不碰 kp_state）
+      supabaseAdmin
+        .from("study_error")
+        .select("id, subject, kp_id, knowledge, log_date")
+        .eq("status", "open"),
+      // 近 8 条对话（对话连续性）
+      supabaseAdmin
+        .from("coach_message")
+        .select("role, content")
+        .order("id", { ascending: false })
+        .limit(8),
+      // 长期记忆（关于云的耐久事实）
+      supabaseAdmin
+        .from("coach_memory")
+        .select("fact, category")
+        .order("updated_at", { ascending: false })
+        .limit(40),
+    ]);
+
   const topWeak: WeakItem[] = (weakRes.data ?? []).map((k) => ({
     label: `${k.subject}·${(k.ext as { name?: string })?.name ?? "?"}（错${k.error_count}）`,
     errorCount: k.error_count ?? 0,
   }));
 
-  // 按周窗聚合投入：windowHours[0]=本周（近7天），[1]=上一窗……
   const windowMins = new Array<number>(nWeeks).fill(0);
   for (const r of studyRes.data ?? []) {
-    const d = String(r.log_date);
-    const idx = bounds.findIndex((b) => d >= b); // bounds 递减，首个命中即所属窗
+    const idx = bounds.findIndex((b) => String(r.log_date) >= b);
     if (idx !== -1) windowMins[idx] += r.minutes ?? 0;
   }
   const windowHours = windowMins.map((m) => round1(m / 60));
 
-  // 各科已学章节（近200条流水聚合、最近在前、每科最多6章）——②进度归位的事实依据
   const chaptersBySubject = new Map<string, string[]>();
   for (const r of progressRes.data ?? []) {
     if (!r.subject || !SUBJECTS.includes(r.subject) || !r.chapter) continue;
@@ -135,22 +194,15 @@ async function loadLedger(today: Date) {
     return ch?.length ? [`${s}：${ch.join("、")}`] : [];
   });
 
-  // 最近3条流水（多轮上下文："那民法呢"这类省略句靠它接住）
   const recentLines = (recentRes.data ?? []).map((r) => {
-    const head = [
-      r.log_date,
-      r.subject,
-      r.chapter,
-      r.activity,
-      r.minutes != null ? `${r.minutes}分钟` : null,
-    ]
+    const head = [r.log_date, r.subject, r.chapter, r.activity, r.minutes != null ? `${r.minutes}分钟` : null]
       .filter(Boolean)
       .join(" ");
     const quote = r.raw_input ? `（原话：${String(r.raw_input).slice(0, 40)}）` : "";
     return `${head}${quote}`;
   });
 
-  // 自报错题闭环·自动退场：匹配到的考点已在背诵里 mastered → 标记 absorbed（仅【读】kp_state 判定，不写它）。
+  // 自报错题自动退场：匹配考点已在背诵 mastered → 标 absorbed（仅【读】kp_state 判定）
   const openErrs = selfErrRes.data ?? [];
   const openKpIds = [...new Set(openErrs.map((r) => r.kp_id).filter((x): x is string => !!x))];
   let masteredIds = new Set<string>();
@@ -169,12 +221,10 @@ async function loadLedger(today: Date) {
         .eq("status", "open");
     }
   }
-
-  // 聚合【仍未吸收】的：按 kp_id（未匹配按 subject+knowledge）计频次 + 记最近日期；频次→新近排序。
   const escT = coachCfg.红线.同弱项错次转专题;
   const errMap = new Map<string, { label: string; n: number; last: string }>();
   for (const r of openErrs) {
-    if (r.kp_id && masteredIds.has(r.kp_id)) continue; // 本轮已自动退场的不再展示
+    if (r.kp_id && masteredIds.has(r.kp_id)) continue;
     const subj = (r.subject as string | null) ?? "未分类";
     const key = (r.kp_id as string | null) ?? `${subj}::${r.knowledge}`;
     const cur = errMap.get(key) ?? { label: `${subj}·${r.knowledge}`, n: 0, last: "" };
@@ -188,12 +238,24 @@ async function loadLedger(today: Date) {
     .slice(0, 8)
     .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}${e.n >= escT ? " 🔺转专题" : ""}（最近${e.last || "?"}）`);
 
-  return { stage, daysToExam, daysToBase, topWeak, windowHours, progressLines, recentLines, selfErrorLines };
+  // 对话历史（chronological：旧→新；每条截断防爆）
+  const conversationLines = (msgRes.data ?? [])
+    .slice()
+    .reverse()
+    .map((m) => `${m.role === "user" ? "云" : "教练"}：${String(m.content).slice(0, 500)}`);
+
+  const memoryFacts = (memRes.data ?? []).map(
+    (m) => `- ${m.category ? `[${m.category}] ` : ""}${m.fact}`,
+  );
+
+  return {
+    stage, daysToExam, daysToBase, topWeak, windowHours,
+    progressLines, recentLines, selfErrorLines, conversationLines, memoryFacts,
+  };
 }
 
 /**
- * 检查红线（13 §4，覆盖 5科+总时长；模拟分下限未接线——无模拟考数据源）。
- * windowHours[0]=本周；连续 N 窗都低于下限 → 升级强提醒（N=config 连续低投入周阈值_周）。
+ * 红线（13 §4，覆盖5科+总时长）。连续 N 窗低于下限 → 强提醒。
  */
 function checkRedlines(windowHours: number[], topWeak: WeakItem[]): string[] {
   const out: string[] = [];
@@ -201,37 +263,26 @@ function checkRedlines(windowHours: number[], topWeak: WeakItem[]): string[] {
   const weekHours = windowHours[0] ?? 0;
   if (weekHours < rl.周投入下限_小时) {
     const allLow =
-      windowHours.length >= rl.连续低投入周阈值_周 &&
-      windowHours.every((h) => h < rl.周投入下限_小时);
-    if (allLow) {
-      out.push(
-        `🔴 已连续 ${windowHours.length} 周投入低于 ${rl.周投入下限_小时}h 下限（${[...windowHours].reverse().map((h) => h + "h").join(" → ")}）——节奏脱轨，今晚必须排出补救计划。`,
-      );
-    } else {
-      out.push(
-        `⚠️ 本周投入 ${weekHours}h < ${rl.周投入下限_小时}h 下限——跌出在职模板节奏，注意补回（连续 ${rl.连续低投入周阈值_周} 周触发会强提醒）。`,
-      );
-    }
+      windowHours.length >= rl.连续低投入周阈值_周 && windowHours.every((h) => h < rl.周投入下限_小时);
+    out.push(
+      allLow
+        ? `🔴 已连续 ${windowHours.length} 周投入低于 ${rl.周投入下限_小时}h（${[...windowHours].reverse().map((h) => h + "h").join(" → ")}）——节奏脱轨，今晚必须排补救计划。`
+        : `⚠️ 本周投入 ${weekHours}h < ${rl.周投入下限_小时}h 下限——注意补回（连续 ${rl.连续低投入周阈值_周} 周会强提醒）。`,
+    );
   }
   const 转专题 = topWeak.filter((w) => w.errorCount >= rl.同弱项错次转专题);
   if (转专题.length) {
     out.push(
-      `🔴 弱项已达转专题阈值（错≥${rl.同弱项错次转专题}）：${转专题.map((w) => `「${w.label}」`).join("、")}——建议暂缓推进、专题攻克。`,
+      `🔴 弱项达转专题阈值（错≥${rl.同弱项错次转专题}）：${转专题.map((w) => `「${w.label}」`).join("、")}——建议暂缓推进、专题攻克。`,
     );
   }
   return out;
 }
 
-/**
- * 稳定前缀（不随请求变化 → cache_control 缓存；铁律里的轮次表/双轨节奏直接序列化自
- * config/coach.json——"调参不改代码"真正生效，改 config 即改教练的依据）。
- */
+/** 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏 + 输出契约。 */
 function buildSystemStable(): string {
   const rounds = Object.entries(coachCfg.轮次表)
-    .filter(
-      (e): e is [string, { 窗口: string; 范围: string; 强度: string }] =>
-        typeof e[1] === "object" && e[1] !== null,
-    )
+    .filter((e): e is [string, { 窗口: string; 范围: string; 强度: string }] => typeof e[1] === "object" && e[1] !== null)
     .map(([name, r]) => `${name}(${r.窗口})：${r.范围}·${r.强度}`)
     .join(" / ");
   const tracks = Object.entries(coachCfg.双轨节奏)
@@ -239,132 +290,51 @@ function buildSystemStable(): string {
     .map(([slot, what]) => `${slot} ${what}`)
     .join("；");
 
-  return `你是云的法硕"教练"——宏观规划层（科目/章节/轮次级，与背诵的考点级微观层分工）。云在职、6.5个月备考、目标北大 375+，三次失败病根=9-10月才启动+从不每日复盘。你的全部建议必须 grounded 经验帖方法论（规划优先级：经验帖 > 真题趋势 > 教材进度）。
+  return `你是云的私人法硕（非法学）家教，不是填表的规划器。像一个真正懂他、记得住他、为他定制的过来人学长那样【自然对话】：
+- 该论策略就掰扯利弊、该考他理解就出题追问、该规划就给可执行的今晚/明天安排——随云当下需要，别套固定格式、别每次都四平八稳分段。
+- 云在职、五战、目标北大 375+，三次失败病根=启动晚 + 从不复盘。你掌握他的【全部学习数据 + 长期记忆】（见下方易变块），建议必须【个性化】、扣着他的真实进度和老毛病说，不要通用大模型那种放之四海的泛泛而谈。
+- 接地气、点透、不灌鸡汤；该泼冷水（比如五战了还在纠结原则不落地）就直说。
 
-【铁律·经验帖 Rule（务必据此给建议）】
-- Rule1 刑民"理解为本"法综"背诵为本"：刑/民 听课后【必做题验证再背】，不能直接背；法理/宪/法制史 背诵为主。
-- Rule2 基础阶段 9月底必须结业（通读+重点精读+配套题+真题精做+法综提纲）。
-- Rule3 在职双轨节奏：${tracks}。保守周时数 ${coachCfg.双轨节奏.保守周时数}h。
-- Rule4 四轮三阶段（窗口随真实进度可滑动，以下为当前设定）：${rounds}。
-- Rule6 每日睡前复盘3行（学了啥/最不懂/最有把握）——这是高分隐性共性，云三次都缺，必须逼出来。
+【检验=理解层，不是背诵层】当云说"检验我/考我/看我掌握没"：考【理解吸收】不是【逐字会背】——让他用自己的话讲、举例、辨析易混点（如犯罪客体 vs 犯罪对象）、答"为什么"、套一个小情境；然后给反馈、点出哪里没真吃透、追问到底。逐字默写判分是背诵系统(L1/L2/L3)的事，你不做默写打分。
 
-【你的任务】解析云这句话并给四段。严格按下面分块格式输出——每个 ===标记=== 顶格独占一行；段内容随便用什么标点都行（包括引号），【不要输出 JSON、不要 markdown 代码块】：
-===PARSED===
-subject: 刑法|民法|法理|宪法|法制史（识别不出就留空）
-chapter: 如 第5章（没有就留空）
-activity: 听课|做题|背诵|复盘|其他（若这句话只是提问/咨询而非学习汇报，留空）
-minutes: 数字（没有就留空）
-accuracy: 0-100（没有就留空）
-feeling: 一句话（没有就留空）
-confusion: 最不懂的点（没有就留空）
-===POINTER===
-① 即时点拨：这一步学完下一动作该是什么（刑民听课→必做题验证；法综→可直接背）。一两句、接地气。
-===PROGRESS===
-② 进度归位：按 Rule4 轮次表+账本里的【已学进度】把这章标进进度，对照当前阶段判断在不在轨——以流水为事实依据，没学过的别说在轨。一两句。
-===PLAN===
-③ 下一步规划（建议·云可改）：结合双轨节奏+当前阶段+Top5弱项+账本【未吸收自报错题】给明天/今晚建议（标🔺的反复错点优先安排专题/复盘）。是建议不是命令。
-===REVIEW===
-④ 复盘提取：引导云说今天最不懂/最有把握（Rule6）。若云已提到困惑点，点出它将进弱项档。
-===WEAK===
-若云明确表达某个不懂的考点，填知识点短语；否则留空
-===WRONGS===
-逐行列出云今天明确说【做错/没做对/错了】的题对应的考点短语（每行一个，2-8字法律术语最佳，如"正当防卫""因果关系认定"）——这是客观错题，区别于上面主观的 confusion/WEAK。没有就留空。
-===ABSORBED===
-逐行列出云今天明确说【已经懂了/掌握了/搞明白了/会了】的考点短语（每行一个）——用于把它从"未吸收错题清单"销账退场。没有就留空。
-注意：subject 只能是5科之一或留空（政英不归你管）。留空就是真的空着，不要写"无"。建议要具体可执行，别空泛喊口号。`;
+${METHODOLOGY}
+
+【云的节奏参考（来自他自己的设定，可随真实进度调）】
+- 四轮三阶段：${rounds}
+- 在职双轨：${tracks}。保守周时数 ${coachCfg.双轨节奏.保守周时数}h。
+
+【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
+${COACH_META_OPEN}
+{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","minutes":数字或省略,"accuracy":0-100或省略,"feeling":"一句或省略","confusion":"最不懂一句或省略","wrongs":["今天明确做错/没掌握的考点短语"],"absorbed":["今天明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+${COACH_META_CLOSE}
+规则：只在云【确有】对应信息时填，纯闲聊/提问就大多留空数组/省略；memory_updates 只发【新的/变化的】事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
 
-/** 易变账本块（每次请求都变 → 不缓存，放 system 末尾） */
-function buildSystemVolatile(
-  ledger: Awaited<ReturnType<typeof loadLedger>>,
-  todayStr: string,
-): string {
-  return `【当前账本】
+/** 易变块（每轮重发，不缓存）：长期记忆 + 学习数据账本。 */
+function buildSystemVolatile(ledger: Awaited<ReturnType<typeof loadLedger>>, todayStr: string): string {
+  return `【关于云·长期记忆（你记住的耐久事实，据此个性化）】
+${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留意从对话里提炼并写进 META.memory_updates）"}
+
+【当前账本】
 - 今天：${todayStr}　距初试 ${ledger.daysToExam} 天　距基础结业死线 ${ledger.daysToBase > 0 ? ledger.daysToBase + " 天" : "已过期 " + -ledger.daysToBase + " 天"}
-- 全局阶段模式：${ledger.stage}
-- 本周投入：${ledger.windowHours[0] ?? 0}h（保守目标 ${coachCfg.双轨节奏.保守周时数}h）
-- 当前 Top5 弱项：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
+- 阶段模式：${ledger.stage}　本周投入：${ledger.windowHours[0] ?? 0}h（保守目标 ${coachCfg.双轨节奏.保守周时数}h）
+- Top5 弱项（检测实证）：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
 
-【已学进度·学习流水聚合（每科最多6章、最近在前；②进度归位以此为事实依据）】
-${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，归位时按「尚未铺开」判断）"}
+【已学进度·学习流水聚合（每科最多6章、最近在前）】
+${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
-【自报错题·未吸收清单（云汇报做错的题，按频次×新近；🔺=反复错建议转专题；与检测错题分离，吸收前一直挂着）】
-${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}
-
-【最近3条学习流水（云的省略句如「那民法呢」按此上下文理解）】
-${ledger.recentLines.length ? ledger.recentLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
+【自报错题·未吸收清单（云汇报做错的，按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）】
+${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}`;
 }
 
-interface CoachJson {
-  parsed?: Partial<CoachParsed>;
-  pointer?: string;
-  progress?: string;
-  plan?: string;
-  review?: string;
-  weak_candidate?: string | null;
-  wrongs?: string[];
-  absorbed?: string[];
-}
+/** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息（仿答疑做法，runSingleTurn 只收单条 user）。 */
+function buildUserMessage(conversationLines: string[], input: string): string {
+  if (conversationLines.length === 0) return input;
+  return `【此前对话（最近几轮，供你理解上文/指代；引用证据仍以账本为准）】
+${conversationLines.join("\n")}
 
-/** 模型不听"留空"指令时的占位词——一律视为空，防"无/留空"污染弱项候选 */
-const PLACEHOLDER_RE = /^[（(\[【]?\s*(无|没有|留空|暂无|不适用|待定|null|n\/?a|none|-|—)\s*[）)\]】]?$/i;
-
-/**
- * 解析 ===块=== 格式（替代 JSON——Opus 中文里偶用 ASCII 引号会破坏 JSON，2026-06-09 实测）。
- * 段内容随便用什么标点都不影响解析。
- */
-export function parseBlocks(raw: string): CoachJson | null {
-  const parts = raw.split(/===\s*(PARSED|POINTER|PROGRESS|PLAN|REVIEW|WEAK|WRONGS|ABSORBED)\s*===/i);
-  const map: Record<string, string> = {};
-  for (let i = 1; i < parts.length; i += 2) {
-    map[parts[i].toUpperCase()] = (parts[i + 1] ?? "").trim();
-  }
-  if (!map.POINTER && !map.PARSED) return null;
-
-  // 解析 PARSED 子字段（key: value 行）
-  const pl: Record<string, string> = {};
-  for (const line of (map.PARSED ?? "").split("\n")) {
-    const m = line.match(
-      /^\s*(subject|chapter|activity|minutes|accuracy|feeling|confusion)\s*[:：]\s*(.*)$/i,
-    );
-    if (m) pl[m[1].toLowerCase()] = m[2].trim();
-  }
-  const val = (s: string | undefined) => {
-    const t = (s ?? "").trim();
-    return t && !PLACEHOLDER_RE.test(t) ? t : null;
-  };
-  // WRONGS：逐行错题考点短语，剥行首符号/序号、去占位词
-  const lineList = (block: string | undefined) =>
-    (block ?? "")
-      .split("\n")
-      .map((s) => s.replace(/^[\s\-•·*]+/, "").replace(/^\d+\s*[.、)]\s*/, "").trim())
-      .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s));
-  const wrongs = lineList(map.WRONGS);
-  const absorbed = lineList(map.ABSORBED);
-  // 取首个数字（"1-2小时"若整串去非数字会变成 12）
-  const num = (s: string | undefined) => {
-    const m = (s ?? "").match(/\d+(\.\d+)?/);
-    return m ? Number(m[0]) : null;
-  };
-
-  return {
-    parsed: {
-      subject: val(pl.subject),
-      chapter: val(pl.chapter),
-      activity: val(pl.activity),
-      minutes: num(pl.minutes),
-      accuracy: num(pl.accuracy),
-      feeling: val(pl.feeling),
-      confusion: val(pl.confusion),
-    },
-    pointer: map.POINTER ?? "",
-    progress: map.PROGRESS ?? "",
-    plan: map.PLAN ?? "",
-    review: map.REVIEW ?? "",
-    weak_candidate: val(map.WEAK),
-    wrongs,
-    absorbed,
-  };
+【本轮云说】
+${input}`;
 }
 
 export async function runCoach(input: string, today = new Date()): Promise<CoachResult> {
@@ -373,70 +343,38 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
 
   const { message, costUsd } = await runSingleTurn({
     system: { stable: buildSystemStable(), volatile: buildSystemVolatile(ledger, todayStr) },
-    user: input,
+    user: buildUserMessage(ledger.conversationLines, input),
     model: MODELS.COACH,
     route: "coach",
-    maxTokens: 3000, // 四段中文 + parsed 较长，1600 会截断导致解析失败
+    maxTokens: 4000, // 对话式回复可能较长 + 尾部 META
   });
 
-  const raw = extractText(message);
-  const j = parseBlocks(raw);
+  const { clean, meta } = splitCoachMeta(extractText(message));
+  const reply = clean || "（这轮我没接住，换种说法再说一次？）";
 
-  if (!j) {
-    return {
-      parsed: {
-        subject: null,
-        chapter: null,
-        activity: null,
-        minutes: null,
-        accuracy: null,
-        feeling: null,
-        confusion: null,
-      },
-      pointer: "（教练解析失败，请换一种说法再发一次）",
-      progress: "",
-      plan: "",
-      review: "",
-      weakEmitted: false,
-      errorsRecorded: [],
-      absorbedRecorded: [],
-      redlines: checkRedlines(ledger.windowHours, ledger.topWeak),
-      logId: null,
-      logSkipped: true,
-      costUsd,
-      raw: raw.slice(0, 800),
-      stopReason: message.stop_reason,
-    };
-  }
-
-  const rawActivity = j.parsed?.activity ? String(j.parsed.activity) : null;
-  const parsed: CoachParsed = {
-    subject: SUBJECTS.includes(String(j.parsed?.subject)) ? String(j.parsed?.subject) : null,
-    chapter: j.parsed?.chapter ? String(j.parsed.chapter) : null,
-    // activity 白名单（同 subject）：野值归"其他"，dashboard 按 activity 分组才不碎
-    activity: rawActivity ? (ACTIVITIES.includes(rawActivity) ? rawActivity : "其他") : null,
-    // study_log.minutes 是 int 列，1.5 这类小数直插会被 Postgres 拒掉 → 取整
-    minutes:
-      typeof j.parsed?.minutes === "number" ? Math.max(0, Math.round(j.parsed.minutes)) : null,
-    accuracy: typeof j.parsed?.accuracy === "number" ? clamp(j.parsed.accuracy, 0, 100) : null,
-    feeling: j.parsed?.feeling ? String(j.parsed.feeling) : null,
-    confusion: j.parsed?.confusion ? String(j.parsed.confusion) : null,
+  // 从 META 还原结构化字段（白名单/范围净化，同旧逻辑）
+  const rawAct = meta?.activity ? String(meta.activity) : null;
+  const parsed = {
+    subject: SUBJECTS.includes(String(meta?.subject)) ? String(meta?.subject) : null,
+    chapter: meta?.chapter ? String(meta.chapter) : null,
+    activity: rawAct ? (ACTIVITIES.includes(rawAct) ? rawAct : "其他") : null,
+    minutes: typeof meta?.minutes === "number" ? Math.max(0, Math.round(meta.minutes)) : null,
+    accuracy: typeof meta?.accuracy === "number" ? clamp(meta.accuracy, 0, 100) : null,
+    feeling: meta?.feeling ? String(meta.feeling) : null,
+    confusion: meta?.confusion ? String(meta.confusion) : null,
   };
+  const wrongs = cleanList(meta?.wrongs);
+  const absorbed = cleanList(meta?.absorbed);
 
-  // 红线把本次录入计入本周窗——否则周日补录 3h 仍被警告"投入不足"
+  // 红线把本次录入计入本周窗
   const windowHours = [...ledger.windowHours];
   windowHours[0] = round1((windowHours[0] ?? 0) + (parsed.minutes ?? 0) / 60);
   const redlines = checkRedlines(windowHours, ledger.topWeak);
 
-  // 入库门槛：识别出任一学习要素才算流水。纯提问/咨询（最多 activity=其他）不写 study_log，
-  // 防污染周报时长与规划采纳率分母。
+  // 入库门槛：有学习要素才写 study_log（纯咨询不污染时长/采纳率）
   const isStudyRecord =
-    parsed.subject != null ||
-    parsed.chapter != null ||
-    parsed.minutes != null ||
-    parsed.accuracy != null ||
-    (parsed.activity != null && parsed.activity !== "其他") ||
-    (j.wrongs?.length ?? 0) > 0;
+    parsed.subject != null || parsed.chapter != null || parsed.minutes != null ||
+    parsed.accuracy != null || (parsed.activity != null && parsed.activity !== "其他") || wrongs.length > 0;
 
   let logId: number | null = null;
   if (isStudyRecord) {
@@ -459,28 +397,23 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     logId = (logRow?.id as number | undefined) ?? null;
   }
 
-  // 复盘困惑点 → events 弱项候选（统一走 emitEvent，pending 防重）。
-  // WEAK=明确考点短语；只有 confusion（模糊困惑）时也投但 payload 标 vague，PC 登记时区分。
-  // subject 识别不出不丢困惑点——归"未分类"，登记时人工归科。
+  // 困惑点 → 待办筐弱项候选（vague 标记）
   let weakEmitted = false;
-  const precise = (j.weak_candidate && String(j.weak_candidate).trim()) || null;
-  const candidate = precise ?? parsed.confusion;
-  if (candidate) {
+  if (parsed.confusion) {
     weakEmitted = await emitEvent({
       type: "弱项候选",
       subject: parsed.subject ?? "未分类",
       kp_id: null,
-      knowledge: candidate,
+      knowledge: parsed.confusion,
       anchor: null,
       source: "复盘",
-      payload: { from: "教练复盘", chapter: parsed.chapter, ...(precise ? {} : { vague: true }) },
+      payload: { from: "教练复盘", chapter: parsed.chapter, vague: true },
     });
   }
 
-  // 自报错题闭环：逐条尽量钉考点 → 写 study_error（独立通道，绝不碰 kp_state.error_count）；
-  // 钉不到的按科目记 + 投待办筐让 PC 人工指认（约束②兜底；emitEvent 自带 pending 防重）。
+  // 错题闭环：钉考点→study_error；钉不到按科目记+投待办筐兜底（A 期逻辑，改由 META 喂）
   const errorsRecorded: { knowledge: string; matched: boolean }[] = [];
-  for (const phrase of (j.wrongs ?? []).slice(0, 12)) {
+  for (const phrase of wrongs.slice(0, 12)) {
     let kpId: string | null = null;
     try {
       kpId = (await matchKpByName(parsed.subject, phrase))?.kp_id ?? null;
@@ -511,14 +444,14 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     errorsRecorded.push({ knowledge: phrase, matched: !!kpId });
   }
 
-  // 销账（闭环合上）：云说"懂了"的考点 → 把对应【未吸收】的 study_error 标记 absorbed（手动退场）。
+  // 销账：云说"懂了"→ 把未吸收的对应 study_error 标 absorbed（手动退场）
   const absorbedRecorded: string[] = [];
-  for (const phrase of (j.absorbed ?? []).slice(0, 12)) {
+  for (const phrase of absorbed.slice(0, 12)) {
     let kpId: string | null = null;
     try {
       kpId = (await matchKpByName(parsed.subject, phrase))?.kp_id ?? null;
     } catch {
-      /* 匹配失败 → 退回按 knowledge 模糊销账 */
+      /* 退回按 knowledge 模糊销账 */
     }
     let q = supabaseAdmin
       .from("study_error")
@@ -531,18 +464,40 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     else absorbedRecorded.push(phrase);
   }
 
+  // 长期记忆增量同步（云要的"随时同步记忆"）：只写新事实，精确去重
+  const memorized: string[] = [];
+  for (const u of (meta?.memory_updates ?? []).slice(0, 8)) {
+    const fact = (u?.fact ?? "").toString().trim();
+    if (!fact || PLACEHOLDER_RE.test(fact)) continue;
+    const { data: dup } = await supabaseAdmin.from("coach_memory").select("id").eq("fact", fact).limit(1);
+    if (dup && dup.length) {
+      await supabaseAdmin.from("coach_memory").update({ updated_at: new Date().toISOString() }).eq("id", dup[0].id);
+    } else {
+      const { error: memErr } = await supabaseAdmin
+        .from("coach_memory")
+        .insert({ fact, category: u?.category ? String(u.category) : null });
+      if (memErr) console.error("[coach] coach_memory 写入失败：", memErr.message);
+    }
+    memorized.push(fact);
+  }
+
+  // 存本轮对话（连续性）：云消息 + 教练回复
+  const { error: msgErr } = await supabaseAdmin.from("coach_message").insert([
+    { role: "user", content: input },
+    { role: "assistant", content: reply },
+  ]);
+  if (msgErr) console.error("[coach] coach_message 写入失败：", msgErr.message);
+
   return {
-    parsed,
-    pointer: j.pointer ?? "",
-    progress: j.progress ?? "",
-    plan: j.plan ?? "",
-    review: j.review ?? "",
-    weakEmitted,
+    reply,
     errorsRecorded,
     absorbedRecorded,
+    weakEmitted,
+    memorized,
     redlines,
     logId,
     logSkipped: !isStudyRecord,
     costUsd,
+    metaParsed: meta != null,
   };
 }

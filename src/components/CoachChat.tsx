@@ -2,34 +2,25 @@
 
 import { useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
+import { Markdown } from "@/components/Markdown";
 
 /**
- * 教练 T1 交互（系统设计/13，极简暗色版方案 ⑦ 屏）。
- * 云丢一句"今天刑法第5章听课"→ POST /api/coach → 解析回显 + 四段（点拨/归位/规划/复盘）。
- * ③规划是"建议·可改"（推荐+云拍板，不命令），accent 蓝左边线。复盘困惑点自动投待办筐。
+ * 教练 T1 交互（2026-06-21 重做为对话式家教）。
+ * 云说一句 → POST /api/coach → 自然对话回复（markdown）+ 后台沉淀（错题/销账/记忆 chips）。
+ * 教练记得住上文、按云的全部数据+长期记忆个性化辅导；"检验"考理解吸收不是逐字背诵。
  */
 
 interface CoachResult {
-  parsed: {
-    subject: string | null;
-    chapter: string | null;
-    activity: string | null;
-    minutes: number | null;
-    accuracy: number | null;
-    feeling: string | null;
-    confusion: string | null;
-  };
-  pointer: string;
-  progress: string;
-  plan: string;
-  review: string;
+  reply: string; // 自然对话正文（markdown）
   weakEmitted: boolean;
   errorsRecorded: { knowledge: string; matched: boolean }[];
   absorbedRecorded: string[];
+  memorized: string[];
   redlines: string[];
   logId: number | null;
-  logSkipped: boolean; // 纯咨询/解析失败时后端主动不入库；logId=null 且 !logSkipped = 入库失败
+  logSkipped: boolean;
   costText?: string;
+  metaParsed?: boolean;
 }
 
 interface Turn {
@@ -40,9 +31,9 @@ interface Turn {
 }
 
 const EXAMPLES = [
-  "今天刑法第5章听课",
-  "做了 2021 民法真题，错了 4 道",
-  "法理第3章背了一遍，正当程序那块没太懂",
+  "今天刑法听课2小时，做题错了正当防卫的限度",
+  "检验我今天学的犯罪构成，看我有没有真懂",
+  "五战了，刑民听课同时背法理行不行？",
 ];
 
 export function CoachChat() {
@@ -58,9 +49,10 @@ export function CoachChat() {
     const idx = turns.length;
     setTurns((t) => [...t, { input: v, loading: true }]);
     try {
-      const { status, data } = await postStreamedJson<
-        CoachResult & { error?: string; kind?: string }
-      >("/api/coach", { input: v });
+      const { status, data } = await postStreamedJson<CoachResult & { error?: string; kind?: string }>(
+        "/api/coach",
+        { input: v },
+      );
       if (status >= 400) {
         const msg =
           data.kind === "budget"
@@ -87,8 +79,8 @@ export function CoachChat() {
     <div className="flex flex-col gap-3">
       {turns.length === 0 && (
         <div className="glass-card rounded-[16px] p-4 text-[13px] leading-relaxed text-label2">
-          丢一句今天学了啥，我给你四段：① 即时点拨 ② 进度归位 ③ 下一步规划（建议·你拍板）④
-          复盘提取。
+          我是你的私人法硕家教——记得住你、扣着你的真实进度和老毛病辅导。跟我聊：今天学了啥、
+          考考我懂没（我考理解不是逼你逐字背）、明天怎么安排、五战该怎么调。
           <div className="mt-3 flex flex-col gap-1.5">
             {EXAMPLES.map((e) => (
               <button
@@ -105,7 +97,7 @@ export function CoachChat() {
 
       {turns.map((t, i) => (
         <div key={i} className="flex flex-col gap-2">
-          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white">
+          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white whitespace-pre-wrap">
             {t.input}
           </div>
 
@@ -136,7 +128,7 @@ export function CoachChat() {
           }}
           rows={2}
           disabled={busy}
-          placeholder="今天学了啥？一句话…（Ctrl/⌘+Enter 发送）"
+          placeholder="跟教练说点啥…（汇报/考我/问策略，Ctrl/⌘+Enter 发送）"
           className="flex-1 resize-none rounded-[18px] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-label outline-none placeholder:text-label3"
         />
         <button
@@ -152,34 +144,8 @@ export function CoachChat() {
 }
 
 function CoachReply({ r }: { r: CoachResult }) {
-  const p = r.parsed;
-  const tags = [
-    p.subject,
-    p.chapter,
-    p.activity,
-    p.minutes != null ? `${p.minutes}分钟` : null,
-    p.accuracy != null ? `正确率${p.accuracy}%` : null,
-  ].filter(Boolean) as string[];
-
   return (
     <div className="flex w-full flex-col gap-2 self-start">
-      {/* 解析回显 */}
-      <div className="rounded-[10px] bg-card2 px-3 py-2 text-[12px] text-label2">
-        我理解为：
-        {tags.length ? (
-          <span className="ml-1">
-            {tags.map((t, i) => (
-              <span key={i} className="mr-1 rounded-[5px] bg-fill px-1.5 py-0.5 text-label">
-                {t}
-              </span>
-            ))}
-          </span>
-        ) : (
-          <span className="ml-1">（没太识别出科目/章节，下面建议供参考）</span>
-        )}
-        <span className="ml-1 text-label3">— 不对就换种说法再发</span>
-      </div>
-
       {/* 红线预警 */}
       {r.redlines.map((rl, i) => (
         <div key={i} className="rounded-[10px] bg-red/15 px-3 py-2 text-[12.5px] text-red">
@@ -187,29 +153,20 @@ function CoachReply({ r }: { r: CoachResult }) {
         </div>
       ))}
 
-      {/* 四段 */}
-      <Seg title="即时点拨" body={r.pointer} />
-      <Seg title="进度归位" body={r.progress} />
-      <div className="rounded-[12px] border-l-2 border-blue bg-card p-3.5">
-        <div className="text-[12px] text-label2">下一步规划 · 建议，你拍板</div>
-        <p className="mt-1 text-[13.5px] leading-relaxed text-label">{r.plan}</p>
-        {r.plan && <PlanDecision logId={r.logId} />}
+      {/* 自然对话正文 */}
+      <div className="rounded-[14px] rounded-bl-[4px] bg-card px-3.5 py-2.5">
+        <Markdown>{r.reply}</Markdown>
       </div>
-      <Seg title="复盘提取" body={r.review} />
 
-      {/* 系统侧 */}
+      {/* 后台沉淀 chips */}
       {r.errorsRecorded?.length > 0 && (
         <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-label2">
-          已记录 {r.errorsRecorded.length} 个错题到弱项档：
+          已记录 {r.errorsRecorded.length} 个错题：
           {r.errorsRecorded.map((e, i) => (
             <span key={i}>
               {i > 0 && "、"}
               {e.knowledge}
-              {e.matched ? (
-                <span className="text-green">✓</span>
-              ) : (
-                <span className="text-label3">（待指认）</span>
-              )}
+              {e.matched ? <span className="text-green">✓</span> : <span className="text-label3">（待指认）</span>}
             </span>
           ))}
         </div>
@@ -219,45 +176,49 @@ function CoachReply({ r }: { r: CoachResult }) {
           已销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} ✓退出未吸收清单
         </div>
       )}
+      {r.memorized?.length > 0 && (
+        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-label3">
+          🧠 已记住：{r.memorized.join("；")}
+        </div>
+      )}
+
+      {/* 系统侧状态 */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-label3">
-        {r.weakEmitted && (
-          <span className="text-orange">复盘困惑点已投待办筐（PC 登记后进弱项）</span>
-        )}
+        {r.weakEmitted && <span className="text-orange">困惑点已投待办筐（PC 登记后进弱项）</span>}
         <span className="ml-auto">
-          {r.logId != null
-            ? "已记入学习日志"
-            : r.logSkipped
-              ? "未记日志（纯咨询，不算学习流水）"
-              : "⚠️ 日志入库失败，本条未记录"}
+          {r.logId != null ? "已记入学习日志" : r.logSkipped ? "未记日志（纯交流）" : "⚠️ 日志入库失败"}
           {r.costText ? ` · ${r.costText}` : ""}
         </span>
       </div>
+
+      {/* 有学习记录时，今天的安排是否采纳（周报算采纳率） */}
+      {r.logId != null && <PlanDecision logId={r.logId} />}
     </div>
   );
 }
 
-/** 规划建议三键：采纳/改一改/不按 → 回写 study_log.plan_decision（周报算采纳率） */
-function PlanDecision({ logId }: { logId: number | null }) {
+/** 今日安排处置三键：采纳/改一改/不按 → 回写 study_log.plan_decision（周报算采纳率） */
+function PlanDecision({ logId }: { logId: number }) {
   const [picked, setPicked] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const OPTS: { label: string; value: string }[] = [
+  const OPTS = [
     { label: "采纳", value: "采纳" },
     { label: "改一改", value: "改一改" },
     { label: "今天不按这个", value: "不按" },
   ];
 
   async function choose(value: string) {
-    if (logId == null || saving) return;
+    if (saving) return;
     const prev = picked;
     setPicked(value);
     setSaving(true);
     try {
-      const r = await fetch("/api/coach/adopt", {
+      const res = await fetch("/api/coach/adopt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ logId, decision: value }),
       });
-      if (!r.ok) setPicked(prev); // 回滚
+      if (!res.ok) setPicked(prev);
     } catch {
       setPicked(prev);
     } finally {
@@ -266,36 +227,21 @@ function PlanDecision({ logId }: { logId: number | null }) {
   }
 
   return (
-    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-      {OPTS.map((o) => {
-        const active = picked === o.value;
-        return (
-          <button
-            key={o.value}
-            onClick={() => choose(o.value)}
-            disabled={logId == null || saving}
-            className={`rounded-[10px] px-3 py-1.5 text-[12.5px] font-medium transition disabled:opacity-50 ${
-              active ? "bg-blue/15 text-blue-soft" : "bg-fill2 text-label2"
-            }`}
-          >
-            {o.label}
-          </button>
-        );
-      })}
+    <div className="flex flex-wrap items-center gap-1.5 px-1">
+      <span className="text-[11px] text-label3">这条安排：</span>
+      {OPTS.map((o) => (
+        <button
+          key={o.value}
+          onClick={() => choose(o.value)}
+          disabled={saving}
+          className={`rounded-[10px] px-3 py-1.5 text-[12.5px] font-medium transition disabled:opacity-50 ${
+            picked === o.value ? "bg-blue/15 text-blue-soft" : "bg-fill2 text-label2"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
       {picked && <span className="text-[11px] text-green">已记录「{picked}」✓</span>}
-      {logId == null && (
-        <span className="text-[11px] text-label3">（本次未入库，无法记录）</span>
-      )}
-    </div>
-  );
-}
-
-function Seg({ title, body }: { title: string; body: string }) {
-  if (!body) return null;
-  return (
-    <div className="rounded-[12px] bg-card p-3.5">
-      <div className="text-[12px] text-label2">{title}</div>
-      <p className="mt-1 text-[13.5px] leading-relaxed text-label">{body}</p>
     </div>
   );
 }

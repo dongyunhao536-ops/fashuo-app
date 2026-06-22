@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { parseGeneratedQuestion, parseGradeJson } from "./detection";
-import { parseBlocks } from "./coach";
 import { blocks, bullets } from "./yixiao";
 import { splitMeta } from "./ask-prompt";
 
@@ -73,51 +72,6 @@ describe("parseGradeJson（评分 JSON 解析）", () => {
   it("grep_lines 混入字符串/非数字 → 仅留有限数字", () => {
     const r = parseGradeJson(`{"grade":"未过","grep_lines":["12","x",34,null]}`);
     expect(r.grep_lines).toEqual([12, 34]);
-  });
-});
-
-describe("parseBlocks（教练 ===块=== 解析）", () => {
-  const raw = `===PARSED===
-subject: 刑法
-chapter: 第5章
-activity: 听课
-minutes: 1-2小时
-accuracy: 无
-feeling: 有点懵
-confusion: 因果关系
-===POINTER===
-听课后该"做题验证"再背，引号在块格式里不会坏。
-===PROGRESS===
-按轮次表你在第一轮。
-===PLAN===
-今晚做配套题。
-===REVIEW===
-说说今天最不懂的。
-===WEAK===
-因果关系的认定`;
-
-  it("全段解析 + PARSED 子字段", () => {
-    const j = parseBlocks(raw)!;
-    expect(j).not.toBeNull();
-    expect(j.parsed?.subject).toBe("刑法");
-    expect(j.parsed?.chapter).toBe("第5章");
-    expect(j.parsed?.minutes).toBe(1); // "1-2小时"取首个数字，不拼成 12
-    expect(j.parsed?.accuracy).toBeNull(); // "无"=占位符→null
-    expect(j.weak_candidate).toBe("因果关系的认定");
-  });
-
-  it("段内含 ASCII 引号不破坏解析（块格式治本，2026-06-09 教训）", () => {
-    expect(parseBlocks(raw)!.pointer).toContain('"做题验证"');
-  });
-
-  it("占位词「留空/无」一律视为空", () => {
-    const j = parseBlocks(`===PARSED===\nsubject: 留空\n===POINTER===\nx\n===WEAK===\n无`)!;
-    expect(j.parsed?.subject).toBeNull();
-    expect(j.weak_candidate).toBeNull();
-  });
-
-  it("既无 POINTER 又无 PARSED → null（触发上层「解析失败」兜底）", () => {
-    expect(parseBlocks("模型乱答一通没有任何块标记")).toBeNull();
   });
 });
 
