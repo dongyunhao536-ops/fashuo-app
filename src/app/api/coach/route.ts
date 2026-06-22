@@ -4,11 +4,12 @@ import { DailyCapError, fmtCost } from "@/lib/anthropic";
 import { streamJson } from "@/lib/stream-response";
 
 /**
- * POST /api/coach —— 教练 T1（系统设计/13）。
- * 入参：{ input: string }（自然语言，如"今天刑法第5章听课"）
- * 出参：{ parsed, pointer, progress, plan, review, weakEmitted, redlines, costUsd, costText }
+ * POST /api/coach —— 教练 T1（对话式家教，系统设计/13）。
+ * 入参：{ input: string }（自然语言，如"今天刑法第5章听课，做题错了正当防卫限度"）
+ * 出参：runCoach 的 CoachResult（reply + 错题/销账/记忆等后台沉淀计数）+ costText。
  *
- * 单次 Opus 调用（无 grep 工具循环）→ 比答疑快/便宜；解析+四段+写 study_log+复盘投 events 一次完成。
+ * 单次 Opus 调用（无 grep 工具循环）→ 比答疑快/便宜；自然对话回复 + 尾部 META 一次完成
+ * （错题→study_error 闭环、答疑弱项销账、长期记忆同步均从 META 沉淀）。
  */
 
 export const maxDuration = 120;

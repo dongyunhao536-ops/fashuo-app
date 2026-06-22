@@ -26,7 +26,6 @@ const EXAM_DATE = coachCfg.考试日期;
 const BASE_DEADLINE = coachCfg.基础结业死线;
 const DAY = 86400000;
 const daysBetween = (a: Date, b: Date) => Math.ceil((a.getTime() - b.getTime()) / DAY);
-const round1 = (n: number) => Math.round(n * 10) / 10;
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const ACTIVITIES = ["听课", "做题", "背诵", "复盘", "其他"];
@@ -58,7 +57,6 @@ interface CoachMeta {
   subject?: string | null;
   chapter?: string | null;
   activity?: string | null;
-  minutes?: number | null;
   accuracy?: number | null;
   feeling?: string | null;
   confusion?: string | null;
@@ -74,8 +72,7 @@ export interface CoachResult {
   askWeakAbsorbed: number; // 顺带吸收掉的「答疑暴露弱项」条数（从待办筐消费）
   weakEmitted: boolean; // 困惑点是否投待办筐
   memorized: string[]; // 本轮新记住的长期事实（UI 轻提示）
-  redlines: string[]; // 命中的红线预警
-  logId: number | null; // study_log 行 id（采纳率回写用）
+  logId: number | null; // study_log 行 id（仅状态展示用）
   logSkipped: boolean; // true=纯咨询/无学习要素，主动不入库
   costUsd: number;
   metaParsed: boolean; // META 是否解析成功（debug）
@@ -128,12 +125,7 @@ async function loadLedger(today: Date) {
   const daysToExam = Math.max(0, daysBetween(new Date(EXAM_DATE), today));
   const daysToBase = daysBetween(new Date(BASE_DEADLINE), today);
 
-  const nWeeks = Math.max(2, coachCfg.红线.连续低投入周阈值_周);
-  const bounds = Array.from({ length: nWeeks }, (_, i) =>
-    bjDateStr(new Date(today.getTime() - (7 * (i + 1) - 1) * DAY)),
-  );
-
-  const [weakRes, studyRes, progressRes, recentRes, selfErrRes, askWeakRes, msgRes, memRes] =
+  const [weakRes, progressRes, recentRes, selfErrRes, askWeakRes, msgRes, memRes] =
     await Promise.all([
       supabaseAdmin
         .from("kp_state")
@@ -142,7 +134,6 @@ async function loadLedger(today: Date) {
         .eq("mastered", false)
         .order("error_count", { ascending: false })
         .limit(5),
-      supabaseAdmin.from("study_log").select("log_date, minutes").gte("log_date", bounds[nWeeks - 1]),
       supabaseAdmin
         .from("study_log")
         .select("log_date, subject, chapter")
@@ -151,7 +142,7 @@ async function loadLedger(today: Date) {
         .limit(200),
       supabaseAdmin
         .from("study_log")
-        .select("log_date, subject, chapter, activity, minutes, raw_input")
+        .select("log_date, subject, chapter, activity, raw_input")
         .order("id", { ascending: false })
         .limit(3),
       // 未吸收自报错题（独立通道，仅教练读；不碰 kp_state）
@@ -187,13 +178,6 @@ async function loadLedger(today: Date) {
     errorCount: k.error_count ?? 0,
   }));
 
-  const windowMins = new Array<number>(nWeeks).fill(0);
-  for (const r of studyRes.data ?? []) {
-    const idx = bounds.findIndex((b) => String(r.log_date) >= b);
-    if (idx !== -1) windowMins[idx] += r.minutes ?? 0;
-  }
-  const windowHours = windowMins.map((m) => round1(m / 60));
-
   const chaptersBySubject = new Map<string, string[]>();
   for (const r of progressRes.data ?? []) {
     if (!r.subject || !SUBJECTS.includes(r.subject) || !r.chapter) continue;
@@ -207,7 +191,7 @@ async function loadLedger(today: Date) {
   });
 
   const recentLines = (recentRes.data ?? []).map((r) => {
-    const head = [r.log_date, r.subject, r.chapter, r.activity, r.minutes != null ? `${r.minutes}分钟` : null]
+    const head = [r.log_date, r.subject, r.chapter, r.activity]
       .filter(Boolean)
       .join(" ");
     const quote = r.raw_input ? `（原话：${String(r.raw_input).slice(0, 40)}）` : "";
@@ -268,34 +252,9 @@ async function loadLedger(today: Date) {
   );
 
   return {
-    stage, daysToExam, daysToBase, topWeak, windowHours,
+    stage, daysToExam, daysToBase, topWeak,
     progressLines, recentLines, selfErrorLines, askWeakLines, conversationLines, memoryFacts,
   };
-}
-
-/**
- * 红线（13 §4，覆盖5科+总时长）。连续 N 窗低于下限 → 强提醒。
- */
-function checkRedlines(windowHours: number[], topWeak: WeakItem[]): string[] {
-  const out: string[] = [];
-  const rl = coachCfg.红线;
-  const weekHours = windowHours[0] ?? 0;
-  if (weekHours < rl.周投入下限_小时) {
-    const allLow =
-      windowHours.length >= rl.连续低投入周阈值_周 && windowHours.every((h) => h < rl.周投入下限_小时);
-    out.push(
-      allLow
-        ? `🔴 已连续 ${windowHours.length} 周投入低于 ${rl.周投入下限_小时}h（${[...windowHours].reverse().map((h) => h + "h").join(" → ")}）——节奏脱轨，今晚必须排补救计划。`
-        : `⚠️ 本周投入 ${weekHours}h < ${rl.周投入下限_小时}h 下限——注意补回（连续 ${rl.连续低投入周阈值_周} 周会强提醒）。`,
-    );
-  }
-  const 转专题 = topWeak.filter((w) => w.errorCount >= rl.同弱项错次转专题);
-  if (转专题.length) {
-    out.push(
-      `🔴 弱项达转专题阈值（错≥${rl.同弱项错次转专题}）：${转专题.map((w) => `「${w.label}」`).join("、")}——建议暂缓推进、专题攻克。`,
-    );
-  }
-  return out;
 }
 
 /** 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏 + 输出契约。 */
@@ -320,11 +279,11 @@ ${METHODOLOGY}
 
 【云的节奏参考（来自他自己的设定，可随真实进度调）】
 - 四轮三阶段：${rounds}
-- 在职双轨：${tracks}。保守周时数 ${coachCfg.双轨节奏.保守周时数}h。
+- 在职双轨：${tracks}。
 
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","minutes":数字或省略,"accuracy":0-100或省略,"feeling":"一句或省略","confusion":"最不懂一句或省略","wrongs":["今天明确做错/没掌握的考点短语"],"absorbed":["今天明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"最不懂一句或省略","wrongs":["今天明确做错/没掌握的考点短语"],"absorbed":["今天明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
 规则：只在云【确有】对应信息时填，纯闲聊/提问就大多留空数组/省略；memory_updates 只发【新的/变化的】事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
@@ -336,7 +295,7 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 
 【当前账本】
 - 今天：${todayStr}　距初试 ${ledger.daysToExam} 天　距基础结业死线 ${ledger.daysToBase > 0 ? ledger.daysToBase + " 天" : "已过期 " + -ledger.daysToBase + " 天"}
-- 阶段模式：${ledger.stage}　本周投入：${ledger.windowHours[0] ?? 0}h（保守目标 ${coachCfg.双轨节奏.保守周时数}h）
+- 阶段模式：${ledger.stage}
 - Top5 弱项（检测实证）：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
 
 【已学进度·学习流水聚合（每科最多6章、最近在前）】
@@ -380,7 +339,6 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     subject: SUBJECTS.includes(String(meta?.subject)) ? String(meta?.subject) : null,
     chapter: meta?.chapter ? String(meta.chapter) : null,
     activity: rawAct ? (ACTIVITIES.includes(rawAct) ? rawAct : "其他") : null,
-    minutes: typeof meta?.minutes === "number" ? Math.max(0, Math.round(meta.minutes)) : null,
     accuracy: typeof meta?.accuracy === "number" ? clamp(meta.accuracy, 0, 100) : null,
     feeling: meta?.feeling ? String(meta.feeling) : null,
     confusion: meta?.confusion ? String(meta.confusion) : null,
@@ -388,14 +346,9 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
   const wrongs = cleanList(meta?.wrongs);
   const absorbed = cleanList(meta?.absorbed);
 
-  // 红线把本次录入计入本周窗
-  const windowHours = [...ledger.windowHours];
-  windowHours[0] = round1((windowHours[0] ?? 0) + (parsed.minutes ?? 0) / 60);
-  const redlines = checkRedlines(windowHours, ledger.topWeak);
-
-  // 入库门槛：有学习要素才写 study_log（纯咨询不污染时长/采纳率）
+  // 入库门槛：有学习要素才写 study_log（纯咨询不污染进度记录）
   const isStudyRecord =
-    parsed.subject != null || parsed.chapter != null || parsed.minutes != null ||
+    parsed.subject != null || parsed.chapter != null ||
     parsed.accuracy != null || (parsed.activity != null && parsed.activity !== "其他") || wrongs.length > 0;
 
   let logId: number | null = null;
@@ -407,7 +360,6 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
         subject: parsed.subject ?? "未识别",
         chapter: parsed.chapter,
         activity: parsed.activity ?? "其他",
-        minutes: parsed.minutes,
         accuracy: parsed.accuracy,
         feeling: parsed.feeling,
         source: "manual",
@@ -531,7 +483,6 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     askWeakAbsorbed,
     weakEmitted,
     memorized,
-    redlines,
     logId,
     logSkipped: !isStudyRecord,
     costUsd,

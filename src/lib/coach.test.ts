@@ -3,11 +3,11 @@ import { splitCoachMeta, COACH_META_OPEN, COACH_META_CLOSE } from "./coach";
 
 describe("splitCoachMeta 正文+META 分离", () => {
   it("抽出 META、剥离展示正文", () => {
-    const full = `今天辛苦了！犯罪构成听懂了就好。\n\n${COACH_META_OPEN}\n{"subject":"刑法","activity":"听课","minutes":120,"wrongs":["正当防卫"],"absorbed":[],"memory_updates":[{"fact":"五战","category":"画像"}]}\n${COACH_META_CLOSE}`;
+    const full = `今天辛苦了！犯罪构成听懂了就好。\n\n${COACH_META_OPEN}\n{"subject":"刑法","activity":"听课","accuracy":80,"wrongs":["正当防卫"],"absorbed":[],"memory_updates":[{"fact":"五战","category":"画像"}]}\n${COACH_META_CLOSE}`;
     const { clean, meta } = splitCoachMeta(full);
     expect(clean).toBe("今天辛苦了！犯罪构成听懂了就好。");
     expect(meta?.subject).toBe("刑法");
-    expect(meta?.minutes).toBe(120);
+    expect(meta?.accuracy).toBe(80);
     expect(meta?.wrongs).toEqual(["正当防卫"]);
     expect(meta?.memory_updates?.[0].fact).toBe("五战");
   });

@@ -17,11 +17,6 @@ export interface WeeklyReview {
   activity: { detections: number; asks: number; coachLogs: number };
   passByLevel: { level: string; passed: number; total: number; pct: number }[];
   passBySubject: { subject: string; passed: number; total: number; pct: number }[];
-  study: {
-    totalMinutes: number;
-    bySubject: { subject: string; minutes: number }[];
-    planAdoption: { 采纳: number; 改一改: number; 不按: number; rate: number | null };
-  };
   askPoints: { subject: string; confusion: string; type: string | null }[];
   repeatedFails: { kp_id: string; subject: string; name: string; failCount: number }[];
   inbox: { createdByType: Record<string, number>; pendingBacklog: number };
@@ -49,7 +44,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
       .from("detection_log")
       .select("kp_id, level, passed, ai_grade, confidence, starred, question")
       .gte("ts", sinceTs),
-    supabaseAdmin.from("study_log").select("subject, minutes, plan_decision").gte("log_date", weekStart),
+    supabaseAdmin.from("study_log").select("log_date").gte("log_date", weekStart),
     supabaseAdmin.from("ask_summary").select("subject, confusion, question_type").gte("created_at", sinceTs),
     supabaseAdmin.from("events").select("type").gte("created_at", sinceTs),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
@@ -96,24 +91,6 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
   const passBySubject = [...subjAgg.entries()]
     .map(([subject, a]) => ({ subject, passed: a.passed, total: a.total, pct: pct(a.passed, a.total) }))
     .sort((a, b) => b.total - a.total);
-
-  // —— 学习投入 + 采纳率 ——
-  const subjMin = new Map<string, number>();
-  let totalMinutes = 0;
-  const adopt = { 采纳: 0, 改一改: 0, 不按: 0 };
-  for (const s of study) {
-    const m = s.minutes ?? 0;
-    totalMinutes += m;
-    subjMin.set(s.subject, (subjMin.get(s.subject) ?? 0) + m);
-    const d = s.plan_decision as keyof typeof adopt | null;
-    if (d && d in adopt) adopt[d]++;
-  }
-  const adoptTotal = adopt.采纳 + adopt.改一改 + adopt.不按;
-  const study_ = {
-    totalMinutes,
-    bySubject: [...subjMin.entries()].map(([subject, minutes]) => ({ subject, minutes })).sort((a, b) => b.minutes - a.minutes),
-    planAdoption: { ...adopt, rate: adoptTotal === 0 ? null : Math.round((adopt.采纳 / adoptTotal) * 100) },
-  };
 
   // —— 高频答疑卡点 ——
   const askPoints = asks
@@ -164,7 +141,6 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     activity: { detections: det.length, asks: asks.length, coachLogs: study.length },
     passByLevel,
     passBySubject,
-    study: study_,
     askPoints,
     repeatedFails,
     inbox: { createdByType, pendingBacklog: (evPendingRes.data ?? []).length },
@@ -189,26 +165,20 @@ export function formatWeeklyReportText(r: WeeklyReview): string {
   L.push(`按档：${r.passByLevel.map((x) => `${x.level} ${x.pct}%(${x.passed}/${x.total})`).join(" · ") || "（本周无检测）"}`);
   L.push(`按科：${r.passBySubject.map((x) => `${x.subject} ${x.pct}%(${x.passed}/${x.total})`).join(" · ") || "—"}`);
   L.push("");
-  L.push(`## 3. 学习投入`);
-  L.push(`- 总时长 ${(r.study.totalMinutes / 60).toFixed(1)}h：${r.study.bySubject.map((x) => `${x.subject} ${(x.minutes / 60).toFixed(1)}h`).join(" · ") || "—"}`);
-  L.push(
-    `- 规划采纳率：${r.study.planAdoption.rate == null ? "（无表态）" : r.study.planAdoption.rate + "%"}（采纳${r.study.planAdoption.采纳}/改${r.study.planAdoption.改一改}/不按${r.study.planAdoption.不按}）`,
-  );
-  L.push("");
-  L.push(`## 4. 高频答疑卡点`);
+  L.push(`## 3. 高频答疑卡点`);
   L.push(r.askPoints.length ? r.askPoints.map((a) => `- [${a.subject}${a.type ? "·" + a.type : ""}] ${a.confusion}`).join("\n") : "（本周无答疑卡点记录）");
   L.push("");
-  L.push(`## 5. 本周反复失败考点`);
+  L.push(`## 4. 本周反复失败考点`);
   L.push(r.repeatedFails.length ? r.repeatedFails.map((f) => `- ${f.subject}·${f.name} 失败 ${f.failCount} 次（${f.kp_id}）`).join("\n") : "（本周无失败）");
   L.push("");
-  L.push(`## 6. 待办筐`);
+  L.push(`## 5. 待办筐`);
   L.push(`- 本周新增：${Object.entries(r.inbox.createdByType).map(([t, n]) => `${t} ${n}`).join(" · ") || "无"}`);
   L.push(`- 待处理积压：${r.inbox.pendingBacklog} 条`);
   L.push("");
-  L.push(`## 7. 成本`);
+  L.push(`## 6. 成本`);
   L.push(`- 本周合计 ${yuan(r.cost.totalUsd)}：${r.cost.byRoute.map((x) => `${x.route} ${yuan(x.usd)}`).join(" · ") || "—"}`);
   L.push("");
-  L.push(`## 8. 评分质量审计（人眼校准用）`);
+  L.push(`## 7. 评分质量审计（人眼校准用）`);
   L.push(
     r.gradingAudit.length
       ? r.gradingAudit

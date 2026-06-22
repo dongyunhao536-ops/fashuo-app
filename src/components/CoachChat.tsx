@@ -17,7 +17,6 @@ interface CoachResult {
   absorbedRecorded: string[];
   askWeakAbsorbed: number;
   memorized: string[];
-  redlines: string[];
   logId: number | null;
   logSkipped: boolean;
   costText?: string;
@@ -32,7 +31,7 @@ interface Turn {
 }
 
 const EXAMPLES = [
-  "今天刑法听课2小时，做题错了正当防卫的限度",
+  "今天刑法听课，做题错了正当防卫的限度",
   "检验我今天学的犯罪构成，看我有没有真懂",
   "五战了，刑民听课同时背法理行不行？",
 ];
@@ -147,13 +146,6 @@ export function CoachChat() {
 function CoachReply({ r }: { r: CoachResult }) {
   return (
     <div className="flex w-full flex-col gap-2 self-start">
-      {/* 红线预警 */}
-      {r.redlines.map((rl, i) => (
-        <div key={i} className="rounded-[10px] bg-red/15 px-3 py-2 text-[12.5px] text-red">
-          {rl}
-        </div>
-      ))}
-
       {/* 自然对话正文 */}
       <div className="rounded-[14px] rounded-bl-[4px] bg-card px-3.5 py-2.5">
         <Markdown>{r.reply}</Markdown>
@@ -196,58 +188,6 @@ function CoachReply({ r }: { r: CoachResult }) {
           {r.costText ? ` · ${r.costText}` : ""}
         </span>
       </div>
-
-      {/* 有学习记录时，今天的安排是否采纳（周报算采纳率） */}
-      {r.logId != null && <PlanDecision logId={r.logId} />}
-    </div>
-  );
-}
-
-/** 今日安排处置三键：采纳/改一改/不按 → 回写 study_log.plan_decision（周报算采纳率） */
-function PlanDecision({ logId }: { logId: number }) {
-  const [picked, setPicked] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const OPTS = [
-    { label: "采纳", value: "采纳" },
-    { label: "改一改", value: "改一改" },
-    { label: "今天不按这个", value: "不按" },
-  ];
-
-  async function choose(value: string) {
-    if (saving) return;
-    const prev = picked;
-    setPicked(value);
-    setSaving(true);
-    try {
-      const res = await fetch("/api/coach/adopt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ logId, decision: value }),
-      });
-      if (!res.ok) setPicked(prev);
-    } catch {
-      setPicked(prev);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 px-1">
-      <span className="text-[11px] text-label3">这条安排：</span>
-      {OPTS.map((o) => (
-        <button
-          key={o.value}
-          onClick={() => choose(o.value)}
-          disabled={saving}
-          className={`rounded-[10px] px-3 py-1.5 text-[12.5px] font-medium transition disabled:opacity-50 ${
-            picked === o.value ? "bg-blue/15 text-blue-soft" : "bg-fill2 text-label2"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-      {picked && <span className="text-[11px] text-green">已记录「{picked}」✓</span>}
     </div>
   );
 }

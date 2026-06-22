@@ -5,7 +5,7 @@ import { TabBar } from "@/components/TabBar";
 
 /**
  * 周复盘（RSC 只读，BUILD_PLAN 🔖）。云周日打开自助看一页：
- * 活动量 / 通过率 / 投入+采纳率 / 答疑卡点 / 反复失败 / 待办筐 / 成本 / 评分审计。
+ * 活动量 / 通过率 / 答疑卡点 / 反复失败 / 待办筐 / 成本 / 评分审计。
  * 零 LLM 聚合；AI 改进建议层后接。
  */
 
@@ -43,24 +43,7 @@ export default async function WeeklyPage() {
         )}
       </Section>
 
-      {/* 3. 投入 + 采纳率 */}
-      <Section title="学习投入">
-        <div className="text-[13px] text-label">
-          总时长 <b>{(r.study.totalMinutes / 60).toFixed(1)}</b> h
-          <span className="ml-2 text-label2">
-            {r.study.bySubject.map((x) => `${x.subject} ${(x.minutes / 60).toFixed(1)}h`).join(" · ") || "—"}
-          </span>
-        </div>
-        <div className="mt-2 text-[13px] text-label2">
-          规划采纳率：
-          <b className="text-label">{r.study.planAdoption.rate == null ? "（无表态）" : r.study.planAdoption.rate + "%"}</b>
-          <span className="ml-1 text-label3">
-            采纳{r.study.planAdoption.采纳}/改{r.study.planAdoption.改一改}/不按{r.study.planAdoption.不按}
-          </span>
-        </div>
-      </Section>
-
-      {/* 4. 答疑卡点 */}
+      {/* 3. 答疑卡点 */}
       <Section title="高频答疑卡点">
         {r.askPoints.length === 0 ? (
           <Empty>本周没有答疑卡点记录</Empty>
@@ -78,7 +61,7 @@ export default async function WeeklyPage() {
         )}
       </Section>
 
-      {/* 5. 反复失败 */}
+      {/* 4. 反复失败 */}
       <Section title="本周反复失败考点">
         {r.repeatedFails.length === 0 ? (
           <Empty>本周没有失败——稳</Empty>
@@ -96,7 +79,7 @@ export default async function WeeklyPage() {
         )}
       </Section>
 
-      {/* 6. 待办筐 */}
+      {/* 5. 待办筐 */}
       <Section title="待办筐">
         <div className="text-[13px] text-label2">
           本周新增：
@@ -107,7 +90,7 @@ export default async function WeeklyPage() {
         </div>
       </Section>
 
-      {/* 7. 成本 */}
+      {/* 6. 成本 */}
       <Section title="成本">
         <div className="text-[13px] text-label">
           本周合计 <b>{yuan(r.cost.totalUsd)}</b>
@@ -119,7 +102,7 @@ export default async function WeeklyPage() {
         </div>
       </Section>
 
-      {/* 8. 评分审计 */}
+      {/* 7. 评分审计 */}
       <Section title="评分质量审计（人眼校准）">
         {r.gradingAudit.length === 0 ? (
           <Empty>本周无低信心/★评分，评分稳定</Empty>

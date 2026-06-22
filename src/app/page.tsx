@@ -61,10 +61,7 @@ export default async function DashboardPage() {
               </svg>
             </Link>
             <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
-              {d.hero.todayMinutes} 分钟
-            </span>
-            <span className="rounded-[8px] bg-fill px-2 py-0.5 text-[11px] text-label2">
-              检测 {d.hero.todayDetections} 次
+              今日检测 {d.hero.todayDetections} 次
             </span>
           </div>
         </div>
@@ -181,9 +178,9 @@ export default async function DashboardPage() {
       <section className="glass-card mx-4 rounded-[16px] p-4">
         <div className="grid grid-cols-7 gap-1.5">
           {d.weekHeat.map((day, i) => {
-            const intensity = Math.min(1, day.minutes / 120); // 2 小时满格
+            const intensity = Math.min(1, day.detections / 6); // 6 次检测满格
             const cls =
-              day.minutes === 0
+              day.detections === 0
                 ? "bg-card2 text-label3"
                 : intensity < 0.3
                   ? "bg-blue/25 text-label"
@@ -198,7 +195,7 @@ export default async function DashboardPage() {
                     isToday ? "ring-1 ring-blue" : ""
                   }`}
                 >
-                  {day.minutes || "—"}
+                  {day.detections || "—"}
                 </div>
                 <div className="text-[10px] text-label3">
                   {isToday ? "今" : "日一二三四五六"[new Date(day.date).getDay()]}
@@ -207,7 +204,7 @@ export default async function DashboardPage() {
             );
           })}
         </div>
-        <div className="mt-2 text-[11px] text-label3">数字 = 当日学习分钟（教练打卡）</div>
+        <div className="mt-2 text-[11px] text-label3">数字 = 当日检测次数</div>
       </section>
 
       {/* 五科掌握雷达（移到末尾：变化最慢，无需高频看） */}

@@ -7,19 +7,18 @@ import { bjDateStr, bjDayStart, bjDayEnd } from "./dates";
  * 系统设计/14 §6 G3 仪表 = 账本只读视图；UI 层不写任何状态。
  *
  * 五块数据（对齐效果图 0. 仪表盘）：
- *   1. Hero  ：距 2026-12-21 初试天数 + 今日总学习分钟 + 今日检测次数
+ *   1. Hero  ：距 2026-12-21 初试天数 + 今日检测次数
  *   2. 双核  ：今日清单完成度 + 答疑开放卡点数 + 最近一条 confusion
  *   3. 雷达  ：五科 kp_state 聚合（mastered 数 / 总数）
  *   4. 待办  ：events pending 按 type 分组计数
  *   5. Top5  ：错次最多的考点
- *   6. 本周  ：近 7 天 detection + study 活动密度
+ *   6. 本周  ：近 7 天检测活动密度
  */
 
 export interface DashboardData {
   hero: {
     examDate: string;
     daysLeft: number;
-    todayMinutes: number;
     todayDetections: number;
   };
   cores: {
@@ -40,7 +39,7 @@ export interface DashboardData {
     error_count: number;
     cur_level: string;
   }[];
-  weekHeat: { date: string; minutes: number; detections: number }[];
+  weekHeat: { date: string; detections: number }[];
 }
 
 const EXAM_DATE = "2026-12-21";
@@ -60,9 +59,7 @@ export async function getDashboard(): Promise<DashboardData> {
     eventsPending,
     reviewEv,
     top5,
-    weekStudy,
     weekDetect,
-    todayStudy,
     todayDetect,
   ] = await Promise.all([
     fetchAllRows<KpRow>((from, to) =>
@@ -92,14 +89,9 @@ export async function getDashboard(): Promise<DashboardData> {
       .order("error_count", { ascending: false })
       .limit(5),
     supabaseAdmin
-      .from("study_log")
-      .select("log_date, minutes")
-      .gte("log_date", week0),
-    supabaseAdmin
       .from("detection_log")
       .select("ts, kp_id")
       .gte("ts", bjDayStart(week0)),
-    supabaseAdmin.from("study_log").select("minutes").eq("log_date", todayStr),
     supabaseAdmin
       .from("detection_log")
       .select("id, kp_id")
@@ -108,10 +100,6 @@ export async function getDashboard(): Promise<DashboardData> {
   ]);
 
   // —— 1. Hero ——
-  const todayMinutes = (todayStudy.data ?? []).reduce(
-    (s, r) => s + (r.minutes ?? 0),
-    0,
-  );
   const todayDetections = (todayDetect.data ?? []).length;
   // 今日完成度分子：今天检测过的【去重考点数】（再测一次同考点不重复计）
   const todayDoneKp = new Set(
@@ -160,15 +148,10 @@ export async function getDashboard(): Promise<DashboardData> {
     cur_level: k.cur_level,
   }));
 
-  // —— 6. 本周复习密度 ——
-  const dayMap = new Map<string, { minutes: number; detections: number }>();
+  // —— 6. 本周复习密度（按当日检测次数）——
+  const dayMap = new Map<string, { detections: number }>();
   for (let i = 6; i >= 0; i--) {
-    dayMap.set(daysAgo(i, today), { minutes: 0, detections: 0 });
-  }
-  for (const s of weekStudy.data ?? []) {
-    const k = String(s.log_date);
-    const row = dayMap.get(k);
-    if (row) row.minutes += s.minutes ?? 0;
+    dayMap.set(daysAgo(i, today), { detections: 0 });
   }
   for (const d of weekDetect.data ?? []) {
     const k = bjDateStr(new Date(String(d.ts))); // ts 是 UTC，切回北京日历日再归桶
@@ -181,7 +164,7 @@ export async function getDashboard(): Promise<DashboardData> {
   }));
 
   return {
-    hero: { examDate: EXAM_DATE, daysLeft, todayMinutes, todayDetections },
+    hero: { examDate: EXAM_DATE, daysLeft, todayDetections },
     cores: {
       plan: {
         total: plan.items.length,
