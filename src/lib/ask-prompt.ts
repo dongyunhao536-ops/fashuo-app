@@ -65,6 +65,28 @@ export function splitMeta(full: string): { clean: string; meta: AskMeta | null }
 }
 
 /**
+ * 候选防灌筐筛选（纯函数，便于单测）：
+ * - 去掉太短/太泛（<4 字，多半是"概念""定义"这类无信息量短语）；
+ * - 同一轮内按归一化文本（去空白+小写）去近重复；
+ * - 按 max 截断（每问封顶，治"问一个问题投进来好几个"）。
+ * DB 级"近期已处理过的别再投"去重在 /api/ask 路由里另做（要查库）。
+ */
+export function screenCandidates<T>(cands: T[] | undefined, keyOf: (c: T) => string, max: number): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const c of cands ?? []) {
+    const v = keyOf(c).trim();
+    if (v.length < 4) continue;
+    const norm = v.replace(/\s+/g, "").toLowerCase();
+    if (seen.has(norm)) continue;
+    seen.add(norm);
+    out.push(c);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+/**
  * 规划器系统提示（第 1 段·小调用）：读题 → 列出所有要检索的查询，不作答。
  * grep 是逐行子串匹配 → 关键词必须是【单个连续词、不含空格】，需要多个就拆成多条。
  */
@@ -147,9 +169,11 @@ export function buildAskSystemStable(): string {
 ${META_OPEN}
 {"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}],"review_kp_candidates":[{"kp_id":"XF-0042","reason":"答疑澄清了云对XX的误解，建议背诵清单复验"}]}
 ${META_CLOSE}
-说明（务必区分三类候选的触发条件，错填会污染飞轮）：
-- weak_candidates：用户**首次**对某知识点表现混淆/可能答错时填（PC 登记进当前弱项后→调度器加权）。
-- xinde_candidates：本题揭示出可复用的"判断倾向/答题规则"时填（仅作候选，需真题二次背书才进正文）。
+说明（务必区分三类候选的触发条件，错填会污染飞轮；【宁可漏投，不要灌筐】——待办筐是云手动复核的，噪音=负担）：
+- weak_candidates：【从严，默认空数组】只在云本题里【确实答错了 / 暴露了具体误解】才投，且【至多 1 个、最多不超过 2 个】，只挑最关键那个。
+  下列一律【不投】：纯概念询问（"X是什么 / 怎么区分"——云只是不知道、并没答错）、常识题/简单题、一问就懂的、教材直接写明照抄即可的。
+  判据：若云没有表现出"我以为是A其实是B"的错，就不是弱项，别投。
+- xinde_candidates：【从严，默认空数组，至多 1 个】只在本题揭示出【可复用且非显然】的判断倾向/答题规则时投；一次性的、教材白纸黑字直接写的，不投。
 - review_kp_candidates：本次答疑**确实纠正了**云对某考点的误解（注意：是"已经在用，但用错了"而非"第一次接触陌生点"），且该考点能给出明确的 kp_id（如 XF-0042/MF-0123）→ 投复验请求，背诵下次清单优先消费。
   · 触发要点：①云的提问里已表达过某种错误判断 ②你用心得/真题/教材锚点纠正 ③纠正落到具体可背诵的考点（不是"案例题答题方法"这种跨考点元能力）
   · 不要"为投而投"：若本题是新接触的陌生点（云没说错过，是真不会）→ 用 weak_candidates 即可，不要发复验请求。

@@ -10,6 +10,7 @@ import {
   buildAskSystemStable,
   buildAskSystemVolatile,
   splitMeta,
+  screenCandidates,
   type AskMeta,
 } from "@/lib/ask-prompt";
 import { streamJson } from "@/lib/stream-response";
@@ -136,7 +137,37 @@ export async function POST(req: Request) {
   });
 }
 
-/** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（pending 防重统一在 emitEvent；登记去重在 PC） */
+/** 每问候选上限（防灌筐）：弱项至多 2、心得至多 1。提示词已要求从严默认空，这是兜底硬闸。 */
+const MAX_WEAK_PER_ASK = 2;
+const MAX_XINDE_PER_ASK = 1;
+/** 近期已"处理过"（收下/已登记/已忽略）的同一候选，N 天内不再重复投（pending 防重由 emitEvent 兜） */
+const RECENT_HANDLED_DAYS = 30;
+
+/**
+ * 防重二道闸：该 (type, subject, knowledge) 在近 N 天内是否已被处理过（confirmed/consumed/dismissed）。
+ * emitEvent 只挡 pending（筐内噪音）；这里挡"问过、登记过/忽略过、又被模型重新吐出来"的跨批次重复。
+ */
+async function recentlyHandled(
+  type: string,
+  subject: string | null,
+  knowledge: string,
+): Promise<boolean> {
+  const since = new Date(Date.now() - RECENT_HANDLED_DAYS * 86400_000).toISOString();
+  let q = supabaseAdmin
+    .from("events")
+    .select("id")
+    .eq("type", type)
+    .eq("knowledge", knowledge)
+    .in("status", ["confirmed", "consumed", "dismissed"])
+    .gte("created_at", since)
+    .limit(1);
+  q = subject == null ? q.is("subject", null) : q.eq("subject", subject);
+  const { data, error } = await q;
+  if (error) return false; // 查不动宁可冒重复也别丢候选
+  return !!(data && data.length);
+}
+
+/** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（pending 防重在 emitEvent；近期已处理防重在 recentlyHandled；登记去重在 PC） */
 async function sinkProposals(args: {
   subject: string | null;
   kpId: string | null;
@@ -145,8 +176,10 @@ async function sinkProposals(args: {
 }) {
   const { subject, kpId, meta, grepLines } = args;
 
-  for (const w of meta?.weak_candidates ?? []) {
-    if (!w?.knowledge) continue;
+  // 先筛（太短/批内重复/封顶），再逐条查"近期是否已处理过"，双闸过滤，治"问一个问题灌进来好几个+重复"
+  const weakCands = screenCandidates(meta?.weak_candidates, (w) => w?.knowledge ?? "", MAX_WEAK_PER_ASK);
+  for (const w of weakCands) {
+    if (await recentlyHandled("弱项候选", subject, w.knowledge)) continue;
     await emitEvent({
       type: "弱项候选",
       subject,
@@ -158,8 +191,9 @@ async function sinkProposals(args: {
       // 同一 kp 可挂多条不同弱项短语 → 按 subject+knowledge 防重（默认），不能按 kp_id
     });
   }
-  for (const x of meta?.xinde_candidates ?? []) {
-    if (!x?.rule) continue;
+  const xindeCands = screenCandidates(meta?.xinde_candidates, (x) => x?.rule ?? "", MAX_XINDE_PER_ASK);
+  for (const x of xindeCands) {
+    if (await recentlyHandled("心得候选", subject, x.rule)) continue;
     await emitEvent({
       type: "心得候选",
       subject,

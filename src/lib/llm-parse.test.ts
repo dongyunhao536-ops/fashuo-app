@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseGeneratedQuestion, parseGradeJson } from "./detection";
 import { blocks, bullets } from "./yixiao";
-import { splitMeta } from "./ask-prompt";
+import { splitMeta, screenCandidates } from "./ask-prompt";
 
 /**
  * LLM 输出解析器回归锁（云 2026-06-14）。
@@ -125,5 +125,44 @@ describe("splitMeta（答疑 META 抽取）", () => {
   it("缺失闭合标记也能解析到结尾", () => {
     const { meta } = splitMeta('正文\n<<<ASK_META\n{"subject":"宪法"}');
     expect(meta?.subject).toBe("宪法");
+  });
+});
+
+describe("screenCandidates（待办筐防灌筐：封顶+去短+批内去重）", () => {
+  const kn = (k: string) => ({ knowledge: k });
+  const keyOf = (c: { knowledge: string }) => c.knowledge;
+
+  it("按 max 截断（治'问一个问题投进来好几个'）", () => {
+    const out = screenCandidates(["正当防卫限度", "因果关系认定", "犯罪中止", "牵连犯"].map(kn), keyOf, 2);
+    expect(out).toHaveLength(2);
+    expect(out[0].knowledge).toBe("正当防卫限度");
+  });
+
+  it("去掉太短/太泛（<4 字）", () => {
+    const out = screenCandidates(["罪", "故意", "正当防卫的限度条件"].map(kn), keyOf, 5);
+    expect(out.map((c) => c.knowledge)).toEqual(["正当防卫的限度条件"]);
+  });
+
+  it("批内归一化去重（空白/大小写不算新条）", () => {
+    const out = screenCandidates(
+      [kn("正当防卫 限度"), kn("正当防卫限度"), kn("ABC 规则"), kn("abc规则")],
+      keyOf,
+      5,
+    );
+    expect(out).toHaveLength(2);
+  });
+
+  it("undefined / 空 → 空数组", () => {
+    expect(screenCandidates(undefined, keyOf, 2)).toEqual([]);
+    expect(screenCandidates([], keyOf, 2)).toEqual([]);
+  });
+
+  it("keyOf 抽 rule 字段同样工作", () => {
+    const out = screenCandidates(
+      [{ rule: "先打后取财=抢劫" }, { rule: "先打后取财=抢劫" }],
+      (c) => c.rule,
+      3,
+    );
+    expect(out).toHaveLength(1);
   });
 });
