@@ -122,6 +122,19 @@ create table if not exists coach_memory (
 );
 create index if not exists idx_coach_memory_updated on coach_memory (updated_at);
 
+-- 教练周报缓存（迁移006）：真实数据聚合 + Opus 复盘/下周指导，按周缓存（同周覆盖）。
+create table if not exists weekly_report (
+  id            bigserial primary key,
+  week_start    date not null unique,
+  week_end      date not null,
+  content       text not null,              -- LLM 生成：复盘 + 下周指导（markdown）
+  data_snapshot jsonb,                      -- 生成所依据的真实聚合数据（溯源）
+  model         text,
+  cost_usd      numeric,
+  generated_at  timestamptz not null default now()
+);
+create index if not exists idx_weekly_report_week on weekly_report (week_start);
+
 -- 跨会话答疑摘要（12 §五：结构化字段 + TTL，检索式注入，不回 markdown）
 create table if not exists ask_summary (
   id           bigserial primary key,
