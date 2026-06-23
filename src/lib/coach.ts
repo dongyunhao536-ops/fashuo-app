@@ -289,8 +289,15 @@ ${COACH_META_CLOSE}
 规则：只在云【确有】对应信息时填，纯闲聊/提问就大多留空数组/省略；memory_updates 只发【新的/变化的】事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
 
-/** 易变块（每轮重发，不缓存）：长期记忆 + 学习数据账本。 */
-function buildSystemVolatile(ledger: Awaited<ReturnType<typeof loadLedger>>, todayStr: string): string {
+/** 易变块（每轮重发，不缓存）：长期记忆 + 学习数据账本。isSunday=周日做积压复盘。 */
+function buildSystemVolatile(
+  ledger: Awaited<ReturnType<typeof loadLedger>>,
+  todayStr: string,
+  isSunday: boolean,
+): string {
+  const backlogDirective = isSunday
+    ? "　⚠️今天是周日·做【本周积压复盘】：主动把下面未吸收的逐条跟云过一遍，挑最老/最高频的用【理解层】考他、帮他收口，吸收的写进 META.absorbed 销账。这是周日固定动作，专治云'错题不闭环'。"
+    : "　（非周日不必主动翻这本账；云聊到相关或问起时，再顺手用理解层帮他收口即可）";
   return `【关于云·长期记忆（你记住的耐久事实，据此个性化）】
 ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留意从对话里提炼并写进 META.memory_updates）"}
 
@@ -303,7 +310,7 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
 【自报错题·未吸收清单（云汇报做错的，按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）
-　⚠️主动清账：若本轮云没有别的明确话题/任务，【你主动】挑这里最老或最高频的 1-2 条用【理解层】考他、帮他收口，别干等他开口；他用自己话讲清/会辨析了，就在 META.absorbed 里报上来销账。这清单一直堆着不消，正是云"错题不闭环"的老毛病——逼它往下走是你的职责。】
+${backlogDirective}】
 ${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}
 
 【答疑暴露·待复习吸收（云在答疑里卡过/可能答错的【非背诵点】，吸收前一直挂着——聊到相关时顺手用【理解层】考他、帮他打通；他用自己话讲清/会辨析了，就在 absorbed 里报上来销账）】
@@ -322,10 +329,12 @@ ${input}`;
 
 export async function runCoach(input: string, today = new Date()): Promise<CoachResult> {
   const todayStr = bjDateStr(today);
+  // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
+  const isSunday = new Date(today.getTime() + 8 * 3600 * 1000).getUTCDay() === 0;
   const ledger = await loadLedger(today);
 
   const { message, costUsd } = await runSingleTurn({
-    system: { stable: buildSystemStable(), volatile: buildSystemVolatile(ledger, todayStr) },
+    system: { stable: buildSystemStable(), volatile: buildSystemVolatile(ledger, todayStr, isSunday) },
     user: buildUserMessage(ledger.conversationLines, input),
     model: MODELS.COACH,
     route: "coach",

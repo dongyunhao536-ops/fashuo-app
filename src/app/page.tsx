@@ -138,7 +138,10 @@ export default async function DashboardPage() {
       </section>
 
       {/* 最需要攻克 */}
-      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">最需要攻克</h2>
+      <div className="mt-6 flex items-baseline justify-between px-8 pb-2">
+        <h2 className="text-[13px] text-label2">最需要攻克</h2>
+        <Link href="/errors" className="text-[12px] text-blue">错题本 ›</Link>
+      </div>
       <section className="glass-card mx-4 rounded-[16px]">
         {d.top5.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-label3">
