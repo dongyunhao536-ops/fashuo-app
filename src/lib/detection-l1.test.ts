@@ -4,6 +4,7 @@ import {
   matchKeyword,
   keywordCore,
   gradeL1,
+  gradeL1Cloze,
   generateL1,
 } from "./detection";
 import type { KpRow } from "./scheduler";
@@ -186,5 +187,46 @@ describe("generateL1：考点专属 l1_keypoints 优先（根治靶错位）", (
     const q = generateL1(kp);
     expect(q.answerKey.length).toBeGreaterThan(0);
     expect(q.sourceRef).toContain("anki:");
+  });
+});
+
+describe("gradeL1Cloze 双模式红线（exact 逐字 / semantic 意思判；不放水）", () => {
+  // 以下用例【不触发 Haiku】：要么全 exact、要么 semantic 空已逐字命中、要么缺答(空)——零 IO 纯函数可测。
+  it("exact 全填对 → 干净通过", async () => {
+    const r = await gradeL1Cloze(["规范性和普遍性"], ["规范性和普遍性"]);
+    expect(r.grade).toBe("干净通过");
+    expect(r.model).toBe("rule:l1-cloze");
+  });
+
+  it("exact 全填错 → 未过（乱答必挂）", async () => {
+    const r = await gradeL1Cloze(["今天天气不错"], ["规范性和普遍性"]);
+    expect(r.grade).toBe("未过");
+    expect(r.passed).toBe(false);
+  });
+
+  it("缺答（空）即使是 semantic 空也不放水 → 未过、不调 Haiku", async () => {
+    const r = await gradeL1Cloze([""], ["法律对法律主体的应然约束力或拘束力"], undefined, ["semantic"]);
+    expect(r.grade).toBe("未过");
+    expect(r.model).toBe("rule:l1-cloze"); // 没触发语义复判
+    expect(r.costUsd).toBe(0);
+  });
+
+  it("semantic 空但逐字已命中 → 走免费秒判、不调 Haiku", async () => {
+    const ans = "法律对法律主体的应然约束力或拘束力";
+    const r = await gradeL1Cloze([ans], [ans], undefined, ["semantic"]);
+    expect(r.grade).toBe("干净通过");
+    expect(r.model).toBe("rule:l1-cloze");
+  });
+
+  it("通过线：2 空对 1 = 50% → 勉强（边界不放水到通过）", async () => {
+    const r = await gradeL1Cloze(["正当防卫", "xyz乱答"], ["正当防卫", "紧急避险"]);
+    expect(r.grade).toBe("勉强");
+    expect(r.passed).toBe(false);
+  });
+
+  it("无答案靶（缺料）→ 勉强标★，不误判通过", async () => {
+    const r = await gradeL1Cloze(["随便"], []);
+    expect(r.starred).toBe(true);
+    expect(r.passed).toBe(false);
   });
 });

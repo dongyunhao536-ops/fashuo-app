@@ -32,6 +32,8 @@ export type Grade = "干净通过" | "勉强" | "未过";
 export interface ClozeItem {
   s: string;
   a: string[];
+  /** 判分模式：exact=逐字秒判（短关键词，缺省值）；semantic=Haiku 按意思判（定义型，意思对就算过）。 */
+  mode?: "exact" | "semantic";
 }
 
 export interface DetectQuestion {
@@ -600,10 +602,21 @@ export async function gradeAnswer(opts: {
   const matchLevel = (kp.ext as { anki_match_level?: string })?.anki_match_level;
   let result: L1Internal;
   if (opts.level === "L1") {
-    result =
-      opts.clozeFilled && opts.clozeFilled.length > 0
-        ? gradeL1Cloze(opts.clozeFilled, opts.answerKey, matchLevel)
-        : await gradeL1WithFallback(kp, opts.userAnswer, opts.answerKey, matchLevel);
+    if (opts.clozeFilled && opts.clozeFilled.length > 0) {
+      // 判分模式从 kp.ext.l1_cloze 服务端取（不信客户端）：与 answerKey 展平同序；对不齐则全 exact 兜底。
+      const cz = (kp.ext as { l1_cloze?: ClozeItem[] })?.l1_cloze;
+      const modes = Array.isArray(cz)
+        ? cz.flatMap((c) => (c.a ?? []).map(() => (c.mode === "semantic" ? "semantic" : "exact") as "exact" | "semantic"))
+        : null;
+      result = await gradeL1Cloze(
+        opts.clozeFilled,
+        opts.answerKey,
+        matchLevel,
+        modes && modes.length === opts.answerKey.length ? modes : null,
+      );
+    } else {
+      result = await gradeL1WithFallback(kp, opts.userAnswer, opts.answerKey, matchLevel);
+    }
   } else {
     result = await gradeL2L3(kp, opts);
   }
@@ -738,12 +751,51 @@ export function gradeL1(userAnswer: string, answerKey: string[], matchLevel?: st
   };
 }
 
+/** 单个空逐字判：填入 vs 标准答案归一化后含/被含（容多写字/近义短写）。 */
+function exactBlankOk(answer: string, fill: string): boolean {
+  const na = keywordCore(answer);
+  const nf = normalize(fill ?? "");
+  return (
+    na.length > 0 &&
+    nf.length > 0 &&
+    (nf === na || nf.includes(na) || (na.includes(nf) && nf.length >= Math.max(2, Math.ceil(na.length * 0.6))))
+  );
+}
+
 /**
- * L1 关键词填空判分（确定性规则，免费秒判，保 L1 红线不放水）：逐空比对填入 vs 标准答案。
- * 容差：归一化后"填入含标准答案"，或"标准答案含填入且填入达 6 成长度"，即算对（容多写字/近义短写）。
- * 通过线（用户定）：填对 ≥75% → 干净通过；≥50% → 勉强；否则未过。节级共用题源放宽到 60%。
+ * semantic 空批量按意思复判（Haiku 一次调用）：意思一致/同义/涵盖关键点 → true。
+ * 失败抛错由上层 try/catch 兜（保持逐字结果，不放水不崩）。
  */
-function gradeL1Cloze(filled: string[], answers: string[], matchLevel?: string): L1Internal {
+async function gradeSemanticBlanks(
+  pairs: { answer: string; fill: string }[],
+): Promise<{ verdicts: boolean[]; costUsd: number }> {
+  const list = pairs.map((p, i) => `${i + 1}. 标准答案：「${p.answer}」 ｜ 考生填：「${p.fill}」`).join("\n");
+  const system = `你给中文法考填空题判对错。【按意思判，不要求逐字】：考生填入与标准答案【意思一致 / 同义 / 涵盖其关键点】=对(true)；意思错、答非所问、空泛套话、漏掉关键限定 =错(false)。不放水也不抠字面。仅输出一个 JSON 布尔数组，长度与条数相同（如 [true,false,true]），不要任何解释。`;
+  const { message, costUsd } = await runSingleTurn({
+    system,
+    user: `逐条判断：\n${list}`,
+    model: MODELS.DRAFT,
+    maxTokens: 200,
+    route: "cloze-grade",
+  });
+  const txt = extractText(message);
+  const a = txt.indexOf("["), b = txt.lastIndexOf("]");
+  const arr = JSON.parse(txt.slice(a, b + 1)) as unknown[];
+  return { verdicts: pairs.map((_, i) => arr[i] === true), costUsd };
+}
+
+/**
+ * L1 关键词填空判分（双模式，保 L1 红线不放水）：逐空比对。
+ * exact 空：确定性逐字（免费秒判）。semantic 空：先逐字试；没过且有作答 → 攒起来叫一次 Haiku 按意思复判
+ *   （治"用自己的话意思对了被判错"）。缺答(空)一律不进语义复判 → 不放水。
+ * 通过线：填对 ≥75% → 干净通过；≥50% → 勉强；否则未过。节级共用题源放宽到 60%。
+ */
+export async function gradeL1Cloze(
+  filled: string[],
+  answers: string[],
+  matchLevel?: string,
+  modes?: ("exact" | "semantic")[] | null,
+): Promise<L1Internal> {
   if (answers.length === 0) {
     return {
       grade: "勉强",
@@ -758,19 +810,29 @@ function gradeL1Cloze(filled: string[], answers: string[], matchLevel?: string):
       model: "rule:l1-cloze",
     };
   }
-  const hits: string[] = [];
-  const missing: string[] = [];
+  const ok: boolean[] = [];
+  const semIdx: number[] = [];
   for (let i = 0; i < answers.length; i++) {
-    const na = keywordCore(answers[i]);
-    const nf = normalize(filled[i] ?? "");
-    const ok =
-      na.length > 0 &&
-      nf.length > 0 &&
-      (nf === na ||
-        nf.includes(na) ||
-        (na.includes(nf) && nf.length >= Math.max(2, Math.ceil(na.length * 0.6))));
-    (ok ? hits : missing).push(answers[i]);
+    ok[i] = exactBlankOk(answers[i], filled[i] ?? "");
+    // 语义空：没逐字过 + 确有作答（非空）才送复判；缺答永不放水
+    if (!ok[i] && modes?.[i] === "semantic" && normalize(filled[i] ?? "").length > 0) semIdx.push(i);
   }
+  let costUsd = 0;
+  let usedHaiku = false;
+  if (semIdx.length > 0) {
+    try {
+      const { verdicts, costUsd: c } = await gradeSemanticBlanks(
+        semIdx.map((i) => ({ answer: answers[i], fill: filled[i] ?? "" })),
+      );
+      semIdx.forEach((i, k) => { if (verdicts[k]) ok[i] = true; });
+      costUsd = c;
+      usedHaiku = true;
+    } catch (e) {
+      console.error("[l1-cloze] 语义复判失败，保持逐字结果：", e instanceof Error ? e.message : String(e));
+    }
+  }
+  const hits = answers.filter((_, i) => ok[i]);
+  const missing = answers.filter((_, i) => !ok[i]);
   const rate = hits.length / answers.length;
   const passT = matchLevel === "section" ? 0.6 : 0.75;
   let grade: Grade;
@@ -786,10 +848,11 @@ function gradeL1Cloze(filled: string[], answers: string[], matchLevel?: string):
     confidence = Math.round(60 + (1 - rate) * 30);
   }
   const pct = Math.round(rate * 100);
+  const semNote = usedHaiku ? "（部分空按意思判）" : "";
   const explanation =
     grade === "干净通过"
-      ? `填对 ${hits.length}/${answers.length} 个空（${pct}%），通过。`
-      : `只填对 ${hits.length}/${answers.length} 个空（${pct}%）。下面「缺失要点」是没填对的关键术语，重点补这些。`;
+      ? `填对 ${hits.length}/${answers.length} 个空（${pct}%）${semNote}，通过。`
+      : `只填对 ${hits.length}/${answers.length} 个空（${pct}%）${semNote}。下面「缺失要点」是没填对的关键术语，重点补这些。`;
   return {
     grade,
     passed: grade === "干净通过",
@@ -798,9 +861,9 @@ function gradeL1Cloze(filled: string[], answers: string[], matchLevel?: string):
     confidence,
     starred: false,
     explanation,
-    costUsd: 0,
+    costUsd,
     grepLines: [],
-    model: "rule:l1-cloze",
+    model: usedHaiku ? "rule+haiku:l1-cloze" : "rule:l1-cloze",
   };
 }
 
