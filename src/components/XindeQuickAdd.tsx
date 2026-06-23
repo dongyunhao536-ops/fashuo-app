@@ -117,7 +117,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
           {state === "busy" ? "存…" : "存进心得候选"}
         </button>
         {state === "done" && (
-          <span className="text-[12px] text-green">✓ 已进待办筐，收下后 PC 登记进做题心得「待观察」</span>
+          <span className="text-[12px] text-green">✓ 已存进心得（无需确认）· PC 登记自动并入做题心得「待观察」</span>
         )}
         {state === "error" && <span className="text-[12px] text-red">{err}</span>}
       </div>

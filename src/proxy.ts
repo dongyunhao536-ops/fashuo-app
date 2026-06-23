@@ -17,6 +17,8 @@ import { AUTH_COOKIE, authDisabled, expectedToken } from "@/lib/auth-edge";
 const PUBLIC_PATHS = [
   "/login",
   "/api/login",
+  // 服务器 crontab 触发的内部接口：网关放行，改由路由内 CRON_SECRET 头部鉴权（非用户登录态）。
+  "/api/cron",
   "/icon",
   "/apple-icon",
   "/manifest.webmanifest",

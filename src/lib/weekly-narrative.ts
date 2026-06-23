@@ -4,7 +4,7 @@ import { supabaseAdmin } from "./supabase";
 import { currentStage } from "./scheduler";
 import { bjDateStr, bjDayStart } from "./dates";
 import { METHODOLOGY } from "./coach";
-import { formatWeeklyDataText, type WeeklyReview } from "./weekly-review";
+import { buildWeeklyReview, formatWeeklyDataText, type WeeklyReview } from "./weekly-review";
 import coachCfg from "../../config/coach.json";
 
 /**
@@ -107,4 +107,29 @@ export async function generateWeeklyNarrative(
   });
   const content = extractText(message).trim();
   return { content: content || "（本周复盘生成失败，请稍后刷新重试）", costUsd };
+}
+
+/**
+ * 编排：聚合本周真实数据 → 生成复盘/指导 → 按 week_start upsert 到 weekly_report。
+ * 手动「刷新」按钮(/api/weekly/generate) 与 周一自动 cron(/api/cron/weekly) 共用同一条路径。
+ */
+export async function generateAndStoreWeekly(
+  today = new Date(),
+): Promise<{ content: string; weekStart: string; weekEnd: string; costUsd: number; stored: boolean }> {
+  const review = await buildWeeklyReview(today);
+  const { content, costUsd } = await generateWeeklyNarrative(review, today);
+  const { error } = await supabaseAdmin.from("weekly_report").upsert(
+    {
+      week_start: review.weekStart,
+      week_end: review.weekEnd,
+      content,
+      data_snapshot: review,
+      model: MODELS.COACH,
+      cost_usd: costUsd,
+      generated_at: new Date().toISOString(),
+    },
+    { onConflict: "week_start" },
+  );
+  if (error) console.error("[weekly] weekly_report 写入失败：", error.message);
+  return { content, weekStart: review.weekStart, weekEnd: review.weekEnd, costUsd, stored: !error };
 }

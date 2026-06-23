@@ -50,6 +50,10 @@ export interface WeeklyReview {
 
 const pct = (passed: number, total: number) => (total === 0 ? 0 : Math.round((passed / total) * 100));
 const nameOf = (ext: unknown, fallback: string) => (ext as { name?: string })?.name ?? fallback;
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
+// "学了/背了什么" 只认这三类【实打实的学习动作】——把闲聊/被考(复盘)/策略讨论(其他)/未识别 排除，
+// 治"我没学犯罪主观方面却被算进去（其实是被教练考了一句）"。复盘/其他多是对话噪音，不算"学了什么"。
+const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵"]);
 
 export async function buildWeeklyReview(today = new Date()): Promise<WeeklyReview> {
   const weekEnd = bjDateStr(today);
@@ -150,13 +154,16 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     .map(([subject, a]) => ({ subject, passed: a.passed, total: a.total, pct: pct(a.passed, a.total) }))
     .sort((a, b) => b.total - a.total);
 
-  // —— 本周学了/背了什么：study_log 按科目聚合章节 + 活动 ——
+  // —— 本周学了/背了什么：只取【实打实学习动作(听课/做题/背诵) + 真科目 + 有章节】的 study_log，
+  //    把被考(复盘)/策略闲聊(其他)/未识别 过滤掉（用户："只用算我和教练汇报过的"）。
   const studyMap = new Map<string, { chapters: Set<string>; activities: Set<string> }>();
   for (const s of study) {
-    const subj = (s.subject as string | null) ?? "未识别";
+    const subj = (s.subject as string | null) ?? "";
+    const act = (s.activity as string | null) ?? "";
+    if (!SUBJECTS.includes(subj) || !STUDY_ACTIVITIES.has(act) || !s.chapter) continue;
     const row = studyMap.get(subj) ?? { chapters: new Set<string>(), activities: new Set<string>() };
-    if (s.chapter) row.chapters.add(String(s.chapter));
-    if (s.activity) row.activities.add(String(s.activity));
+    row.chapters.add(String(s.chapter));
+    row.activities.add(act);
     studyMap.set(subj, row);
   }
   const studied = [...studyMap.entries()].map(([subject, v]) => ({
