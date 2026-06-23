@@ -391,6 +391,8 @@ async function generateL1WithCloze(kp: KpRow): Promise<DetectQuestion> {
 
 /** 读缓存的 l1_cloze；没有就用 Haiku 现造并写回 kp_state.ext.l1_cloze。 */
 async function getOrBuildCloze(kp: KpRow, keypoints: string[]): Promise<ClozeItem[]> {
+  // l1_plain=true：离线判定该考点不适合挖空（句型/缺料）→ 走普通默写，禁止 Haiku 现造挖空（曾挖到形容词）。
+  if ((kp.ext as { l1_plain?: boolean })?.l1_plain === true) return [];
   const cached = (kp.ext as { l1_cloze?: unknown })?.l1_cloze;
   if (Array.isArray(cached) && cached.length > 0) {
     const valid = cached.filter(
@@ -889,11 +891,10 @@ async function gradeL1WithFallback(
   if (rule.passed) return rule; // 干净通过：免费秒判，不调模型
   if (!normalize(userAnswer) || answerKey.length === 0) return rule; // 空答 / 缺料：规则已正确处理
 
-  const passT = matchLevel === "section" ? 0.6 : 0.8;
-  const rate = rule.hits.length / answerKey.length;
-  const hasLongKey = answerKey.some((k) => keywordCore(k).length > 8);
-  const borderline = rate >= passT - 0.2; // "勉强"带（此分支 rate < passT 必成立）
-  if (!hasLongKey && !borderline) return rule; // 短词靶确定性零命中 → 信任规则，不浪费 Haiku
+  // 判定别太死（用户 2026-06-23）：只要考生确有实质作答（≥3 字），就给一次 Haiku 语义复判机会，
+  // 治"换句话说/答得更细/靶点错位被逐字门槛卡死"。短词靶真零命中由 Haiku 确认未过（带不放水指令），
+  // 不会把答错/空泛放过。代价＝非通过的 L1 多一次便宜 Haiku 调用，换"意思对就算过"。
+  if (normalize(userAnswer).length < 3) return rule; // 极短/乱码作答：规则未过即可，不浪费 Haiku
 
   try {
     return await gradeL1Semantic(kp, userAnswer, answerKey, rule);

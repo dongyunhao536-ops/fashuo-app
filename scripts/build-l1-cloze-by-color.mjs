@@ -74,11 +74,13 @@ function clozeOf(sent) {
 async function main() {
   const { data: kps, error } = await sb.from("kp_state").select("kp_id, ext").eq("subject", SUBJ);
   if (error) { console.error("查 kp_state 失败：", error.message); process.exit(1); }
-  let built = 0, noKpts = 0, noCloze = 0, exactN = 0, semN = 0, alignedN = 0, totalC = 0;
+  let built = 0, noKpts = 0, noCloze = 0, exactN = 0, semN = 0, alignedN = 0, totalC = 0, plainN = 0;
   const previews = [];
+  // 写库：建到挖空→l1_cloze+l1_plain:false；建不到→l1_plain:true(走普通默写，禁 Haiku 现造挖空)。
+  const writeExt = async (kp, patch) => { if (!COMMIT) return; const { error: e } = await sb.from("kp_state").update({ ext: { ...(kp.ext ?? {}), ...patch } }).eq("kp_id", kp.kp_id); if (e) console.error(`写 ${kp.kp_id} 失败：`, e.message); };
   for (const kp of kps) {
     const kpts = (kp.ext?.l1_keypoints ?? []).map((s) => String(s).trim()).filter((s) => s.length >= 4 && s.length <= 80);
-    if (!kpts.length) { noKpts++; continue; }
+    if (!kpts.length) { noKpts++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [] }); continue; }
     const noteIds = kp.ext?.anki_note_ids ?? [];
     const sents = noteIds.map((id) => ANKI.get(id)).filter(Boolean).flatMap((c) => mustSentences(c.原文HTML || ""));
     const cloze = []; const seen = new Set();
@@ -90,12 +92,12 @@ async function main() {
       if (c && !seen.has(c.s)) { seen.add(c.s); cloze.push(c); }
       if (cloze.length >= 6) break;
     }
-    if (!cloze.length) { noCloze++; continue; }
+    if (!cloze.length) { noCloze++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [] }); continue; }
     built++; for (const c of cloze) { totalC++; c.mode === "exact" ? exactN++ : semN++; if (c.aligned) alignedN++; }
     if (previews.length < 14) previews.push({ name: (kp.ext?.name ?? kp.kp_id).trim(), cloze });
-    if (COMMIT) { const newExt = { ...(kp.ext ?? {}), l1_cloze: cloze.map(({ s, a, mode }) => ({ s, a, mode })) }; const { error: e } = await sb.from("kp_state").update({ ext: newExt }).eq("kp_id", kp.kp_id); if (e) console.error(`写 ${kp.kp_id} 失败：`, e.message); }
+    await writeExt(kp, { l1_cloze: cloze.map(({ s, a, mode }) => ({ s, a, mode })), l1_plain: false });
   }
-  console.log(`\n科目「${SUBJ}」：考点 ${kps.length}，建挖空 ${built}；跳过=无l1要点${noKpts}/句不适合${noCloze}；空 ${totalC}（颜色对齐挖 ${alignedN}、词干切 ${totalC - alignedN}）；exact ${exactN}/semantic ${semN}${COMMIT ? "（已写库）" : "（dry-run）"}\n`);
+  console.log(`\n科目「${SUBJ}」：考点 ${kps.length}，建挖空 ${built}；改普通默写(l1_plain) ${plainN}（无l1要点${noKpts}/句不适合${noCloze}）；空 ${totalC}（颜色对齐挖 ${alignedN}、词干切 ${totalC - alignedN}）；exact ${exactN}/semantic ${semN}${COMMIT ? "（已写库）" : "（dry-run）"}\n`);
   console.log("===== 挖空预览（前 14 考点；★=颜色对齐挖的精确空）=====");
   for (const p of previews) { console.log(`\n◆ ${p.name}`); for (const c of p.cloze) console.log(`   [${c.mode}]${c.aligned ? "★" : " "} ${c.s}\n        ← ${c.a.join(" / ")}`); }
 }
