@@ -49,6 +49,24 @@ function mustSentences(html) {
   return sents;
 }
 
+/** 卡内【蓝底蓝色】连续必背片段（作者真·必背靶，按卡/题目天然锁好 → 覆盖 Haiku 串考点的脏 l1_keypoints） */
+function blueRuns(html) {
+  const stack = [{ fg: "", bg: "" }];
+  const re = /<(\/?)(span|font|b|u|div|h2|h3|br|p|li)([^>]*)>|([^<]+)/g;
+  const out = []; let buf = "";
+  const flush = () => { const t = buf.replace(/&nbsp;/g, " ").trim().replace(/^[（(]?[一二三四五六七八九十\d]+[)）.、]\s*/, "").replace(/[。；，、]+$/, "").trim(); if (norm(t).length >= 3) out.push(t); buf = ""; };
+  let m;
+  while ((m = re.exec(html))) {
+    const [, close, tag, attrs, text] = m;
+    if (text != null) { const top = stack[stack.length - 1]; if (top.bg === BLUE_BG && !DROP_FG.has(top.fg)) buf += text; else flush(); continue; }
+    if (close) { if (["span", "font", "b", "u"].includes(tag) && stack.length > 1) stack.pop(); }
+    else { const top = { ...stack[stack.length - 1] }; if (tag === "span") { const st = (attrs.match(/style="([^"]*)"/) || [])[1] || ""; if (pickStyle(st, "color")) top.fg = pickStyle(st, "color"); if (pickStyle(st, "background-color")) top.bg = pickStyle(st, "background-color"); } else if (tag === "font") { const c = (attrs.match(/color=\\?"?(#[0-9a-fA-F]{3,6})/) || [])[1]; if (c) top.fg = c.replace(/\s/g, ""); } if (["span", "font", "b", "u"].includes(tag)) stack.push(top); else flush(); }
+  }
+  flush();
+  return out;
+}
+const colorMustList = (cards) => { const out = [], seen = new Set(); for (const c of cards) for (const r of blueRuns(c.原文HTML || "")) if (!seen.has(r) && r.length <= 60) { seen.add(r); out.push(r); } return out.slice(0, 12); };
+
 /** 逐字必背句 + 蓝底 mask → cloze（挖蓝底要害；无蓝底按词干切）。aligned=是否用上了颜色 */
 function clozeOf(sent) {
   const chars = [...sent.text].map((ch, i) => ({ ch, blue: sent.mask[i] }));
@@ -78,11 +96,15 @@ async function main() {
   const previews = [];
   // 写库：建到挖空→l1_cloze+l1_plain:false；建不到→l1_plain:true(走普通默写，禁 Haiku 现造挖空)。
   const writeExt = async (kp, patch) => { if (!COMMIT) return; const { error: e } = await sb.from("kp_state").update({ ext: { ...(kp.ext ?? {}), ...patch } }).eq("kp_id", kp.kp_id); if (e) console.error(`写 ${kp.kp_id} 失败：`, e.message); };
+  let mustN = 0;
   for (const kp of kps) {
+    const cards = (kp.ext?.anki_note_ids ?? []).map((id) => ANKI.get(id)).filter(Boolean);
+    const mustList = colorMustList(cards); // 蓝底蓝色真·必背靶
+    const extra = mustList.length >= 2 ? { l1_must: mustList } : {}; // ≥2 才覆盖 Haiku 脏靶，否则保留原靶
+    if (mustList.length >= 2) mustN++;
     const kpts = (kp.ext?.l1_keypoints ?? []).map((s) => String(s).trim()).filter((s) => s.length >= 4 && s.length <= 80);
-    if (!kpts.length) { noKpts++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [] }); continue; }
-    const noteIds = kp.ext?.anki_note_ids ?? [];
-    const sents = noteIds.map((id) => ANKI.get(id)).filter(Boolean).flatMap((c) => mustSentences(c.原文HTML || ""));
+    if (!kpts.length) { noKpts++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [], ...extra }); continue; }
+    const sents = cards.flatMap((c) => mustSentences(c.原文HTML || ""));
     const cloze = []; const seen = new Set();
     for (const kpt of kpts.slice(0, 8)) {
       let best = null, bestD = 0;
@@ -92,12 +114,12 @@ async function main() {
       if (c && !seen.has(c.s)) { seen.add(c.s); cloze.push(c); }
       if (cloze.length >= 6) break;
     }
-    if (!cloze.length) { noCloze++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [] }); continue; }
+    if (!cloze.length) { noCloze++; plainN++; await writeExt(kp, { l1_plain: true, l1_cloze: [], ...extra }); continue; }
     built++; for (const c of cloze) { totalC++; c.mode === "exact" ? exactN++ : semN++; if (c.aligned) alignedN++; }
     if (previews.length < 14) previews.push({ name: (kp.ext?.name ?? kp.kp_id).trim(), cloze });
-    await writeExt(kp, { l1_cloze: cloze.map(({ s, a, mode }) => ({ s, a, mode })), l1_plain: false });
+    await writeExt(kp, { l1_cloze: cloze.map(({ s, a, mode }) => ({ s, a, mode })), l1_plain: false, ...extra });
   }
-  console.log(`\n科目「${SUBJ}」：考点 ${kps.length}，建挖空 ${built}；改普通默写(l1_plain) ${plainN}（无l1要点${noKpts}/句不适合${noCloze}）；空 ${totalC}（颜色对齐挖 ${alignedN}、词干切 ${totalC - alignedN}）；exact ${exactN}/semantic ${semN}${COMMIT ? "（已写库）" : "（dry-run）"}\n`);
+  console.log(`\n科目「${SUBJ}」：考点 ${kps.length}，建挖空 ${built}；改普通默写(l1_plain) ${plainN}（无l1要点${noKpts}/句不适合${noCloze}）；写颜色真靶 l1_must ${mustN}；空 ${totalC}（颜色对齐挖 ${alignedN}、词干切 ${totalC - alignedN}）；exact ${exactN}/semantic ${semN}${COMMIT ? "（已写库）" : "（dry-run）"}\n`);
   console.log("===== 挖空预览（前 14 考点；★=颜色对齐挖的精确空）=====");
   for (const p of previews) { console.log(`\n◆ ${p.name}`); for (const c of p.cloze) console.log(`   [${c.mode}]${c.aligned ? "★" : " "} ${c.s}\n        ← ${c.a.join(" / ")}`); }
 }

@@ -363,9 +363,13 @@ export function generateL1(kp: KpRow): DetectQuestion {
   };
 }
 
-/** 读考点专属 L1 默写要点（ext.l1_keypoints，离线 build-l1-keypoints.mjs 产出）；非法/不足回空。 */
+/**
+ * 读考点专属 L1 默写/判分靶。优先 ext.l1_must（按颜色蓝底蓝色离线抽，作者真·必背、按卡/题目天然锁好，
+ * 治 Haiku l1_keypoints 串考点的脏靶，2026-06-23）；无则退回 ext.l1_keypoints。非法/不足回空。
+ */
 function curatedKeypoints(kp: KpRow): string[] {
-  const raw = (kp.ext as { l1_keypoints?: unknown })?.l1_keypoints;
+  const ext = kp.ext as { l1_must?: unknown; l1_keypoints?: unknown };
+  const raw = Array.isArray(ext?.l1_must) && ext.l1_must.length >= 2 ? ext.l1_must : ext?.l1_keypoints;
   if (!Array.isArray(raw)) return [];
   return raw.map((s) => String(s).trim()).filter((s) => s.length >= 2 && s.length <= 60);
 }
