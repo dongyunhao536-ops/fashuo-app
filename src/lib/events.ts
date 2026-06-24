@@ -10,6 +10,30 @@ import { supabaseAdmin } from "./supabase";
 
 export type EventType = "弱项候选" | "心得候选" | "复验请求" | "已强化";
 
+/**
+ * 科目名归一到 5 个规范名（刑法/民法/法理/宪法/法制史）。
+ * 答疑/教练的 LLM 偶尔吐全称「法理学/宪法学/中国法制史」→ 与 kp_state.subject 及
+ * PC 登记员 XINDE_FILE 键（规范名）对不上，会被当「暂无心得文件」跳过、永远卡在待办筐。
+ * 在唯一投递口归一，从源头断掉这类沉淀漂移。
+ */
+const SUBJECT_CANON = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
+const SUBJECT_ALIAS: Record<string, string> = {
+  法理学: "法理",
+  宪法学: "宪法",
+  刑法学: "刑法",
+  民法学: "民法",
+  中国法制史: "法制史",
+  法制史学: "法制史",
+};
+export function normalizeSubject(s: string | null): string | null {
+  if (s == null) return null;
+  const t = s.trim();
+  if (!t || SUBJECT_CANON.has(t)) return t || null;
+  if (SUBJECT_ALIAS[t]) return SUBJECT_ALIAS[t];
+  if (t.endsWith("学") && SUBJECT_CANON.has(t.slice(0, -1))) return t.slice(0, -1); // 兜底去尾「学」
+  return t;
+}
+
 export interface EmitEventArgs {
   type: EventType;
   subject: string | null;
@@ -33,6 +57,7 @@ export interface EmitEventArgs {
  */
 export async function emitEvent(ev: EmitEventArgs): Promise<boolean> {
   const dedupBy = ev.dedupBy ?? "knowledge";
+  ev = { ...ev, subject: normalizeSubject(ev.subject) }; // 科目归一（防全称漂移卡筐）
 
   let q = supabaseAdmin
     .from("events")

@@ -41,7 +41,7 @@ const h = vi.hoisted(() => {
 
 vi.mock("./supabase", () => ({ supabaseAdmin: { from: h.from } }));
 
-import { emitEvent, consumeReviewRequests } from "./events";
+import { emitEvent, consumeReviewRequests, normalizeSubject } from "./events";
 
 beforeEach(() => {
   h.state.selectResult = { data: null, error: null };
@@ -103,5 +103,32 @@ describe("consumeReviewRequests G2 兑现", () => {
   it("调用 update 消费该 kp 的 pending 复验请求（不抛）", async () => {
     await expect(consumeReviewRequests("XF-0042")).resolves.toBeUndefined();
     expect(h.state.updateCalled).toBe(true);
+  });
+});
+
+describe("normalizeSubject 科目名归一（防全称漂移卡筐）", () => {
+  it("全称/别名 → 规范名", () => {
+    expect(normalizeSubject("法理学")).toBe("法理");
+    expect(normalizeSubject("宪法学")).toBe("宪法");
+    expect(normalizeSubject("刑法学")).toBe("刑法");
+    expect(normalizeSubject("民法学")).toBe("民法");
+    expect(normalizeSubject("中国法制史")).toBe("法制史");
+  });
+  it("规范名原样、首尾空白清理", () => {
+    expect(normalizeSubject("法理")).toBe("法理");
+    expect(normalizeSubject(" 刑法 ")).toBe("刑法");
+  });
+  it("兜底去尾「学」（仅当去掉后是规范名）", () => {
+    expect(normalizeSubject("法理学")).toBe("法理");
+    expect(normalizeSubject("法学")).toBe("法学"); // 去「学」=「法」非规范名 → 原样
+  });
+  it("null / 空串 → null", () => {
+    expect(normalizeSubject(null)).toBeNull();
+    expect(normalizeSubject("  ")).toBeNull();
+  });
+  it("emitEvent 写库前归一 subject（法理学 → 法理）", async () => {
+    h.state.selectResult = { data: [], error: null };
+    await emitEvent({ type: "心得候选", subject: "法理学", kp_id: null, knowledge: "某规律", anchor: null, source: "答疑" });
+    expect(h.state.insertPayloads[0]).toMatchObject({ subject: "法理" });
   });
 });
