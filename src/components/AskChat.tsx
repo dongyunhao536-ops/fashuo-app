@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
-import { Markdown } from "@/components/Markdown";
+import { AskAnswer } from "@/components/AskAnswer";
 import { XindeQuickAdd } from "@/components/XindeQuickAdd";
 
 /**
@@ -265,8 +265,8 @@ function AnswerBubble({ result }: { result: AskResult }) {
 
   return (
     <div className="w-full self-start rounded-[18px] rounded-bl-[4px] bg-card p-3.5">
-      {/* 答案正文（v2.3 框线/缩进 + Opus markdown 渲染） */}
-      <Markdown>{result.answer}</Markdown>
+      {/* 答案正文：预检清单/证据卡渲染成结构化卡片，其余散文走 markdown */}
+      <AskAnswer answer={result.answer} />
 
       {/* 元信息条 */}
       <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2 text-[11px]">
