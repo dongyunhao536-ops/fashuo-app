@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTransition, type Level, type Grade } from "./kp-transition";
+import { computeTransition, masterNowTransition, type Level, type Grade } from "./kp-transition";
 import type { KpRow } from "./scheduler";
 
 function mkKp(p: Partial<KpRow>): KpRow {
@@ -193,5 +193,44 @@ describe("北京日历日", () => {
     const t = run({ interval_idx: 0 }, "L1", "勉强"); // 勉强→升到 idx1，间隔档[1]=3 天
     expect(t.lastReview).toBe("2026-06-20");
     expect(t.nextDue).toBe("2026-06-23");
+  });
+});
+
+describe("masterNowTransition 手动「我已会」排进常规周期", () => {
+  const m = (p: Partial<KpRow>) => masterNowTransition(mkKp(p), NOW);
+
+  it("刚失手的弱项(idx0,L1 failed,cap L1)→当作通过推进一档、标 passed、退近端", () => {
+    const t = m({ cap_level: "L1", cur_level: "L1", l1_status: "failed", interval_idx: 0, difficulty: 5 });
+    expect(t.cur_level).toBe("L1");
+    expect(t.l1_status).toBe("passed");
+    expect(t.l2_status).toBeUndefined();
+    expect(t.l3_status).toBeUndefined();
+    expect(t.difficulty).toBe(4); // -1
+    expect(t.interval_idx).toBe(1); // 0→1（D5 rungCap=4，<4 推进）
+    expect(t.nextDue).toBe("2026-06-23"); // NOW+3 天
+    expect(t.lastReview).toBe("2026-06-20");
+  });
+
+  it("cap=L3：三档全标 passed、cur 提到 L3", () => {
+    const t = m({ cap_level: "L3", interval_idx: 2, difficulty: 5 });
+    expect(t.cur_level).toBe("L3");
+    expect(t.l1_status).toBe("passed");
+    expect(t.l2_status).toBe("passed");
+    expect(t.l3_status).toBe("passed");
+    expect(t.interval_idx).toBe(3); // 2→3
+    expect(t.nextDue).toBe("2026-07-05"); // NOW+15 天
+  });
+
+  it("只放长绝不缩短：高难卡(D9 rungCap=1)已在 idx2 → 保持 idx2", () => {
+    const t = m({ cap_level: "L1", interval_idx: 2, difficulty: 9 });
+    expect(t.interval_idx).toBe(2); // 2 不<1 → 不动（不缩短）
+    expect(t.difficulty).toBe(8);
+    expect(t.nextDue).toBe("2026-06-27"); // NOW+7 天
+  });
+
+  it("间隔封顶 MAX 不溢出（idx4 已满档）", () => {
+    const t = m({ cap_level: "L1", interval_idx: 4, difficulty: 3 });
+    expect(t.interval_idx).toBe(4);
+    expect(t.nextDue).toBe("2026-07-20"); // NOW+30 天
   });
 });

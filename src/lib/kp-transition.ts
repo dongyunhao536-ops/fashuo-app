@@ -33,6 +33,46 @@ function rungCapForDifficulty(d: number): number {
   return 1; // D≥9 → 3 天，老大难压在近端高频滚
 }
 
+export interface MasterNowResult {
+  cur_level: Level;
+  interval_idx: number;
+  difficulty: number;
+  l1_status: "passed";
+  l2_status?: "passed";
+  l3_status?: "passed";
+  nextDue: string; // 北京日历日
+  lastReview: string; // 北京日历日
+}
+
+/**
+ * 手动「我已会」（弱项页一键已掌握）：当作一次干净通过排进常规复习周期。
+ * - mastered 由调用方置真（退出弱项页 / 仪表盘 Top5 / 教练账本，立即不再当弱项催）。
+ * - cap 内各档标 passed、cur_level 提到 cap —— 让 mastered 与档状态自洽（不再"标了却没过"）。
+ * - 难度-1、间隔按干净通过推进一档（受难度门控，只放长绝不缩短）→ next_due 落到常规周期，
+ *   不再以"刚失手"的近端间隔很快重现。日后复测失手，computeTransition 照常退档回炉。
+ */
+export function masterNowTransition(kp: KpRow, now: Date = new Date()): MasterNowResult {
+  const cap = kp.cap_level as Level;
+  const difficulty = clamp(kp.difficulty - 1, DIFF_MIN, DIFF_MAX);
+  // 门控用复习前难度，与干净通过一致；< rungCap 才推进，避免缩短间隔
+  const rungCap = rungCapForDifficulty(kp.difficulty);
+  let interval_idx = kp.interval_idx;
+  if (interval_idx < rungCap) interval_idx = Math.min(interval_idx + 1, MAX_INTERVAL);
+  const nextDue = bjDateStr(new Date(now.getTime() + INTERVALS[interval_idx] * 86400000));
+  const lastReview = bjDateStr(now);
+  const res: MasterNowResult = {
+    cur_level: cap,
+    interval_idx,
+    difficulty,
+    l1_status: "passed",
+    nextDue,
+    lastReview,
+  };
+  if (cap === "L2" || cap === "L3") res.l2_status = "passed";
+  if (cap === "L3") res.l3_status = "passed";
+  return res;
+}
+
 export interface TransitionResult {
   cur_level: Level;
   interval_idx: number;
