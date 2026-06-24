@@ -32,6 +32,7 @@ const hits = (kps ?? []).filter((k) => (k.ext?.name ?? "").includes(KW));
 for (const kp of hits) {
   console.log(`\n████ ${kp.ext.name}  (${kp.kp_id}) ████`);
   console.log("l1_plain:", kp.ext.l1_plain, " note_ids:", JSON.stringify(kp.ext.anki_note_ids));
+  console.log("l1_must(颜色真靶):", JSON.stringify(kp.ext.l1_must, null, 1));
   console.log("l1_keypoints:", JSON.stringify(kp.ext.l1_keypoints, null, 1));
   console.log("l1_cloze:", JSON.stringify(kp.ext.l1_cloze, null, 1));
   for (const id of kp.ext.anki_note_ids ?? []) {
