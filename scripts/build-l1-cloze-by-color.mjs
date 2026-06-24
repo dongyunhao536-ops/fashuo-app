@@ -83,7 +83,9 @@ function clozeOf(sent) {
   if (runs.length && hasCtx) { s = text; const used = []; for (const r of runs) if (s.includes(r) && !used.includes(r)) { s = s.replace(r, "▢"); used.push(r); } if (used.length) { ans = used; aligned = true; } }
   if (!ans) { const m = text.match(/^(.{1,16}?(?:是指|是为|具有|包括|分为|主要有|有以下|可分为|有[：:]|[：:]))(.+)$/); if (!m) return null; const a = m[2].replace(/[。；]$/, "").trim(); if (norm(a).length < 2) return null; s = `${m[1]}▢`; ans = [a]; }
   const longest = Math.max(...ans.map((a) => norm(a).length));
-  if (longest < 2 || longest > 40) return null;
+  // 挖空只做【短关键词/短语】(≤14字)；更长的复合/定义答案塞单空=变默写、半对判0%(治"社会科学性"那种)，
+  // 一律 return null → 该考点退普通默写(按意思判、可给部分分)。
+  if (longest < 2 || longest > 14) return null;
   const blanks = (s.match(/▢/g) || []).length;
   if (blanks !== ans.length || !blanks) return null;
   return { s, a: ans, mode: longest <= 8 ? "exact" : "semantic", aligned };
