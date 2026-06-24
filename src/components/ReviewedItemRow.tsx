@@ -23,21 +23,35 @@ export function ReviewedItemRow({ item }: { item: ReviewedItem }) {
     <li>
       <button
         onClick={() => setOpen((o) => !o)}
-        className="flex min-h-12 w-full items-center gap-2.5 px-3.5 py-2.5 text-left"
+        className="w-full px-3.5 py-2.5 text-left"
       >
-        <span className={`shrink-0 rounded-[7px] px-1.5 py-0.5 text-[10px] font-medium ${g.cls}`}>{g.label}</span>
-        <span className="min-w-0 flex-1 truncate text-[15px]">{item.name}</span>
-        {item.attempts > 1 && <span className="shrink-0 text-[11px] text-label3">测 {item.attempts} 次</span>}
-        <span className="shrink-0 rounded-full bg-fill2 px-1.5 py-0.5 text-[10px] text-label3">{item.level}</span>
-        <svg
-          viewBox="0 0 24 24"
-          className={`h-4 w-4 shrink-0 text-label3 transition-transform ${open ? "rotate-90" : ""}`}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
-          <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex h-5 shrink-0 items-center rounded-[6px] bg-fill2 px-1.5 font-mono text-[10px] font-semibold tabular-nums text-label2">
+            {String(item.seq).padStart(3, "0")}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[14px] font-medium">{item.name}</span>
+          <span className="shrink-0 text-[11px] text-label3">{item.level}</span>
+          <svg
+            viewBox="0 0 24 24"
+            className={`h-4 w-4 shrink-0 text-label3 transition-transform ${open ? "rotate-90" : ""}`}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={2}
+          >
+            <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-7 text-[10px]">
+          <span className={`rounded-[5px] px-1.5 py-0.5 font-medium ${g.cls}`}>{g.label}</span>
+          {item.attempts > 1 && <span className="text-label3">测 {item.attempts} 次</span>}
+          <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-blue/12 px-1.5 py-0.5 text-blue-soft">
+            <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="none" stroke="currentColor" strokeWidth={2.2}>
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            下次 {item.nextDueLabel}
+          </span>
+        </div>
       </button>
 
       {open && (

@@ -1,11 +1,15 @@
-import { supabaseAdmin } from "./supabase";
+import { supabaseAdmin, fetchAllRows } from "./supabase";
 import { bjDayStart, bjDayEnd, bjDateStr } from "./dates";
+import { buildChapterIndex, type KpRow } from "./scheduler";
 
 /**
  * 今日已背明细（RSC 直接调，零 LLM）。
  * 数据源=detection_log 今天的记录；按考点去重（保留最新一次结果 + 统计今天测了几次），
- * 关联 kp_state 取考点名/科目。供「今天背了哪些」页展示——不只看到数字，能看到具体背了啥、过没过。
+ * 关联 kp_state 取考点名/科目/章节定位 + next_due（下次出现时间）。
+ * 供「今天背了哪些」页用——和背诵卡片同一套 科目→章→节 编号排版，并显示每个点的下次复习时间。
  */
+
+const DAY_MS = 86400000;
 
 export interface ReviewedItem {
   kp_id: string;
@@ -18,12 +22,32 @@ export interface ReviewedItem {
   question: string | null; // 最新一次的题目（供查看记录，不必重测）
   answer: string | null; // 最新一次的作答
   confidence: number | null;
+  // 章节定位（与背诵卡片同源，buildChapterIndex 推导）
+  chapterNo: number;
+  chapterName: string;
+  sectionNo: number;
+  sectionName: string;
+  seq: number; // 该科教材内全局序号（= kp_id 尾号）
+  // 下次出现
+  nextDue: string | null; // 北京日历日串，如 2026-06-26
+  nextDueLabel: string; // 友好相对文案："今天可复习" / "明天" / "3 天后" / "已掌握" / "未排期"
 }
 
 export interface TodayReviewed {
   items: ReviewedItem[];
   total: number; // 去重考点数
   passedCount: number; // 最新结果=干净通过 的考点数
+}
+
+/** next_due → 相对今天（北京日）的友好文案。 */
+function nextDueLabel(nextDue: string | null, mastered: boolean, todayStr: string): string {
+  if (mastered) return "已掌握";
+  if (!nextDue) return "未排期";
+  const days = Math.round((Date.parse(nextDue) - Date.parse(todayStr)) / DAY_MS);
+  if (Number.isNaN(days)) return "未排期";
+  if (days <= 0) return "今天可复习";
+  if (days === 1) return "明天";
+  return `${days} 天后`;
 }
 
 export async function getTodayReviewed(): Promise<TodayReviewed> {
@@ -55,6 +79,13 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
         question: r.question != null ? String(r.question) : null,
         answer: r.answer != null ? String(r.answer) : null,
         confidence: typeof r.confidence === "number" ? r.confidence : null,
+        chapterNo: 0,
+        chapterName: "未分类",
+        sectionNo: 0,
+        sectionName: "",
+        seq: Number(kp.split("-")[1]) || 0,
+        nextDue: null,
+        nextDueLabel: "未排期",
       });
     }
   }
@@ -62,15 +93,28 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
   const ids = [...byKp.keys()];
   if (ids.length === 0) return { items: [], total: 0, passedCount: 0 };
 
-  const { data: kps } = await supabaseAdmin
-    .from("kp_state")
-    .select("kp_id, subject, ext")
-    .in("kp_id", ids);
+  // 章节编号需全科考点（与背诵卡片严格一致）；明细只取今天测过的几个考点 ext/next_due。
+  const [allLoc, { data: kps }] = await Promise.all([
+    fetchAllRows<{ kp_id: string; subject: string; parent_kp: string | null }>((from, to) =>
+      supabaseAdmin.from("kp_state").select("kp_id, subject, parent_kp").order("kp_id").range(from, to),
+    ),
+    supabaseAdmin.from("kp_state").select("kp_id, subject, ext, next_due, mastered").in("kp_id", ids),
+  ]);
+
+  const chapterIndex = buildChapterIndex(allLoc as unknown as KpRow[]);
   for (const k of kps ?? []) {
     const item = byKp.get(k.kp_id);
-    if (item) {
-      item.subject = k.subject;
-      item.name = (k.ext as { name?: string })?.name ?? k.kp_id;
+    if (!item) continue;
+    item.subject = k.subject;
+    item.name = (k.ext as { name?: string })?.name ?? k.kp_id;
+    item.nextDue = (k.next_due as string | null) ?? null;
+    item.nextDueLabel = nextDueLabel(item.nextDue, !!k.mastered, todayStr);
+    const lc = chapterIndex.get(k.kp_id);
+    if (lc) {
+      item.chapterNo = lc.chapterNo;
+      item.chapterName = lc.chapterName;
+      item.sectionNo = lc.sectionNo;
+      item.sectionName = lc.sectionName;
     }
   }
 
