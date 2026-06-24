@@ -62,6 +62,9 @@ export function ReciteSession({
   const [clozeFilled, setClozeFilled] = useState<string[]>([]); // L1 关键词填空各空填入（顺序同 answerKey）
   const [result, setResult] = useState<GradeResp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [skipping, setSkipping] = useState(false);
+  // 一键跳过：当作通过排进常规周期 → 直接进下一个（先只法理开放）
+  const canSkip = material.subject === "法理";
   // 答题计时：从「题目呈现」到「提交」的秒数 → detection_log.seconds（周报算答题耗时趋势）
   const answerStartRef = useRef<number>(0);
 
@@ -124,6 +127,27 @@ export function ReciteSession({
     }
   }
 
+  async function skip() {
+    if (skipping) return;
+    setSkipping(true);
+    setError(null);
+    try {
+      const r = await fetch("/api/recite/skip", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kpId: material.kpId }),
+      });
+      if (!r.ok) {
+        const d = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(d.error ?? "跳过失败");
+      }
+      router.push(nextHref ?? listHref);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+      setSkipping(false);
+    }
+  }
+
   const stage = phase === "encode" ? 0 : phase === "result" ? 2 : 1;
 
   return (
@@ -148,7 +172,14 @@ export function ReciteSession({
         <div className="rounded-[10px] bg-red/15 p-3 text-[12.5px] text-red">{error}</div>
       )}
 
-      {phase === "encode" && <EncodePane material={material} onStart={startDetect} />}
+      {phase === "encode" && (
+        <EncodePane
+          material={material}
+          onStart={startDetect}
+          onSkip={canSkip ? skip : undefined}
+          skipping={skipping}
+        />
+      )}
 
       {phase === "generating" && (
         <LoadingPane
@@ -205,9 +236,14 @@ function LoadingPane({ text }: { text: string }) {
 function EncodePane({
   material,
   onStart,
+  onSkip,
+  skipping,
 }: {
   material: StudyMaterial;
   onStart: (lv: Level) => void;
+  /** 一键跳过（按通过周期排进复习）——非法理时为 undefined，不渲染 */
+  onSkip?: () => void;
+  skipping?: boolean;
 }) {
   // 无 L1 默写靶点 → L1 出题必空关键词、永远判"缺料勉强★"，直接把主按钮指向 L2。
   // 两类：①完全没卡（法综冷点）②有卡但全是无 P1/P2/口诀 的纯法条卡/伞形总览考点。
@@ -269,6 +305,16 @@ function EncodePane({
       {defaultLevel !== "L1" && (
         <button onClick={() => onStart("L1")} className="-mt-1 py-1 text-[13px] text-blue">
           {noL1Material ? "仍试 L1（本考点无默写要点，多半判不过）" : "先从 L1 测起"}
+        </button>
+      )}
+
+      {onSkip && (
+        <button
+          onClick={onSkip}
+          disabled={skipping}
+          className="mt-1 rounded-[14px] border border-hairline bg-card py-3 text-[14px] font-medium text-label2 disabled:opacity-50"
+        >
+          {skipping ? "跳过中…" : "一键跳过 · 按通过周期安排"}
         </button>
       )}
     </>
