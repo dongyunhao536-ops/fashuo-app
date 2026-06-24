@@ -10,8 +10,9 @@ import type { KpRow } from "@/lib/scheduler";
  * 跳过 = 当作一次干净通过排进常规复习周期：computeTransition(cur_level, "干净通过")
  *   → 间隔沿 1→3→7→15→30 推进一档、本档标 passed、按需升档、next_due 落常规节奏，
  *   不再近端反复（下次到期才再现）。复用与检测同一套升降档逻辑（kp-transition 单测锁定）。
- * 不写 detection_log（没真测，不进「今天背了哪些」）；曾弱且本次达成 mastered 时仍投「已强化」，
- *   与检测口径一致，保持弱项档案有进有出。鉴权由 src/proxy.ts 网关统一处理。
+ * 写一条 detection_log（ai_grade="跳过"）→ 进「今天背了哪些」（独立"跳过"徽标，不计入"通过 X"）；
+ *   但周报通过率/覆盖统计排除"跳过"（跳过≠真检测，见 weekly-review）。曾弱且本次达成 mastered 时
+ *   仍投「已强化」，与检测口径一致，保持弱项档案有进有出。鉴权由 src/proxy.ts 网关统一处理。
  */
 export async function POST(req: Request) {
   let body: { kpId?: string };
@@ -50,6 +51,21 @@ export async function POST(req: Request) {
     console.error("[/api/recite/skip] 失败：", error.message);
     return Response.json({ error: error.message }, { status: 502 });
   }
+
+  // 写一条「跳过」检测记录 → 进「今天背了哪些」（独立徽标、不计通过；周报已排除"跳过"）
+  await supabaseAdmin.from("detection_log").insert({
+    kp_id: kpId,
+    level: kp.cur_level, // 被"通过"的档（升档前）
+    question: null,
+    answer: null,
+    ai_grade: "跳过",
+    passed: true,
+    seconds: null,
+    model: "手动跳过",
+    grep_lines: "",
+    confidence: null,
+    starred: false,
+  });
 
   // 曾弱 + 本次首达 mastered → 投「已强化」（与检测一致，弱项档案有进有出）
   if (t.shouldEmitStrengthened) {

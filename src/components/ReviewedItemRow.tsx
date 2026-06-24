@@ -12,6 +12,7 @@ function gradeStyle(grade: string): { cls: string; label: string } {
   if (grade === "干净通过") return { cls: "bg-green/15 text-green", label: "通过" };
   if (grade === "勉强") return { cls: "bg-orange/15 text-orange", label: "勉强" };
   if (grade === "未过") return { cls: "freq-hot font-semibold", label: "未过" };
+  if (grade === "跳过") return { cls: "bg-blue/12 text-blue-soft", label: "跳过" };
   return { cls: "bg-fill text-label2", label: grade || "—" };
 }
 
@@ -62,19 +63,38 @@ export function ReviewedItemRow({ item }: { item: ReviewedItem }) {
               <div className="whitespace-pre-wrap text-label">{item.question}</div>
             </div>
           )}
-          <div className="rounded-[10px] bg-card2 px-3 py-2">
-            <div className="mb-0.5 text-[11px] text-label3">你的作答</div>
-            <div className="whitespace-pre-wrap text-label">
-              {item.answer?.trim() ? item.answer : <span className="text-label3">（挖空作答 / 无文本记录）</span>}
+          {item.grade === "跳过" ? (
+            <div className="rounded-[10px] bg-card2 px-3 py-2 text-[12.5px] leading-relaxed text-label2">
+              本点已「一键跳过」，按通过周期排入复习（未做检测）。
             </div>
-          </div>
+          ) : (
+            <div className="rounded-[10px] bg-card2 px-3 py-2">
+              <div className="mb-0.5 text-[11px] text-label3">你的作答</div>
+              <div className="whitespace-pre-wrap text-label">
+                {item.answer?.trim() ? item.answer : <span className="text-label3">（挖空作答 / 无文本记录）</span>}
+              </div>
+            </div>
+          )}
           <div className="flex items-center gap-3 px-1 text-[12px] text-label2">
             <span>
-              判分 <b className={g.cls.includes("green") ? "text-green" : g.cls.includes("orange") ? "text-orange" : "text-red"}>{g.label}</b>
+              判分{" "}
+              <b
+                className={
+                  g.cls.includes("green")
+                    ? "text-green"
+                    : g.cls.includes("orange")
+                      ? "text-orange"
+                      : g.cls.includes("blue")
+                        ? "text-blue-soft"
+                        : "text-red"
+                }
+              >
+                {g.label}
+              </b>
             </span>
             {item.confidence != null && <span className="text-label3">信心 {item.confidence}%</span>}
             <Link href={`/recite/${item.kp_id}`} className="ml-auto font-medium text-blue">
-              重新检测 ›
+              {item.grade === "跳过" ? "去检测 ›" : "重新检测 ›"}
             </Link>
           </div>
         </div>

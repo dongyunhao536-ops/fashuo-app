@@ -76,6 +76,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     supabaseAdmin
       .from("detection_log")
       .select("kp_id, level, passed, ai_grade, confidence, starred, question")
+      .neq("ai_grade", "跳过") // 跳过≠真检测，排除出周报通过率/覆盖统计，保周报口径准
       .gte("ts", sinceTs),
     supabaseAdmin.from("study_log").select("subject, chapter, activity").gte("log_date", weekStart),
     supabaseAdmin.from("ask_summary").select("subject, confusion, question_type").gte("created_at", sinceTs),
