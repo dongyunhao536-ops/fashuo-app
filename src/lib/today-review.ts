@@ -15,6 +15,9 @@ export interface ReviewedItem {
   grade: string; // 最新一次 ai_grade：干净通过/勉强/未过
   passed: boolean;
   attempts: number; // 今天测这个考点的次数（含"再测一次"）
+  question: string | null; // 最新一次的题目（供查看记录，不必重测）
+  answer: string | null; // 最新一次的作答
+  confidence: number | null;
 }
 
 export interface TodayReviewed {
@@ -27,7 +30,7 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
   const todayStr = bjDateStr(new Date());
   const { data: logs } = await supabaseAdmin
     .from("detection_log")
-    .select("kp_id, level, ai_grade, passed, ts")
+    .select("kp_id, level, ai_grade, passed, ts, question, answer, confidence")
     .gte("ts", bjDayStart(todayStr))
     .lte("ts", bjDayEnd(todayStr))
     .order("ts", { ascending: false }); // 最新在前 → 去重时第一条即最新结果
@@ -49,6 +52,9 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
         grade: String(r.ai_grade ?? ""),
         passed: !!r.passed,
         attempts: 1,
+        question: r.question != null ? String(r.question) : null,
+        answer: r.answer != null ? String(r.answer) : null,
+        confidence: typeof r.confidence === "number" ? r.confidence : null,
       });
     }
   }

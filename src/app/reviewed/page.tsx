@@ -1,21 +1,15 @@
 import Link from "next/link";
 import { getTodayReviewed } from "@/lib/today-review";
 import { TabBar } from "@/components/TabBar";
+import { ReviewedItemRow } from "@/components/ReviewedItemRow";
 
 /**
  * 今天背了哪些（RSC，零成本）。从仪表盘「今日已背 X」点进来——把数字摊开成明细：
- * 每个今天测过的考点 + 最新判分 + 测了几次，点一条可回去重背。
+ * 每个今天测过的考点 + 最新判分 + 测了几次，点一条【展开看检测记录】(题目/作答/判分)，不必重测。
  */
 export const dynamic = "force-dynamic";
 
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-
-function gradeStyle(grade: string): { cls: string; label: string } {
-  if (grade === "干净通过") return { cls: "bg-green/15 text-green", label: "通过" };
-  if (grade === "勉强") return { cls: "bg-orange/15 text-orange", label: "勉强" };
-  if (grade === "未过") return { cls: "freq-hot font-semibold", label: "未过" };
-  return { cls: "bg-fill text-label2", label: grade || "—" };
-}
 
 export default async function ReviewedPage() {
   const { items, total, passedCount } = await getTodayReviewed();
@@ -68,33 +62,9 @@ export default async function ReviewedPage() {
               {s} · {bySubject.get(s)!.length}
             </h2>
             <ul className="glass-card divide-y divide-hairline rounded-[16px]">
-              {bySubject.get(s)!.map((it) => {
-                const g = gradeStyle(it.grade);
-                return (
-                  <li key={it.kp_id}>
-                    <Link
-                      href={`/recite/${it.kp_id}`}
-                      className="flex min-h-12 items-center gap-2.5 px-3.5 py-2.5"
-                    >
-                      <span
-                        className={`shrink-0 rounded-[7px] px-1.5 py-0.5 text-[10px] font-medium ${g.cls}`}
-                      >
-                        {g.label}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[15px]">{it.name}</span>
-                      {it.attempts > 1 && (
-                        <span className="shrink-0 text-[11px] text-label3">测 {it.attempts} 次</span>
-                      )}
-                      <span className="shrink-0 rounded-full bg-fill2 px-1.5 py-0.5 text-[10px] text-label3">
-                        {it.level}
-                      </span>
-                      <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-label3" fill="none" stroke="currentColor" strokeWidth={2}>
-                        <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                      </svg>
-                    </Link>
-                  </li>
-                );
-              })}
+              {bySubject.get(s)!.map((it) => (
+                <ReviewedItemRow key={it.kp_id} item={it} />
+              ))}
             </ul>
           </section>
         ))

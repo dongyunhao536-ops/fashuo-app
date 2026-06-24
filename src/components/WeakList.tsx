@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { WeakKp } from "@/lib/weak";
+import { WeakMasterButton } from "@/components/WeakMasterButton";
 
 /**
  * 弱项列表（展示组件，无状态）。原 /weak 页的列表，2026-06-14 并入教练模块复用。
@@ -42,7 +43,7 @@ export function WeakList({ list, subject }: { list: WeakKp[]; subject?: string }
     <ul className="glass-card divide-y divide-hairline rounded-[18px]">
       {list.map((w) => (
         <li key={w.kp_id}>
-          <Link href={`/recite/${w.kp_id}`} className="flex items-start gap-3 px-4 py-3.5">
+          <Link href={`/recite/${w.kp_id}`} className="flex items-start gap-3 px-4 pb-1.5 pt-3.5">
             <span className="mt-0.5 grid h-9 w-9 shrink-0 place-items-center rounded-[10px] bg-red/15 text-red">
               <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.8}>
                 <circle cx="12" cy="12" r="9" />
@@ -88,6 +89,13 @@ export function WeakList({ list, subject }: { list: WeakKp[]; subject?: string }
               </div>
             </div>
           </Link>
+          {/* 操作条：我已会（移出弱项）/ 去背诵 —— 在 Link 之外，点按钮不触发跳转 */}
+          <div className="flex items-center gap-2 px-4 pb-3 pl-[60px]">
+            <WeakMasterButton kpId={w.kp_id} />
+            <Link href={`/recite/${w.kp_id}`} className="ml-auto text-[12px] font-medium text-blue">
+              去背诵 ›
+            </Link>
+          </div>
         </li>
       ))}
     </ul>
