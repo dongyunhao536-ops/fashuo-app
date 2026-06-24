@@ -125,20 +125,30 @@ export default async function ReviewedPage() {
                       <span className="ml-1.5 text-[12px] font-normal text-label3">{ch.count}</span>
                     </summary>
                     <div className="mt-2 flex flex-col gap-2">
-                      {ch.sections.map((sec) => (
-                        <div key={`${sec.sectionNo}-${sec.sectionName}`}>
-                          {sec.sectionName && (
-                            <div className="mb-1 px-1 text-[12px] text-label2">
+                      {ch.sections.map((sec) =>
+                        sec.sectionName ? (
+                          <details key={`${sec.sectionNo}-${sec.sectionName}`} open>
+                            <summary className="mb-1 cursor-pointer px-1 text-[12px] text-label2">
                               第{zh(sec.sectionNo)}节 · {sec.sectionName}
-                            </div>
-                          )}
-                          <ul className="divide-y divide-hairline overflow-hidden rounded-[10px] bg-card">
+                              <span className="ml-1.5 text-label3">{sec.items.length}</span>
+                            </summary>
+                            <ul className="divide-y divide-hairline overflow-hidden rounded-[10px] bg-card">
+                              {sec.items.map((it) => (
+                                <ReviewedItemRow key={it.kp_id} item={it} />
+                              ))}
+                            </ul>
+                          </details>
+                        ) : (
+                          <ul
+                            key={`${sec.sectionNo}-${sec.sectionName}`}
+                            className="divide-y divide-hairline overflow-hidden rounded-[10px] bg-card"
+                          >
                             {sec.items.map((it) => (
                               <ReviewedItemRow key={it.kp_id} item={it} />
                             ))}
                           </ul>
-                        </div>
-                      ))}
+                        ),
+                      )}
                     </div>
                   </details>
                 ))}
