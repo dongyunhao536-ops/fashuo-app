@@ -1,15 +1,21 @@
-# 法硕运维三件套（cp 到 /etc/cron.d/fashuo-ops；chmod 644；systemctl restart cron）
+# 法硕运维四件套（cp 到 /etc/cron.d/fashuo-ops；chmod 644；systemctl restart cron）
 # 第 6 列 root = 运行用户。各脚本自身把告警推 Bark（设 NOTIFY_URL 后生效）。
 #
 # 一次性准备：
 #   git clone <fashuo-archive 私库>  /opt/fashuo-archive
 #   git clone <fashuo-backups 私库>  /opt/fashuo-backups
-#   在 /etc/default/fashuo-ops 写 NOTIFY_URL=https://api.day.app/<你的key>（可选告警）
+#   在 /etc/default/fashuo-ops 写（均可选）：
+#     NOTIFY_URL=https://api.day.app/<你的key>     # Bark 告警；不设则只记日志
+#     HEARTBEAT_URL=https://hc-ping.com/<uuid>     # 死人开关；healthchecks.io 建 daily 检查给的 ping URL
+#     # 数据流阈值（天）按需覆盖：REVIEW_STALE_DAYS=3 CONFIRM_STALE_DAYS=7 ERROR_STALE_DAYS=21
+#     #                          RECITE_STALE_DAYS=7 MIRROR_STALE_DAYS=7 ；磁盘：DISK_WARN_PCT=85
 #
-# 时间错开：03:30 登记同步 → 04:00 备份 → 09:00 巡检（你起床前后能收到当天健康汇总）。
+# 时间错开：03:30 登记同步 → 04:00 备份 → 09:00 基础巡检(打心跳) → 09:10 数据流闭环巡检
+#   （你起床前后能收到当天健康汇总 + 数据流是否在闭环流动）。
 SHELL=/bin/bash
 BACKUP_REPO=/opt/fashuo-backups
 
 30 3 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; cd /opt/fashuo-app && bash deploy/08-archive-autosync.sh >> /var/log/fashuo-autosync.log 2>&1
 0  4 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; bash /opt/fashuo-app/deploy/09-backup.sh >> /var/log/fashuo-backup.log 2>&1
 0  9 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; bash /opt/fashuo-app/deploy/10-healthcheck.sh >> /var/log/fashuo-health.log 2>&1
+10 9 * * * root [ -f /etc/default/fashuo-ops ] && . /etc/default/fashuo-ops; bash /opt/fashuo-app/deploy/11-dataflow-check.sh >> /var/log/fashuo-dataflow.log 2>&1

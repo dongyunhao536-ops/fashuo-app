@@ -1,0 +1,3 @@
+# 在 Windows 编辑、在 Linux(ECS) 运行的脚本必须保持 LF；CRLF 会导致 bad interpreter。
+*.sh   text eol=lf
+*.cron text eol=lf
