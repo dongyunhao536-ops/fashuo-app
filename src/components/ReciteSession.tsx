@@ -527,6 +527,43 @@ function ResultPane({
       </div>
 
       <div className="rounded-[12px] bg-card p-4">
+        {/* 原题 + 参考答案（用户要求：检测后展示原题，不只展示答案） */}
+        <div className="mb-3 rounded-[10px] bg-card2 p-3">
+          <div className="text-[11px] font-semibold text-label2">原题</div>
+          <p className="mt-1 whitespace-pre-wrap text-[13.5px] leading-relaxed text-label">
+            {question.question}
+          </p>
+          <div className="mt-2.5 text-[11px] font-semibold text-label2">参考答案</div>
+          {question.cloze && question.cloze.length > 0 ? (
+            <div className="mt-1 flex flex-col gap-1.5 text-[13.5px] leading-[1.9] text-label">
+              {question.cloze.map((item, ci) => {
+                const segs = item.s.split("▢"); // segs 数 = 空数 + 1，空处填入对应答案
+                return (
+                  <div key={ci}>
+                    <span className="mr-1 select-none text-[12px] text-label3">{ci + 1}.</span>
+                    {segs.map((seg, si) => (
+                      <span key={si}>
+                        {seg}
+                        {si < segs.length - 1 && (
+                          <span className="font-semibold text-blue-soft">{item.a[si] ?? "▢"}</span>
+                        )}
+                      </span>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          ) : question.answerKey.length > 0 ? (
+            <ul className="mt-1 space-y-1 text-[13.5px] leading-relaxed text-label">
+              {question.answerKey.map((k, i) => (
+                <li key={i}>· {k}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-[13px] text-label3">（本卡无参考答案）</p>
+          )}
+        </div>
+
         {result.explanation &&
           (result.passed ? (
             <p className="text-[13px] leading-relaxed text-label">{result.explanation}</p>
