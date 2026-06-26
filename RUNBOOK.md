@@ -90,58 +90,52 @@ git commit -m "手改 XXX：YYY"
 
 ## 3. 改了应用代码 → 部署 ECS
 
-⚠ **服务器只有 2G 内存**，build 容易 OOM。务必照流程走。
+> 🚫 **不要在 ECS 上 `npm run build`。** 2026-06-13 起已是全自动 CD：**`git push origin main` 就会自动部署**。
+> ECS（2 核 2G）裸跑 `next build` 会 OOM 抖死全机（连 SSH 都连不上、要重启实例才恢复——2026-06-13 与 2026-06-25 各实测一次）。
+> 完整流程与原理见 [deploy/CD-SETUP.md](deploy/CD-SETUP.md)；这里只列日常操作。
 
-### 3.1 PC 侧：提交代码
+### 3.1 PC 侧：提交并推送（这就够了）
 
 ```powershell
 cd D:\fashuo-app
-git status
 git add <改动的文件>
 git commit -m "改动说明"
 git push origin main
 ```
 
-### 3.2 SSH 上 ECS
+push 后 **GitHub Actions 自动**：云端 `npm ci` + `next build`（standalone）→ scp 产物到 ECS → `12-activate-standalone.sh` 切 `current` 软链 + `pm2 reload` + 自检 200（**非 200 自动回滚上一版**）。ECS 全程不编译。
+
+- 看进度：GitHub → **Actions** → `build-and-deploy`。手动触发：Run workflow（`workflow_dispatch`）。
+- **不触发部署的改动**：`**/*.md`、`memory/**`、`scripts/**`（workflow 的 `paths-ignore`——改文档/运维脚本不会重部署）。
+
+### 3.2 ⚠ 改了 `db/schema.sql`？CD 不管 schema，手动落库一次
+
+CD 只推代码、**不跑迁移**。新增列/表后，SSH 上 ECS 跑一次（幂等、轻量、不编译、不会 OOM）：
 
 ```bash
 ssh root@47.103.148.124
-# 或用阿里云 Workbench 网页 SSH（不容易掉线）
-cd /opt/fashuo-app
-git pull
+cd /opt/fashuo-app && git pull --ff-only      # 取到含新 schema.sql 的版本（CD 已 pull 则 already up to date）
+bash deploy/02-postgres-setup.sh              # 应用 schema.sql + migrations + 重授权 + NOTIFY pgrst 重读
 ```
 
-### 3.3 后台 build（关键：必须 nohup）
+CD 推代码与这步互不依赖，先后都行；新列缺失时应用侧已设计为优雅降级，不会崩。
+
+### 3.3 烟测（CD 自检已跑过，这里二次确认）
 
 ```bash
-nohup env NODE_OPTIONS="--max-old-space-size=1536" npm run build > /tmp/build.log 2>&1 &
-tail -f /tmp/build.log
+curl -k -sI https://47.103.148.124:8443/ask | head -3
+readlink /opt/fashuo-app/current               # 确认上线版本 → releases/<sha>
 ```
 
-- ⚠ **不能前台跑 `npm run build`**：SSH/Workbench 一掉线就 SIGHUP 杀进程，看起来像 OOM 其实是掉线
-- `--max-old-space-size=1536` 限制 Node 堆，给系统留 500M 防 OOM kill
-- 等到 `tail -f` 看到 `✓ Compiled successfully` / `Build completed` 再 Ctrl+C
-
-### 3.4 重启 PM2
-
-```bash
-pm2 stop fashuo
-free -h                       # 看下内存，<200M 可用就先 pm2 delete fashuo 再 start
-pm2 start ecosystem.config.js # 或 pm2 start fashuo（已经在 pm2 list 里时）
-pm2 status                    # 应看到 online，pid 有值
-```
-
-### 3.5 烟测
-
-```bash
-curl -sI https://localhost:8443/ask -k | head -3
-```
-
-- 期望 `HTTP/2 307`（auth 中间件跳转到 /login，证明 Next.js 已起）
-- `HTTP/2 502` = 上游 Next.js 没起（看 `pm2 logs fashuo --lines 50`）
-- `Connection refused` = nginx 没起（`systemctl status nginx`）
+- 期望 `HTTP/2 307`（鉴权网关跳 /login，证明 app 已起）。
+- `502` = standalone server 没起（`pm2 logs fashuo --lines 50`）。
+- `Connection refused` = nginx 没起（`systemctl status nginx`）。
 
 然后手机 PWA 打开 `https://47.103.148.124:8443`，登录，问一题验证。
+
+### 3.4 应急：仅当 CD 挂了才在 ECS 本地 build
+
+GitHub Actions 不可用时，用加固版 [deploy/11-redeploy.sh](deploy/11-redeploy.sh)（保 swap + build 前 `pm2 stop` 腾内存 + nice）。**别手敲 `npm run build`**——会复现 OOM。回滚：切 `current` 软链到上一个 `releases/<sha>` 再 `pm2 reload`（见 CD-SETUP.md）。
 
 ---
 
@@ -219,5 +213,5 @@ node --env-file=.env.local scripts/probe-thinking.mjs   # 答疑 Opus 4.8 + thin
 | 答疑慢且无字流出 >15s | `pm2 logs fashuo --lines 50` 看是不是规划器 Sonnet 4 渠道挂了（兜底应自动回退 Opus） |
 | 答疑证据卡无教材引用 | `npm run sync` 是否跑过；`content_mirror` 表行数 `select count(*) from content_mirror;` |
 | 待办筐"收下"按钮没反应 | F12 看 `/api/events/action` 返回；可能 APP_PASSWORD cookie 过期，重登 |
-| 部署后 PM2 反复重启 | `pm2 logs --err --lines 100`；常见是 `.env.local` 没在 ECS 上更新 |
-| PM2 内存涨到 800M+ 不降 | `pm2 restart fashuo`；下次 build 前先 `pm2 stop` 腾内存 |
+| 部署后 PM2 反复重启 | `pm2 logs --err --lines 100`；常见是 `.env.production` 缺/错变量，或 CD 自检非 200 已回滚（看 Actions 日志 + `readlink /opt/fashuo-app/current`） |
+| PM2 内存涨到 800M+ 不降 | `pm2 restart fashuo`；ecosystem 已设 `max_memory_restart=1G` 自动兜底（CD 在云端 build，ECS 不再因 build 吃内存） |
