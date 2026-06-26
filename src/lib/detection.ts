@@ -627,8 +627,10 @@ export async function gradeAnswer(opts: {
     result = await gradeL2L3(kp, opts);
   }
 
-  // 写 detection_log
-  await supabaseAdmin.from("detection_log").insert({
+  // 写 detection_log。这是审计 trail——周报低信心抽样 + #4 G1 不变式对账的参照真值。
+  // best-effort（不抛，评分核心写已由 applyStateUpdate 兜底），但失败必须【可见】：
+  // 原先 fire-and-forget 会让审计真值静默掉行（参照真值不该有洞）。见 BUILD_PLAN「软硬体制完整性」#1b。
+  const { error: logErr } = await supabaseAdmin.from("detection_log").insert({
     kp_id: kp.kp_id,
     level: opts.level,
     question: opts.question,
@@ -641,6 +643,7 @@ export async function gradeAnswer(opts: {
     confidence: result.confidence,
     starred: result.starred,
   });
+  if (logErr) console.error("[detection] detection_log 写入失败（审计 trail 缺行）：", logErr.message);
 
   // 更新 kp_state 升降档
   const stateUpdate = await applyStateUpdate(kp, opts.level, result.grade);
