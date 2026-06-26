@@ -145,6 +145,8 @@ export async function gradeDuel(opts: {
   correctConcept: string;
   keyPoints: string[];
   userAnswer: string;
+  /** golden eval / 试评：true=只评分不投 events 弱项候选，不污染待办筐（#3） */
+  dryRun?: boolean;
 }): Promise<DuelGrade> {
   const content = await readPairContent(opts.path);
   const system = `你是法硕评分老师，给"易混概念区分题"评分。【严禁放水】。
@@ -183,7 +185,7 @@ export async function gradeDuel(opts: {
   // 未过=选错概念/答不出区分依据 → 真实的概念交叉污染信号，投待办筐弱项候选
   // （统一走 emitEvent：同 pair 连败 pending 期间只留一条，PC 登记进易混档案历次混淆记录）
   let weakEmitted = false;
-  if (grade === "未过") {
+  if (grade === "未过" && !opts.dryRun) {
     const pair = parsePair(opts.path);
     if (pair.subject) {
       weakEmitted = await emitEvent({

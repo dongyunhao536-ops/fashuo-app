@@ -30,6 +30,7 @@ export async function POST(req: Request) {
       correctConcept?: string;
       keyPoints?: unknown;
       userAnswer?: string;
+      dryRun?: unknown;
     };
     try {
       body = await req.json();
@@ -53,6 +54,7 @@ export async function POST(req: Request) {
           correctConcept: body.correctConcept ?? "",
           keyPoints: Array.isArray(body.keyPoints) ? body.keyPoints.map(String) : [],
           userAnswer,
+          dryRun: body.dryRun === true, // #3 golden eval：只评分不投 events
         });
         return { status: 200, body: { ...r, costText: fmtCost(r.costUsd) } };
       }

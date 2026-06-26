@@ -328,10 +328,10 @@ bash deploy/07-backup-cron.sh   # 装 /etc/cron.daily/fashuo-backup
 
 | 序号 | 事项 | 性质 | 紧迫性 | 执行顺序 |
 |---|---|---|---|---|
-| **#3** | L2/L3 golden eval | 最大风险的**唯一外部支点** | **最高** | 同步启动（设计 + 基准答案构建有 lead time） |
-| **#1** | 复验信号迁 `kp_state.pending_review` 布尔 | 架构违约修复，便宜有界 | 低（复验稀有 + 丢了只损失一次重测） | **先发**（当天能落） |
-| **#1b** | `detection_log` insert 加 `.error` 检查 | 审计参照真值补洞 | 低 | 随 #4 或独立小修 |
-| **#4** | G1 不变式对账 | 完整性校验 | 低（`error_count` 已兜底调度） | 最后 |
+| **#3** | L2/L3 golden eval | 最大风险的**唯一外部支点** | **最高** | 🔧 harness 已搭（种子用例待复核） |
+| **#1** | 复验信号迁 `kp_state.pending_review` 布尔 | 架构违约修复，便宜有界 | 低（复验稀有 + 丢了只损失一次重测） | ✅ 已落（待 ECS apply-schema 落列激活） |
+| **#1b** | `detection_log` insert 加 `.error` 检查 | 审计参照真值补洞 | 低 | ✅ 已落 |
+| **#4** | G1 不变式对账 | 完整性校验 | 低（`error_count` 已兜底调度） | ⬜ 待办（最后） |
 
 > ⚠️ 排序教训：执行顺序优化"今天能交付什么"，紧迫性排序优化"只够做一件该做什么"。两者在便宜项与高风险项错位时分叉——让它们公开打架、显式选，别让某一个（清洁性、或"先发"）默默吃掉另一个。先发 #1 是收便宜干净尾，**不等于**处理了最大风险（#3）。
 
@@ -341,6 +341,7 @@ bash deploy/07-backup-cron.sh   # 装 /etc/cron.daily/fashuo-backup
 - 5-10 个 canonical case，**只放明确该判未过的烂答案**（漏 3/6 核心要件、罪名定错）——**测地板不测刻度**（边界"勉强"的精确校准不可证伪，别测；同教练评价的认识论纪律）。
 - 触发=**模型配置变更时**跑（非每次 deploy）。撞七牛云 RPM + `DAILY_BUDGET` 熔断 → 小集、单独预算或熔断外。
 - 防的是"名义上是 Opus、行为上漂移"——红线"Opus 不降级"守的是模型名（config），守不住名字代表的评分严苛度（行为）。这是行为漂移对账。
+- ✅ **已搭**：`scripts/golden-eval.mjs`（HTTP·全 dryRun 不污染库 + 反污染查库证明 + 非 200 守卫防预算耗尽误报绿）+ `gradeAnswer`/`gradeDuel` 的 `dryRun` 接缝（默认 false，零行为变更）。3 个种子用例：XF-0039 正当防卫（限度答反+漏要件）/ XF-0059 共同犯罪（被骗者误定绑架共犯）/ 高空抛物易混（只答表层罪名无区分）——**法律内容待云复核 + 扩充**（往 `CASES` 加条目即可）。跑法见脚本头注：起 `next dev` → `node --env-file=.env.local scripts/golden-eval.mjs`，**模型配置（MODEL_GRADING/ASK）变更时**跑一次。
 
 **#1 复验迁 `pending_review`** —— 消除唯一的架构违约 + 零冗余信号。
 - `kp_state` 加 `pending_review boolean`。写：`/api/ask` 命中 `review_kp_candidates` 时**事务性写** `pending_review=true`（checked），那条 `events(复验请求)` 降级为纯派生通知（丢了无所谓，布尔才驱动重排）。

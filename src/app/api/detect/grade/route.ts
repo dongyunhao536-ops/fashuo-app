@@ -36,6 +36,7 @@ export async function POST(req: Request) {
       sourceRef?: string;
       seconds?: unknown;
       clozeFilled?: unknown;
+      dryRun?: unknown;
     };
     try {
       body = await req.json();
@@ -79,6 +80,7 @@ export async function POST(req: Request) {
         sourceRef,
         seconds,
         clozeFilled,
+        dryRun: body.dryRun === true, // #3 golden eval：只评分不写库
       });
       return { status: 200, body: fmtGradeForUI(result) };
     } catch (err) {

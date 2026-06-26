@@ -603,6 +603,8 @@ export async function gradeAnswer(opts: {
   seconds?: number | null;
   /** L1 关键词填空：各空填入（顺序与 answerKey 一致）。有则走确定性逐空判分 */
   clozeFilled?: string[];
+  /** golden eval / 试评：true=只评分不写库（detection_log/kp_state/events 全跳），不污染生产（#3） */
+  dryRun?: boolean;
 }): Promise<GradeResult> {
   const kp = await loadKp(opts.kpId);
   const matchLevel = (kp.ext as { anki_match_level?: string })?.anki_match_level;
@@ -625,6 +627,23 @@ export async function gradeAnswer(opts: {
     }
   } else {
     result = await gradeL2L3(kp, opts);
+  }
+
+  // golden eval / 试评（#3）：dryRun=true 只算评分结果（含"该变成什么"的状态推演），不写任何库
+  // （detection_log / kp_state / events 全跳）——L2/L3 评分漂移回归用，不污染生产状态。
+  if (opts.dryRun) {
+    const t = computeTransition(kp, opts.level, result.grade);
+    return {
+      ...result,
+      kpId: kp.kp_id,
+      level: opts.level,
+      stateUpdate: {
+        prev: { cur_level: kp.cur_level as Level, interval_idx: kp.interval_idx, difficulty: kp.difficulty },
+        next: { cur_level: t.cur_level, interval_idx: t.interval_idx, difficulty: t.difficulty, next_due: t.nextDue },
+        mastered: t.mastered,
+      },
+      weakEventEmitted: false,
+    };
   }
 
   // 写 detection_log。这是审计 trail——周报低信心抽样 + #4 G1 不变式对账的参照真值。
