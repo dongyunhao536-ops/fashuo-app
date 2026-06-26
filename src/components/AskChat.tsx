@@ -45,6 +45,8 @@ interface Turn {
   result?: AskResult;
   error?: string;
   loading: boolean;
+  /** 用户点了「停止」中止本轮 */
+  stopped?: boolean;
 }
 
 export function AskChat() {
@@ -54,6 +56,7 @@ export function AskChat() {
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const restoredRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   // 挂载后从 sessionStorage 恢复（不能放 useState 初始化：SSR 首帧没有 storage，会水合不一致）
   useEffect(() => {
@@ -83,6 +86,8 @@ export function AskChat() {
   /** 实际发请求：idx 指向 turns 里要写结果的那一轮（新问或重试） */
   async function run(q: string, subj: string | undefined, idx: number) {
     setBusy(true);
+    const ac = new AbortController();
+    abortRef.current = ac;
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
 
     // 最近几轮成功 Q/A 作为追问上下文（不含当前轮）
@@ -95,7 +100,7 @@ export function AskChat() {
     try {
       const { status, data } = await postStreamedJson<
         AskResult & { error?: string; kind?: string }
-      >("/api/ask", { question: q, subject: subj, history });
+      >("/api/ask", { question: q, subject: subj, history }, ac.signal);
       if (status >= 400) {
         const msg =
           data.kind === "budget"
@@ -114,17 +119,25 @@ export function AskChat() {
         );
       }
     } catch (e) {
+      const aborted = ac.signal.aborted || (e as { name?: string })?.name === "AbortError";
       setTurns((t) =>
         t.map((x, i) =>
           i === idx
-            ? { ...x, loading: false, error: e instanceof Error ? e.message : String(e) }
+            ? aborted
+              ? { ...x, loading: false, stopped: true }
+              : { ...x, loading: false, error: e instanceof Error ? e.message : String(e) }
             : x,
         ),
       );
     } finally {
       setBusy(false);
+      abortRef.current = null;
       setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
     }
+  }
+
+  function stop() {
+    abortRef.current?.abort();
   }
 
   function send() {
@@ -141,7 +154,7 @@ export function AskChat() {
     const turn = turns[idx];
     if (!turn) return;
     setTurns((t) =>
-      t.map((x, i) => (i === idx ? { ...x, loading: true, error: undefined } : x)),
+      t.map((x, i) => (i === idx ? { ...x, loading: true, error: undefined, stopped: false } : x)),
     );
     void run(turn.question, turn.subject, idx);
   }
@@ -189,11 +202,34 @@ export function AskChat() {
               {t.question}
             </div>
 
-            {/* AI 答案 / loading / 错误 */}
+            {/* AI 答案 / loading / 停止 / 错误 */}
             {t.loading && (
-              <div className="glass-card flex items-center gap-2.5 self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
-                六步预检 + grep 教材中…<span className="text-label3">（限速，案例题约 1-3 分钟）</span>
+              <div className="flex items-center gap-2 self-start">
+                <div className="glass-card flex items-center gap-2.5 rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                  六步预检 + grep 教材中…<span className="text-label3">（限速，案例题约 1-3 分钟）</span>
+                </div>
+                <button
+                  onClick={stop}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card2 px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
+                >
+                  <span className="grid h-4 w-4 place-items-center rounded-full bg-red/15">
+                    <span className="h-1.5 w-1.5 rounded-[1px] bg-red" />
+                  </span>
+                  停止
+                </button>
+              </div>
+            )}
+            {t.stopped && (
+              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[22px] rounded-bl-[7px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
+                <span className="min-w-0 flex-1">已停止思考</span>
+                <button
+                  onClick={() => retry(i)}
+                  disabled={busy}
+                  className="shrink-0 rounded-full bg-fill px-3 py-1 text-[13px] font-medium text-label2 transition active:scale-95 disabled:opacity-40"
+                >
+                  重试
+                </button>
               </div>
             )}
             {t.error && (

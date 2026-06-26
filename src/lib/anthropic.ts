@@ -69,17 +69,23 @@ export class DailyCapError extends Error {
   }
 }
 
-/** 带指数退避的调用：专治七牛云 RPM 429（实测每秒可撞限） */
+/** 带指数退避的调用：专治七牛云 RPM 429（实测每秒可撞限）。
+ *  signal：用户「停止思考」时由路由层（req.signal，客户端断开即触发）透传到这里，
+ *  传给 SDK 让上游 LLM 调用真正中止（不只是前端停转），省下那次调用的钱。 */
 async function callWithRetry(
   params: Anthropic.MessageCreateParamsNonStreaming,
   maxRetries = 5,
+  signal?: AbortSignal,
 ): Promise<Anthropic.Message> {
   let lastErr: unknown;
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     try {
-      return await anthropic.messages.create(params);
+      return await anthropic.messages.create(params, signal ? { signal } : undefined);
     } catch (err) {
       lastErr = err;
+      // 用户主动停止：立刻抛出，不要进退避重试
+      if (signal?.aborted || (err as { name?: string })?.name === "AbortError") throw err;
       const kind = classifyError(err);
       if (kind === "daily_cap") throw new DailyCapError();
       if (kind === "auth")
@@ -317,6 +323,8 @@ export async function runPlanThenAnswer(opts: {
   route?: string;
   /** 对 planSystem / answerSystemStable 设缓存断点（仅当两者跨请求字节级稳定时开） */
   enableCache?: boolean;
+  /** 「停止思考」：透传到 SDK 中止规划/作答两次调用 */
+  signal?: AbortSignal;
 }): Promise<{
   message: Anthropic.Message;
   grepHits: GrepHit[];
@@ -336,6 +344,7 @@ export async function runPlanThenAnswer(opts: {
     maxAnswerTokens = 16000,
     route = "ask",
     enableCache = false,
+    signal,
   } = opts;
 
   await assertBudget();
@@ -350,12 +359,16 @@ export async function runPlanThenAnswer(opts: {
   //      日熔断（TPD/预算）原样抛出，换模型救不了限额。
   //    - 零产出 → 用作答模型重试一次：1500 token 小调用，重试远比让 Opus 大调用"无米硬答"划算。
   const doPlan = async (m: string, phase: string): Promise<ParsedPlan> => {
-    const planResp = await callWithRetry({
-      model: m,
-      max_tokens: 1500,
-      system: [{ type: "text", text: planSystem, ...cacheCtl }],
-      messages: [{ role: "user", content: question }],
-    });
+    const planResp = await callWithRetry(
+      {
+        model: m,
+        max_tokens: 1500,
+        system: [{ type: "text", text: planSystem, ...cacheCtl }],
+        messages: [{ role: "user", content: question }],
+      },
+      5,
+      signal,
+    );
     costUsd += await recordUsage({
       route: `${route}:plan`,
       model: m,
@@ -408,14 +421,18 @@ export async function runPlanThenAnswer(opts: {
   ];
   if (volatile) sys.push({ type: "text", text: volatile });
 
-  const ansResp = await callWithRetry({
-    model,
-    max_tokens: maxAnswerTokens,
-    system: sys,
-    messages: [
-      { role: "user", content: `${question}\n\n${formatExecuted(executed)}` },
-    ],
-  });
+  const ansResp = await callWithRetry(
+    {
+      model,
+      max_tokens: maxAnswerTokens,
+      system: sys,
+      messages: [
+        { role: "user", content: `${question}\n\n${formatExecuted(executed)}` },
+      ],
+    },
+    5,
+    signal,
+  );
   costUsd += await recordUsage({
     route,
     model,
@@ -447,8 +464,10 @@ export async function runSingleTurn(opts: {
   model?: string;
   maxTokens?: number;
   route?: string;
+  /** 「停止思考」：透传到 SDK 中止上游调用 */
+  signal?: AbortSignal;
 }): Promise<{ message: Anthropic.Message; costUsd: number }> {
-  const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach" } = opts;
+  const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach", signal } = opts;
   await assertBudget();
   const systemBlocks: Anthropic.TextBlockParam[] =
     typeof system === "string"
@@ -457,12 +476,16 @@ export async function runSingleTurn(opts: {
           { type: "text", text: system.stable, cache_control: { type: "ephemeral" } },
           { type: "text", text: system.volatile },
         ];
-  const resp = await callWithRetry({
-    model,
-    max_tokens: maxTokens,
-    system: systemBlocks,
-    messages: [{ role: "user", content: user }],
-  });
+  const resp = await callWithRetry(
+    {
+      model,
+      max_tokens: maxTokens,
+      system: systemBlocks,
+      messages: [{ role: "user", content: user }],
+    },
+    5,
+    signal,
+  );
   const costUsd = await recordUsage({
     route,
     model,

@@ -327,7 +327,11 @@ ${conversationLines.join("\n")}
 ${input}`;
 }
 
-export async function runCoach(input: string, today = new Date()): Promise<CoachResult> {
+export async function runCoach(
+  input: string,
+  today = new Date(),
+  signal?: AbortSignal,
+): Promise<CoachResult> {
   const todayStr = bjDateStr(today);
   // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
   const isSunday = new Date(today.getTime() + 8 * 3600 * 1000).getUTCDay() === 0;
@@ -337,6 +341,7 @@ export async function runCoach(input: string, today = new Date()): Promise<Coach
     system: { stable: buildSystemStable(), volatile: buildSystemVolatile(ledger, todayStr, isSunday) },
     user: buildUserMessage(ledger.conversationLines, input),
     model: MODELS.COACH,
+    signal,
     route: "coach",
     maxTokens: 4000, // 对话式回复可能较长 + 尾部 META
   });

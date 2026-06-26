@@ -17,11 +17,13 @@ export interface StreamedResult<T> {
 export async function postStreamedJson<T = unknown>(
   url: string,
   body: unknown,
+  signal?: AbortSignal,
 ): Promise<StreamedResult<T>> {
   const r = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+    signal,
   });
 
   // 兜底：若上游没走流式（理论上不会），直接当普通 JSON 读

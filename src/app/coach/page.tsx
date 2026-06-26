@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { CoachChat } from "@/components/CoachChat";
+import { CoachChat, type CoachSuggestion } from "@/components/CoachChat";
 import { WeakList } from "@/components/WeakList";
 import { TabBar } from "@/components/TabBar";
-import { getWeakKps } from "@/lib/weak";
+import { getWeakKps, type WeakKp } from "@/lib/weak";
 
 /**
  * 教练 tab（T1，系统设计/13）：宏观层规划。极简暗色版方案 ⑦ 屏。
@@ -12,6 +12,46 @@ import { getWeakKps } from "@/lib/weak";
 export const dynamic = "force-dynamic";
 
 const SUBJECTS = ["全部", "刑法", "民法", "法理", "宪法", "法制史"] as const;
+
+/**
+ * 教练空态引导卡：按真实弱项账本动态生成（不再写死）——点了就是一句对自己有用的真话。
+ * 取 Top 弱项做「考我」、反复错的做「讲透」、弱项最多的科目做「问策略」。无弱项时返回空，
+ * 由 CoachChat 回退到通用引导。
+ */
+function buildCoachSuggestions(weak: WeakKp[]): CoachSuggestion[] {
+  if (weak.length === 0) return [];
+  const out: CoachSuggestion[] = [];
+  const top = weak[0]; // getWeakKps 已按 error_count desc 排序
+  out.push({
+    kind: "quiz",
+    cat: "考我懂没",
+    tone: "green",
+    text: `考我「${top.name}」（${top.subject}），看我是不是真懂`,
+  });
+
+  const repeated = weak.find((w) => w.kp_id !== top.kp_id && w.error_count >= 2) ?? weak[1];
+  if (repeated) {
+    out.push({
+      kind: "report",
+      cat: repeated.error_count >= 2 ? "啃老错" : "讲透它",
+      tone: "blue",
+      text: `「${repeated.name}」我${repeated.error_count >= 2 ? "反复错" : "还没把握"}，帮我把易混点理清`,
+    });
+  }
+
+  const bySubject = new Map<string, number>();
+  for (const w of weak) bySubject.set(w.subject, (bySubject.get(w.subject) ?? 0) + 1);
+  const weakestSubject = [...bySubject.entries()].sort((a, b) => b[1] - a[1])[0]?.[0];
+  if (weakestSubject) {
+    out.push({
+      kind: "plan",
+      cat: "问策略",
+      tone: "orange",
+      text: `${weakestSubject}是我目前弱项最多的，接下来几天怎么安排？`,
+    });
+  }
+  return out.slice(0, 3);
+}
 
 type SearchParams = Promise<{ view?: string; subject?: string }>;
 
@@ -24,6 +64,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
   const allWeak = await getWeakKps();
   const weakCount = allWeak.length;
   const shownWeak = subject ? allWeak.filter((w) => w.subject === subject) : allWeak;
+  const coachSuggestions = buildCoachSuggestions(allWeak);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-20 pt-4">
@@ -59,7 +100,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
       </header>
 
       {view === "coach" ? (
-        <CoachChat />
+        <CoachChat suggestions={coachSuggestions} />
       ) : (
         <>
           {/* 科目筛选 */}

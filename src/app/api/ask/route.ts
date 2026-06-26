@@ -96,6 +96,7 @@ export async function POST(req: Request) {
         planModel: MODELS.PLAN,
         enableCache: true, // 两段均无 tools，教义/规划 system 跨请求稳定 → 缓存安全
         route: "ask",
+        signal: req.signal, // 「停止思考」：客户端断开 → 中止规划/作答两次 Opus 调用
       });
 
       const full = extractText(message);

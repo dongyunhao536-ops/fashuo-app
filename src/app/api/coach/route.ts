@@ -32,7 +32,8 @@ export async function POST(req: Request) {
     }
 
     try {
-      const r = await runCoach(input);
+      // req.signal 在客户端「停止」断开连接时触发 → 透传中止上游 Opus 调用
+      const r = await runCoach(input, new Date(), req.signal);
       return { status: 200, body: { ...r, costText: fmtCost(r.costUsd) } };
     } catch (err) {
       if (err instanceof BudgetExceededError) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
 import { ChatComposer } from "@/components/ChatComposer";
@@ -29,15 +29,25 @@ interface Turn {
   result?: CoachResult;
   error?: string;
   loading: boolean;
+  /** 用户点了「停止」中止本轮 */
+  stopped?: boolean;
 }
 
 type ExampleKind = "report" | "quiz" | "plan";
 
-/** 空态引导示例：分"汇报 / 考我 / 策略"三类，各配类目标签、强调色与单线图标。 */
-const EXAMPLES: { kind: ExampleKind; cat: string; tone: "blue" | "green" | "orange"; text: string }[] = [
-  { kind: "report", cat: "汇报今日", tone: "blue", text: "今天刑法听课，做题错了正当防卫的限度" },
-  { kind: "quiz", cat: "考我懂没", tone: "green", text: "检验我今天学的犯罪构成，看我有没有真懂" },
-  { kind: "plan", cat: "问策略", tone: "orange", text: "五战了，刑民听课同时背法理行不行？" },
+/** 空态引导卡（由服务端按真实弱项/进度动态生成；无数据时回退到下面的通用项）。 */
+export interface CoachSuggestion {
+  kind: ExampleKind;
+  cat: string;
+  tone: "blue" | "green" | "orange";
+  text: string;
+}
+
+/** 兜底：账本里还没有弱项数据（新用户）时用的通用引导。 */
+const FALLBACK_SUGGESTIONS: CoachSuggestion[] = [
+  { kind: "quiz", cat: "考我懂没", tone: "green", text: "随便挑个我最近学过的考点，考考我真懂没" },
+  { kind: "report", cat: "汇报今日", tone: "blue", text: "今天听了…做题错了…（汇报今晚的进度和错题）" },
+  { kind: "plan", cat: "问策略", tone: "orange", text: "在职五战，接下来几天该怎么安排？" },
 ];
 
 const EXAMPLE_ICONS: Record<ExampleKind, React.ReactNode> = {
@@ -63,10 +73,11 @@ const TONE_TEXT: Record<"blue" | "green" | "orange", string> = {
   orange: "text-orange",
 };
 
-export function CoachChat() {
+export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) {
   const [input, setInput] = useState("");
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
 
   async function send(text?: string) {
     const v = (text ?? input).trim();
@@ -74,11 +85,14 @@ export function CoachChat() {
     setInput("");
     setBusy(true);
     const idx = turns.length;
+    const ac = new AbortController();
+    abortRef.current = ac;
     setTurns((t) => [...t, { input: v, loading: true }]);
     try {
       const { status, data } = await postStreamedJson<CoachResult & { error?: string; kind?: string }>(
         "/api/coach",
         { input: v },
+        ac.signal,
       );
       if (status >= 400) {
         const msg =
@@ -92,21 +106,35 @@ export function CoachChat() {
         setTurns((t) => t.map((x, i) => (i === idx ? { ...x, loading: false, result: data } : x)));
       }
     } catch (e) {
+      const aborted = ac.signal.aborted || (e as { name?: string })?.name === "AbortError";
       setTurns((t) =>
         t.map((x, i) =>
-          i === idx ? { ...x, loading: false, error: e instanceof Error ? e.message : String(e) } : x,
+          i === idx
+            ? aborted
+              ? { ...x, loading: false, stopped: true }
+              : { ...x, loading: false, error: e instanceof Error ? e.message : String(e) }
+            : x,
         ),
       );
     } finally {
       setBusy(false);
+      abortRef.current = null;
     }
+  }
+
+  function stop() {
+    abortRef.current?.abort();
   }
 
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex flex-1 flex-col gap-2.5">
         {turns.length === 0 ? (
-          <CoachWelcome onPick={send} />
+          <CoachWelcome
+            onPick={send}
+            items={suggestions?.length ? suggestions : FALLBACK_SUGGESTIONS}
+            heading={suggestions?.length ? "从你的弱项开始" : "试着这样开始"}
+          />
         ) : (
           turns.map((t, i) => (
             <div key={i} className="flex flex-col gap-2.5">
@@ -115,9 +143,17 @@ export function CoachChat() {
               </div>
 
               {t.loading && (
-                <div className="glass-card flex items-center gap-2.5 self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
-                  教练思考中…<span className="text-label3">（约 30 秒–1 分钟）</span>
+                <div className="flex items-center gap-2 self-start">
+                  <div className="glass-card flex items-center gap-2.5 rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                    教练思考中…<span className="text-label3">（约 30 秒–1 分钟）</span>
+                  </div>
+                  <StopButton onClick={stop} />
+                </div>
+              )}
+              {t.stopped && (
+                <div className="self-start rounded-[22px] rounded-bl-[7px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
+                  已停止思考
                 </div>
               )}
               {t.error && (
@@ -142,8 +178,31 @@ export function CoachChat() {
   );
 }
 
-/** 空态：渐变徽标 + 一句话定位 + 三类可点引导卡（类目标签 + 例句两层）。 */
-function CoachWelcome({ onPick }: { onPick: (text: string) => void }) {
+/** 思考中的「停止」按钮（红圆点方块 + 文字），中止本轮请求。 */
+function StopButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card2 px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
+    >
+      <span className="grid h-4 w-4 place-items-center rounded-full bg-red/15">
+        <span className="h-1.5 w-1.5 rounded-[1px] bg-red" />
+      </span>
+      停止
+    </button>
+  );
+}
+
+/** 空态：渐变徽标 + 一句话定位 + 动态引导卡（按真实弱项/进度生成，类目标签 + 例句两层）。 */
+function CoachWelcome({
+  onPick,
+  items,
+  heading,
+}: {
+  onPick: (text: string) => void;
+  items: CoachSuggestion[];
+  heading: string;
+}) {
   return (
     <div className="flex flex-col px-1 pt-5">
       {/* hero 徽标：蓝渐变 + 焰光，立刻立住层级 */}
@@ -160,9 +219,9 @@ function CoachWelcome({ onPick }: { onPick: (text: string) => void }) {
         </p>
       </div>
 
-      <div className="mb-2.5 mt-7 px-1 text-[13px] font-semibold text-label2">试着这样开始</div>
+      <div className="mb-2.5 mt-7 px-1 text-[13px] font-semibold text-label2">{heading}</div>
       <div className="flex flex-col gap-2.5">
-        {EXAMPLES.map((e) => (
+        {items.map((e) => (
           <button
             key={e.text}
             onClick={() => onPick(e.text)}
