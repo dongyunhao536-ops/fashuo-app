@@ -61,9 +61,16 @@ create table if not exists detection_log (
   grep_lines   text,                      -- grep 命中行号（v2.3 机制⑨硬约束）
   confidence   int,                       -- 信心度 0-100
   starred      boolean not null default false, -- ★ 盲点警报
+  hits         jsonb,                      -- 命中要点 string[]（迁移007：已背卡复盘回看完整结果）
+  missing      jsonb,                      -- 缺失要点 string[]（迁移007）
+  explanation  text,                       -- 为什么没过 / 评分理由（迁移007）
   schema_ver   int not null default 1
 );
 create index if not exists idx_detection_kp on detection_log (kp_id);
+-- 既有库补列（schema.sql 重复执行时 create table if not exists 不会加列，故显式 alter）
+alter table detection_log add column if not exists hits        jsonb;
+alter table detection_log add column if not exists missing     jsonb;
+alter table detection_log add column if not exists explanation text;
 
 -- 学习日志：教练 tab 的活动流水（与 detection_log 同类；源=auto 吃背诵/答疑，manual 补 APP 外）
 create table if not exists study_log (

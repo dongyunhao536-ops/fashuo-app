@@ -22,6 +22,10 @@ export interface ReviewedItem {
   question: string | null; // 最新一次的题目（供查看记录，不必重测）
   answer: string | null; // 最新一次的作答
   confidence: number | null;
+  // 最新一次的评分结果正文（迁移007 起落库；历史行为空 → 前端提示重测补全）
+  hits: string[]; // 命中要点
+  missing: string[]; // 缺失要点
+  explanation: string | null; // 为什么没过 / 评分理由
   // 章节定位（与背诵卡片同源，buildChapterIndex 推导）
   chapterNo: number;
   chapterName: string;
@@ -54,7 +58,7 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
   const todayStr = bjDateStr(new Date());
   const { data: logs } = await supabaseAdmin
     .from("detection_log")
-    .select("kp_id, level, ai_grade, passed, ts, question, answer, confidence")
+    .select("kp_id, level, ai_grade, passed, ts, question, answer, confidence, hits, missing, explanation")
     .gte("ts", bjDayStart(todayStr))
     .lte("ts", bjDayEnd(todayStr))
     .order("ts", { ascending: false }); // 最新在前 → 去重时第一条即最新结果
@@ -79,6 +83,9 @@ export async function getTodayReviewed(): Promise<TodayReviewed> {
         question: r.question != null ? String(r.question) : null,
         answer: r.answer != null ? String(r.answer) : null,
         confidence: typeof r.confidence === "number" ? r.confidence : null,
+        hits: Array.isArray(r.hits) ? (r.hits as unknown[]).map(String) : [],
+        missing: Array.isArray(r.missing) ? (r.missing as unknown[]).map(String) : [],
+        explanation: r.explanation != null ? String(r.explanation) : null,
         chapterNo: 0,
         chapterName: "未分类",
         sectionNo: 0,

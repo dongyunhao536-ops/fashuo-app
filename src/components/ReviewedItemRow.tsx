@@ -68,12 +68,51 @@ export function ReviewedItemRow({ item }: { item: ReviewedItem }) {
               本点已「一键跳过」，按通过周期排入复习（未做检测）。
             </div>
           ) : (
-            <div className="rounded-[10px] bg-card2 px-3 py-2">
-              <div className="mb-0.5 text-[11px] text-label3">你的作答</div>
-              <div className="whitespace-pre-wrap text-label">
-                {item.answer?.trim() ? item.answer : <span className="text-label3">（挖空作答 / 无文本记录）</span>}
+            <>
+              <div className="rounded-[10px] bg-card2 px-3 py-2">
+                <div className="mb-0.5 text-[11px] text-label3">你的作答</div>
+                <div className="whitespace-pre-wrap text-label">
+                  {item.answer?.trim() ? item.answer : <span className="text-label3">（挖空作答 / 无文本记录）</span>}
+                </div>
               </div>
-            </div>
+
+              {/* 评分结果正文（迁移007 起落库；历史行为空走下方提示） */}
+              {item.explanation && (
+                <div className={`rounded-[10px] px-3 py-2 ${item.passed ? "bg-card2" : "bg-red/12"}`}>
+                  <div className={`mb-0.5 text-[11px] font-semibold ${item.passed ? "text-label3" : "text-red"}`}>
+                    {item.passed ? "评分理由" : "为什么没过"}
+                  </div>
+                  <div className="whitespace-pre-wrap text-label">{item.explanation}</div>
+                </div>
+              )}
+              {item.hits.length > 0 && (
+                <div className="rounded-[10px] bg-card2 px-3 py-2">
+                  <div className="mb-1 text-[11px] font-semibold text-green">✓ 命中要点（{item.hits.length}）</div>
+                  <ul className="space-y-0.5 text-label2">
+                    {item.hits.slice(0, 8).map((h, i) => (
+                      <li key={i}>{h}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {item.missing.length > 0 && (
+                <div className="rounded-[10px] bg-card2 px-3 py-2">
+                  <div className="mb-1 text-[11px] font-semibold text-red">
+                    ✗ 缺失要点（{item.missing.length}）—— 重点补这些
+                  </div>
+                  <ul className="space-y-0.5 text-label2">
+                    {item.missing.slice(0, 8).map((m, i) => (
+                      <li key={i}>{m}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {!item.explanation && item.hits.length === 0 && item.missing.length === 0 && (
+                <div className="px-1 text-[11px] text-label3">
+                  这次检测在「结果落库」上线前完成，未保存要点明细——重测一次即可看完整结果。
+                </div>
+              )}
+            </>
           )}
           <div className="flex items-center gap-3 px-1 text-[12px] text-label2">
             <span>

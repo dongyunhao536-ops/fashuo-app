@@ -661,6 +661,9 @@ export async function gradeAnswer(opts: {
     grep_lines: result.grepLines.join(","),
     confidence: result.confidence,
     starred: result.starred,
+    hits: result.hits, // 迁移007：落结果正文，供「今天背了哪些」复盘回看（非只判分）
+    missing: result.missing,
+    explanation: result.explanation,
   });
   if (logErr) console.error("[detection] detection_log 写入失败（审计 trail 缺行）：", logErr.message);
 
