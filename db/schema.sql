@@ -33,6 +33,7 @@ create table if not exists kp_state (
   last_review  date,
   next_due     date,
   mastered     boolean not null default false, -- 三档全过；过 30 天档强制回落复验
+  pending_review boolean not null default false, -- G2：答疑澄清后置真→调度复验桶（硬状态·调度权威，取代 event-only 脆弱信号）；任一检测完成清零
   review_count int  not null default 0,
   error_count  int  not null default 0,   -- 累计错误 → G1：连续失败触发候选弱项
   priority     real not null default 0,   -- 调度优先级分（加权和×遗忘门控，见 config）
@@ -42,6 +43,8 @@ create table if not exists kp_state (
 );
 create index if not exists idx_kp_state_subject on kp_state (subject);
 create index if not exists idx_kp_state_due on kp_state (next_due);
+-- 既有库补列（G2 复验信号从 event-only 迁到硬状态，见 BUILD_PLAN「软硬体制完整性」#1）
+alter table kp_state add column if not exists pending_review boolean not null default false;
 
 -- 检测流水：每道检测题的客观结果（审计 trail + 可解释面板数据源）
 create table if not exists detection_log (

@@ -105,4 +105,13 @@ export async function consumeReviewRequests(kpId: string): Promise<void> {
     .eq("kp_id", kpId)
     .eq("status", "pending");
   if (error) console.error("[events] 复验请求消费失败：", error.message);
+
+  // 同步清复验硬状态（kp_state.pending_review，G2 调度权威）。独立 best-effort：
+  // 列尚未落库时只记日志、不抛——绝不阻断评分核心写（applyStateUpdate 已先成功）。
+  const { error: prErr } = await supabaseAdmin
+    .from("kp_state")
+    .update({ pending_review: false })
+    .eq("kp_id", kpId)
+    .eq("pending_review", true);
+  if (prErr) console.error("[events] pending_review 清零失败（列未落库?）：", prErr.message);
 }
