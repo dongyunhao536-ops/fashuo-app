@@ -331,7 +331,7 @@ bash deploy/07-backup-cron.sh   # 装 /etc/cron.daily/fashuo-backup
 | **#3** | L2/L3 golden eval | 最大风险的**唯一外部支点** | **最高** | 🔧 harness 已搭（种子用例待复核） |
 | **#1** | 复验信号迁 `kp_state.pending_review` 布尔 | 架构违约修复，便宜有界 | 低（复验稀有 + 丢了只损失一次重测） | ✅ 已落（待 ECS apply-schema 落列激活） |
 | **#1b** | `detection_log` insert 加 `.error` 检查 | 审计参照真值补洞 | 低 | ✅ 已落 |
-| **#4** | G1 不变式对账 | 完整性校验 | 低（`error_count` 已兜底调度） | ⬜ 待办（最后） |
+| **#4** | G1 不变式对账 | 完整性校验 | 低（`error_count` 已兜底调度） | ✅ 已落（read-only 巡检脚本） |
 
 > ⚠️ 排序教训：执行顺序优化"今天能交付什么"，紧迫性排序优化"只够做一件该做什么"。两者在便宜项与高风险项错位时分叉——让它们公开打架、显式选，别让某一个（清洁性、或"先发"）默默吃掉另一个。先发 #1 是收便宜干净尾，**不等于**处理了最大风险（#3）。
 
@@ -351,6 +351,7 @@ bash deploy/07-backup-cron.sh   # 装 /etc/cron.daily/fashuo-backup
 **#1b `detection_log` insert 加 `.error`** —— `gradeAnswer` 里 `detection_log` insert 当前 fire-and-forget（无 `.error` 检查）。它是周报低信心抽样 + 所有 detection_log 分析的参照真值，不该有洞。加检查或并入 `kp_state` 那次事务写的路径。
 
 **#4 G1 不变式对账** —— 锚 **`kp_state`**（`error_count` / `l*_status` failed 历史），**不是** `detection_log`（后者 fail-open，拿它当真值锚=用 best-effort 校验 fail-open，两边都软）。不变式："连续 failed 2 次的 kp 必有一条 pending/handled 弱项 event"。这是**反向对账抓静默丢失**，区别于 `11-dataflow-check.sh` 的陈旧度巡检（抓卡住，抓不到从没进来的）。
+- ✅ **已搭**：`scripts/reconcile-g1.mjs`（只读/零成本：`node --env-file=.env.local scripts/reconcile-g1.mjs [--verbose]`）。不变式收窄为"非 mastered + error_count≥阈值 + **当前档 failed**"——`error_count≥阈值` 是 G1「连续失败」的保守近似（历史非连续也计数），叠加「当前档 failed」收窄为"此刻确在弱项态"压低误报。命中=反复失败却无任何 kp_id 锚定的弱项 event＝疑似静默丢失；退出码 1 可挂巡检 cron。首跑：0 缺口（健康）。
 
 ### 已结案 / 降级
 
