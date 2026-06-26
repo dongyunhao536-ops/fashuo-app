@@ -31,20 +31,24 @@ export default async function CardsPage({
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between px-1">
-          <h1 className="text-[28px] font-bold tracking-tight">全卡浏览</h1>
-          <span className="text-[12px] text-label3">{cards.length} 张</span>
+        <div className="flex items-center justify-between px-1">
+          <h1 className="text-[32px] font-bold leading-none tracking-tight">全卡浏览</h1>
+          <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">
+            {cards.length} 张
+          </span>
         </div>
-        <p className="mt-1 px-1 text-[13px] leading-relaxed text-label2">
+        <p className="mt-2.5 px-1 text-[13.5px] leading-relaxed text-label2">
           按卡组章节顺序浏览全部 Anki 卡（含法条分析卡）——与原卡内容、排版、颜色一字不差。
         </p>
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap gap-2">
           {SUBJECT_TABS.map((s) => (
             <Link
               key={s}
               href={`/cards?subject=${encodeURIComponent(s)}`}
-              className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
-                s === subject ? "bg-blue text-white" : "bg-card text-label2"
+              className={`rounded-full px-3.5 py-1.5 text-[13px] font-medium transition active:scale-95 ${
+                s === subject
+                  ? "bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
+                  : "border border-hairline bg-card2 text-label2"
               }`}
             >
               {s}

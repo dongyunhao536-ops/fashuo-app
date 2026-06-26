@@ -1,7 +1,8 @@
-import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase";
 import { bjDateStr } from "@/lib/dates";
 import { TabBar } from "@/components/TabBar";
+import { PageNav } from "@/components/PageNav";
+import { EmptyState } from "@/components/EmptyState";
 import { ErrorActions } from "@/components/ErrorActions";
 
 /**
@@ -41,13 +42,9 @@ export default async function ErrorsPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
-      <header className="flex items-center justify-between px-4">
-        <Link href="/" className="text-[15px] text-blue">‹ 今日</Link>
-        <h1 className="text-[17px] font-semibold">错题本</h1>
-        <span className="text-[13px] text-label3">{items.length} 条未吸收</span>
-      </header>
+      <PageNav title="错题本" meta={`${items.length} 条未吸收`} />
 
-      <p className="px-5 pb-1 pt-3 text-[13px] leading-relaxed text-label2">
+      <p className="px-5 pb-1 pt-3 text-[13.5px] leading-relaxed text-label2">
         你汇报给教练的未吸收错题。「我会了」收口退出清单；「不是错题」移噪。
         教练也读这份清单——聊到就考你，周日做积压复盘。
       </p>
@@ -58,10 +55,18 @@ export default async function ErrorsPage() {
 
       {items.length === 0 ? (
         error ? null : (
-          <div className="glass-card mx-4 mt-3 rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
-            错题本是空的 🎉
-            <br />
-            跟教练汇报"今天做错了X"会沉淀到这里，吸收后退出。
+          <div className="mx-4 mt-3">
+            <EmptyState
+              tone="green"
+              title="错题本是空的"
+              desc='跟教练汇报"今天做错了 X"会沉淀到这里，吸收后自动退出。'
+              icon={
+                <>
+                  <circle cx="12" cy="12" r="9" />
+                  <path d="M8 12.5l2.5 2.5L16 9.5" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              }
+            />
           </div>
         )
       ) : (

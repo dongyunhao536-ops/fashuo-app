@@ -18,9 +18,11 @@
   --color-fill: rgba(120, 120, 128, 0.24);
   --color-fill2: rgba(120, 120, 128, 0.16);
   --color-label: #f5f5f7;
-  --color-label2: rgba(235, 235, 245, 0.6);
-  --color-label3: rgba(235, 235, 245, 0.3);
-  --color-hairline: rgba(255, 255, 255, 0.08);
+  /* 2026-06-24 提对比：二/三档灰阶在纯黑 OLED 上原值偏暗（0.6/0.3），上调到 0.74/0.52；
+     卡边 hairline 0.08→0.12 让卡片轮廓在暗底浮出，缓解"层级太平"。 */
+  --color-label2: rgba(235, 235, 245, 0.74);
+  --color-label3: rgba(235, 235, 245, 0.52);
+  --color-hairline: rgba(255, 255, 255, 0.12);
   --color-blue: #0a84ff;
   --color-blue-soft: #5ab2ff;
   --color-green: #30d158;

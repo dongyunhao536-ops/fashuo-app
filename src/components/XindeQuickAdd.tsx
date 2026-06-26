@@ -58,9 +58,9 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
     return (
       <button
         onClick={() => setOpen(true)}
-        className="self-start rounded-[10px] bg-card2 px-3 py-2 text-left text-[12.5px] leading-relaxed text-label2"
+        className="flex w-full items-center gap-1.5 rounded-[12px] border border-hairline bg-card2 px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-label2 transition active:scale-[0.99]"
       >
-        📝 讲义里的拓展点答疑不认？<span className="text-blue-soft">存进心得（待真题背书）</span>
+        📝 讲义里的拓展点答疑不认？<span className="font-medium text-blue-soft">存进心得（待真题背书）</span>
       </button>
     );
   }

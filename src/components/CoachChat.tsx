@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
+import { ChatComposer } from "@/components/ChatComposer";
 
 /**
  * 教练 T1 交互（2026-06-21 重做为对话式家教）。
@@ -30,11 +31,37 @@ interface Turn {
   loading: boolean;
 }
 
-const EXAMPLES = [
-  "今天刑法听课，做题错了正当防卫的限度",
-  "检验我今天学的犯罪构成，看我有没有真懂",
-  "五战了，刑民听课同时背法理行不行？",
+type ExampleKind = "report" | "quiz" | "plan";
+
+/** 空态引导示例：分"汇报 / 考我 / 策略"三类，各配类目标签、强调色与单线图标。 */
+const EXAMPLES: { kind: ExampleKind; cat: string; tone: "blue" | "green" | "orange"; text: string }[] = [
+  { kind: "report", cat: "汇报今日", tone: "blue", text: "今天刑法听课，做题错了正当防卫的限度" },
+  { kind: "quiz", cat: "考我懂没", tone: "green", text: "检验我今天学的犯罪构成，看我有没有真懂" },
+  { kind: "plan", cat: "问策略", tone: "orange", text: "五战了，刑民听课同时背法理行不行？" },
 ];
+
+const EXAMPLE_ICONS: Record<ExampleKind, React.ReactNode> = {
+  report: <path d="M4 5h16M4 12h16M4 19h10" strokeLinecap="round" />,
+  quiz: (
+    <>
+      <path d="M9.5 9a2.5 2.5 0 113.5 2.3c-.8.4-1 .9-1 1.7" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="12" cy="17" r="0.6" fill="currentColor" stroke="none" />
+      <circle cx="12" cy="12" r="9" />
+    </>
+  ),
+  plan: <path d="M5 19V9M12 19V5M19 19v-7" strokeLinecap="round" />,
+};
+
+const TONE_TILE: Record<"blue" | "green" | "orange", string> = {
+  blue: "bg-blue/15 text-blue",
+  green: "bg-green/15 text-green",
+  orange: "bg-orange/15 text-orange",
+};
+const TONE_TEXT: Record<"blue" | "green" | "orange", string> = {
+  blue: "text-blue-soft",
+  green: "text-green",
+  orange: "text-orange",
+};
 
 export function CoachChat() {
   const [input, setInput] = useState("");
@@ -76,112 +103,158 @@ export function CoachChat() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {turns.length === 0 && (
-        <div className="glass-card rounded-[16px] p-4 text-[13px] leading-relaxed text-label2">
-          我是你的私人法硕家教——记得住你、扣着你的真实进度和老毛病辅导。跟我聊：今天学了啥、
-          考考我懂没（我考理解不是逼你逐字背）、明天怎么安排、五战该怎么调。
-          <div className="mt-3 flex flex-col gap-1.5">
-            {EXAMPLES.map((e) => (
-              <button
-                key={e}
-                onClick={() => send(e)}
-                className="rounded-[10px] bg-card2 px-3 py-2 text-left text-[13px] text-label"
-              >
-                试试：「{e}」
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
+    <div className="flex flex-1 flex-col">
+      <div className="flex flex-1 flex-col gap-2.5">
+        {turns.length === 0 ? (
+          <CoachWelcome onPick={send} />
+        ) : (
+          turns.map((t, i) => (
+            <div key={i} className="flex flex-col gap-2.5">
+              <div className="max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-[7px] bg-blue px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+                {t.input}
+              </div>
 
-      {turns.map((t, i) => (
-        <div key={i} className="flex flex-col gap-2">
-          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white whitespace-pre-wrap">
-            {t.input}
-          </div>
-
-          {t.loading && (
-            <div className="flex items-center gap-2 self-start rounded-[18px] rounded-bl-[4px] bg-card px-3.5 py-3 text-[12.5px] text-label2">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
-              教练思考中…（约 30 秒–1 分钟）
+              {t.loading && (
+                <div className="glass-card flex items-center gap-2.5 self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                  教练思考中…<span className="text-label3">（约 30 秒–1 分钟）</span>
+                </div>
+              )}
+              {t.error && (
+                <div className="max-w-[92%] self-start rounded-[22px] rounded-bl-[7px] bg-red/15 px-4 py-3 text-[14px] text-red">
+                  {t.error}
+                </div>
+              )}
+              {t.result && <CoachReply r={t.result} />}
             </div>
-          )}
-          {t.error && (
-            <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[4px] bg-red/15 px-3.5 py-2.5 text-[13px] text-red">
-              {t.error}
-            </div>
-          )}
-          {t.result && <CoachReply r={t.result} />}
-        </div>
-      ))}
+          ))
+        )}
+      </div>
 
-      <div className="sticky bottom-20 mt-1 flex items-end gap-2 border-t border-hairline bg-bg/90 pt-2 backdrop-blur">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          rows={2}
-          disabled={busy}
-          placeholder="跟教练说点啥…（汇报/考我/问策略，Ctrl/⌘+Enter 发送）"
-          className="flex-1 resize-none rounded-[18px] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-label outline-none placeholder:text-label3"
-        />
-        <button
-          onClick={() => send()}
-          disabled={busy || !input.trim()}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue text-[16px] font-bold text-white disabled:opacity-40"
-        >
-          ↑
-        </button>
+      <ChatComposer
+        value={input}
+        onChange={setInput}
+        onSend={() => send()}
+        disabled={busy}
+        placeholder="跟教练说点啥…（汇报 / 考我 / 问策略）"
+      />
+    </div>
+  );
+}
+
+/** 空态：渐变徽标 + 一句话定位 + 三类可点引导卡（类目标签 + 例句两层）。 */
+function CoachWelcome({ onPick }: { onPick: (text: string) => void }) {
+  return (
+    <div className="flex flex-col px-1 pt-5">
+      {/* hero 徽标：蓝渐变 + 焰光，立刻立住层级 */}
+      <div className="flex flex-col items-center text-center">
+        <div className="grid h-16 w-16 place-items-center rounded-[20px] bg-gradient-to-br from-blue-soft to-blue text-white shadow-[0_10px_28px_rgba(10,132,255,0.45)]">
+          <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth={1.8}>
+            <rect x="3" y="4" width="18" height="16" rx="3" />
+            <path d="M8 4v4M16 4v4M3 11h18" strokeLinecap="round" />
+          </svg>
+        </div>
+        <h2 className="mt-4 text-[22px] font-bold tracking-tight text-label">你的私人法硕家教</h2>
+        <p className="mx-auto mt-2 max-w-[19rem] text-[14.5px] leading-relaxed text-label2">
+          我记得住你，扣着真实进度和老毛病辅导。考理解，不逼你逐字背。
+        </p>
+      </div>
+
+      <div className="mb-2.5 mt-7 px-1 text-[13px] font-semibold text-label2">试着这样开始</div>
+      <div className="flex flex-col gap-2.5">
+        {EXAMPLES.map((e) => (
+          <button
+            key={e.text}
+            onClick={() => onPick(e.text)}
+            className="glass-card flex items-center gap-3.5 rounded-[16px] border border-hairline px-4 py-3.5 text-left transition active:scale-[0.99]"
+          >
+            <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-[12px] ${TONE_TILE[e.tone]}`}>
+              <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.9}>
+                {EXAMPLE_ICONS[e.kind]}
+              </svg>
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className={`text-[12px] font-semibold ${TONE_TEXT[e.tone]}`}>{e.cat}</span>
+              <span className="mt-0.5 block text-[14.5px] leading-snug text-label">{e.text}</span>
+            </span>
+            <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0 text-label3" fill="none" stroke="currentColor" strokeWidth={2.4}>
+              <path d="M9 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        ))}
       </div>
     </div>
   );
 }
 
-function CoachReply({ r }: { r: CoachResult }) {
+/** 沉淀回执的一行：左侧小色点 + 文字。把零散 chips 收进一张卡，读起来像 app 的"已为你处理"。 */
+function ReceiptLine({ tone, children }: { tone: "green" | "orange" | "label" | "label3"; children: React.ReactNode }) {
+  const dot = {
+    green: "bg-green",
+    orange: "bg-orange",
+    label: "bg-label2",
+    label3: "bg-label3",
+  }[tone];
+  const text = { green: "text-green", orange: "text-orange", label: "text-label2", label3: "text-label3" }[tone];
   return (
-    <div className="flex w-full flex-col gap-2 self-start">
+    <div className={`flex items-start gap-2.5 text-[13px] leading-snug ${text}`}>
+      <span className={`mt-[6px] h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+      <span className="min-w-0 flex-1">{children}</span>
+    </div>
+  );
+}
+
+function CoachReply({ r }: { r: CoachResult }) {
+  const hasReceipt =
+    r.errorsRecorded?.length > 0 ||
+    r.absorbedRecorded?.length > 0 ||
+    r.askWeakAbsorbed > 0 ||
+    r.memorized?.length > 0;
+
+  return (
+    <div className="flex w-full flex-col gap-2.5 self-start">
       {/* 自然对话正文 */}
-      <div className="rounded-[14px] rounded-bl-[4px] bg-card px-3.5 py-2.5">
+      <div className="glass-card max-w-full rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5">
         <Markdown>{r.reply}</Markdown>
       </div>
 
-      {/* 后台沉淀 chips */}
-      {r.errorsRecorded?.length > 0 && (
-        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-label2">
-          已记录 {r.errorsRecorded.length} 个错题：
-          {r.errorsRecorded.map((e, i) => (
-            <span key={i}>
-              {i > 0 && "、"}
-              {e.knowledge}
-              {e.matched ? <span className="text-green">✓</span> : <span className="text-label3">（待指认）</span>}
-            </span>
-          ))}
-        </div>
-      )}
-      {r.absorbedRecorded?.length > 0 && (
-        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-green">
-          已销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} ✓退出未吸收清单
-        </div>
-      )}
-      {r.askWeakAbsorbed > 0 && (
-        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-green">
-          顺带吸收 {r.askWeakAbsorbed} 个「答疑暴露弱项」✓退出待办筐
-        </div>
-      )}
-      {r.memorized?.length > 0 && (
-        <div className="rounded-[10px] bg-card2 px-3 py-2 text-[11.5px] leading-relaxed text-label3">
-          🧠 已记住：{r.memorized.join("；")}
+      {/* 后台沉淀回执：合并成一张卡，分色点列出 */}
+      {hasReceipt && (
+        <div className="flex flex-col gap-2.5 rounded-[16px] bg-card2/70 px-4 py-3.5">
+          <div className="flex items-center gap-1.5 text-[12px] font-semibold text-label2">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-green" fill="none" stroke="currentColor" strokeWidth={2.2}>
+              <path d="M5 12l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            已为你沉淀
+          </div>
+          {r.errorsRecorded?.length > 0 && (
+            <ReceiptLine tone="label">
+              记录 {r.errorsRecorded.length} 个错题：
+              {r.errorsRecorded.map((e, i) => (
+                <span key={i}>
+                  {i > 0 && "、"}
+                  {e.knowledge}
+                  {e.matched ? <span className="text-green">✓</span> : <span className="text-label3">（待指认）</span>}
+                </span>
+              ))}
+            </ReceiptLine>
+          )}
+          {r.absorbedRecorded?.length > 0 && (
+            <ReceiptLine tone="green">
+              销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} · 退出未吸收清单
+            </ReceiptLine>
+          )}
+          {r.askWeakAbsorbed > 0 && (
+            <ReceiptLine tone="green">顺带吸收 {r.askWeakAbsorbed} 个「答疑暴露弱项」· 退出待办筐</ReceiptLine>
+          )}
+          {r.memorized?.length > 0 && (
+            <ReceiptLine tone="label3">🧠 已记住：{r.memorized.join("；")}</ReceiptLine>
+          )}
         </div>
       )}
 
       {/* 系统侧状态 */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-label3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-label3">
         {r.weakEmitted && <span className="text-orange">困惑点已投待办筐（PC 登记后进弱项）</span>}
         <span className="ml-auto">
           {r.logId != null ? "已记入学习日志" : r.logSkipped ? "未记日志（纯交流）" : "⚠️ 日志入库失败"}

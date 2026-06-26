@@ -34,9 +34,11 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
-      <header className="flex items-baseline justify-between px-5">
-        <h1 className="text-[28px] font-bold tracking-tight">今日</h1>
-        <span className="text-[12px] text-label3">2026 法硕（非法学）· 375+</span>
+      <header className="flex items-center justify-between px-5">
+        <h1 className="text-[32px] font-bold leading-none tracking-tight">今日</h1>
+        <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">
+          2026 法硕 · 375+
+        </span>
       </header>
 
       {/* hero：掌握度环 + 倒计时 + 统计 chip */}

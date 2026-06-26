@@ -26,17 +26,17 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
   const shownWeak = subject ? allWeak.filter((w) => w.subject === subject) : allWeak;
 
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
+    <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-20 pt-4">
       <header>
-        <div className="flex items-baseline justify-between px-1">
-          <h1 className="text-[28px] font-bold tracking-tight">教练</h1>
-          <span className="text-[12px] text-label3">
-            {view === "coach" ? "宏观规划 · 经验帖驱动" : "需要攻克 · 点开即背诵"}
-          </span>
+        <div className="px-1">
+          <h1 className="text-[32px] font-bold leading-none tracking-tight">教练</h1>
+          <p className="mt-2.5 text-[14px] text-label2">
+            {view === "coach" ? "私人法硕家教 · 记得住你的进度与老毛病" : "需要攻克的考点 · 点开即进背诵检测"}
+          </p>
         </div>
 
         {/* 分段：教练对话 / 弱项 —— 选中态浮起带阴影 */}
-        <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
+        <div className="mt-3.5 flex rounded-[11px] bg-fill2 p-[3px]">
           {(
             [
               ["coach", "教练"],
@@ -46,8 +46,10 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
             <Link
               key={v}
               href={v === "coach" ? "/coach" : "/coach?view=weak"}
-              className={`flex-1 rounded-[8px] py-1.5 text-center text-[13px] font-medium transition ${
-                view === v ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]" : "text-label2"
+              className={`flex-1 rounded-[9px] py-2 text-center text-[14px] font-semibold transition ${
+                view === v
+                  ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.4)] ring-1 ring-white/10"
+                  : "text-label2 active:text-label"
               }`}
             >
               {label}

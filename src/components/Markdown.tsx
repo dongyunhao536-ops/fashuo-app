@@ -10,32 +10,32 @@ import remarkGfm from "remark-gfm";
  */
 export function Markdown({ children }: { children: string }) {
   return (
-    <div className="text-[13.5px] leading-relaxed text-label">
+    <div className="text-[16px] leading-[1.7] text-label">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h1 className="mt-3 mb-2 text-[18px] font-bold tracking-tight first:mt-0">
+            <h1 className="mt-4 mb-2 text-[20px] font-bold tracking-tight first:mt-0">
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mt-3 mb-1.5 text-[15.5px] font-semibold first:mt-0">
+            <h2 className="mt-4 mb-2 text-[17.5px] font-bold first:mt-0">
               {children}
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mt-2.5 mb-1 text-[14px] font-semibold text-label first:mt-0">
+            <h3 className="mt-3.5 mb-1.5 text-[16px] font-semibold text-label first:mt-0">
               {children}
             </h3>
           ),
           h4: ({ children }) => (
-            <h4 className="mt-2 mb-1 text-[13px] font-semibold text-label2 first:mt-0">
+            <h4 className="mt-3 mb-1 text-[14.5px] font-semibold text-label2 first:mt-0">
               {children}
             </h4>
           ),
           p: ({ children }) => (
-            <p className="my-1.5 leading-relaxed first:mt-0 last:mb-0">{children}</p>
+            <p className="my-2.5 leading-[1.7] first:mt-0 last:mb-0">{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-semibold text-label">{children}</strong>
@@ -47,18 +47,18 @@ export function Markdown({ children }: { children: string }) {
             </a>
           ),
           ul: ({ children }) => (
-            <ul className="my-1.5 list-disc space-y-0.5 pl-5 marker:text-label3">
+            <ul className="my-2 list-disc space-y-1 pl-5 marker:text-label3">
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-1.5 list-decimal space-y-0.5 pl-5 marker:text-label3">
+            <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-label3">
               {children}
             </ol>
           ),
-          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          li: ({ children }) => <li className="pl-1 leading-[1.7]">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-2 border-l-2 border-blue/60 bg-card2 px-3 py-1.5 text-label2 [&>p]:my-0.5">
+            <blockquote className="my-2.5 rounded-r-[8px] border-l-[3px] border-blue/60 bg-card2/70 px-3.5 py-2 text-label2 [&>p]:my-0.5">
               {children}
             </blockquote>
           ),
@@ -67,13 +67,13 @@ export function Markdown({ children }: { children: string }) {
             const inline = !className;
             if (inline) {
               return (
-                <code className="rounded-[4px] bg-card2 px-1.5 py-0.5 font-mono text-[12.5px] text-label">
+                <code className="rounded-[5px] bg-card2 px-1.5 py-0.5 font-mono text-[13.5px] text-label">
                   {children}
                 </code>
               );
             }
             return (
-              <code className="block whitespace-pre-wrap break-words font-mono text-[12.5px] leading-relaxed text-label">
+              <code className="block whitespace-pre-wrap break-words font-mono text-[13.5px] leading-relaxed text-label">
                 {children}
               </code>
             );
@@ -83,7 +83,7 @@ export function Markdown({ children }: { children: string }) {
           ),
           table: ({ children }) => (
             <div className="my-2 overflow-x-auto rounded-[8px] border border-hairline">
-              <table className="w-full border-collapse text-[12.5px]">{children}</table>
+              <table className="w-full border-collapse text-[13.5px]">{children}</table>
             </div>
           ),
           thead: ({ children }) => <thead className="bg-card2">{children}</thead>,

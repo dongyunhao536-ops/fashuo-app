@@ -153,13 +153,13 @@ export function ReciteSession({
   return (
     <div className="flex flex-col gap-3">
       {/* 阶段指示器（不可点）—— iOS segmented：选中态浮起带阴影 */}
-      <div className="flex rounded-[10px] bg-fill2 p-[3px]">
+      <div className="flex rounded-[11px] bg-fill2 p-[3px]">
         {["编码", "作答", "评分"].map((s, i) => (
           <div
             key={s}
-            className={`flex-1 rounded-[8px] py-1.5 text-center text-[12px] font-medium transition ${
+            className={`flex-1 rounded-[9px] py-2 text-center text-[13px] font-semibold transition ${
               i === stage
-                ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]"
+                ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.4)] ring-1 ring-white/10"
                 : "text-label3"
             }`}
           >
@@ -515,12 +515,12 @@ function ResultPane({
   return (
     <div className="flex flex-col gap-3">
       {/* 评分大字卡（方案 ⑤ 屏） */}
-      <div className="rounded-[14px] bg-card p-5 text-center">
-        <div className={`text-[28px] font-bold tracking-tight ${gradeColor}`}>
+      <div className="glass-card rounded-[18px] border border-hairline p-6 text-center">
+        <div className={`text-[34px] font-bold tracking-tight ${gradeColor}`}>
           {result.grade}
           {result.starred ? " ★" : ""}
         </div>
-        <div className="mt-1 text-[13px] text-label2">
+        <div className="mt-1.5 text-[13.5px] text-label2">
           信心度 {result.confidence}% · 间隔 {INTERVALS[su.prev.interval_idx]} →{" "}
           {INTERVALS[su.next.interval_idx]} 天
         </div>

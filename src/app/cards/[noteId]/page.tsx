@@ -41,10 +41,13 @@ export default async function CardPage({
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <Link href={backHref} className="text-[15px] text-blue">
-          ‹ 全卡浏览
+        <Link href={backHref} className="inline-flex items-center gap-0.5 text-[15px] text-blue active:opacity-60">
+          <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={2.2}>
+            <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          全卡浏览
         </Link>
-        <div className="mt-1 text-[12px] text-label3">{card.deck}</div>
+        <div className="mt-1.5 text-[12.5px] text-label2">{card.deck}</div>
       </header>
 
       <div className="glass-card rounded-[16px] p-4">

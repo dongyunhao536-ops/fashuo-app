@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getTodayPlan, getDuelPlan } from "@/lib/plan";
 import { TabBar } from "@/components/TabBar";
+import { EmptyState } from "@/components/EmptyState";
 import type { PlanItem } from "@/lib/scheduler";
 
 /**
@@ -128,15 +129,15 @@ export default async function RecitePage({
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between px-1">
-          <h1 className="text-[28px] font-bold tracking-tight">背诵</h1>
-          <span className="text-[12px] text-label3">
+        <div className="flex items-center justify-between px-1">
+          <h1 className="text-[32px] font-bold leading-none tracking-tight">背诵</h1>
+          <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">
             {plan.date} · {plan.stage}
           </span>
         </div>
 
         {/* 新背诵 / 待复习 segmented —— 选中态浮起带阴影 */}
-        <div className="mt-3 flex rounded-[10px] bg-fill2 p-[3px]">
+        <div className="mt-3.5 flex rounded-[11px] bg-fill2 p-[3px]">
           {(
             [
               ["new", `新背诵 · ${newItems.length}`],
@@ -146,8 +147,10 @@ export default async function RecitePage({
             <Link
               key={t}
               href={qs(subject, capacity, t)}
-              className={`flex-1 rounded-[8px] py-1.5 text-center text-[13px] font-medium transition ${
-                tab === t ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.35)]" : "text-label2"
+              className={`flex-1 rounded-[9px] py-2 text-center text-[14px] font-semibold transition ${
+                tab === t
+                  ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.4)] ring-1 ring-white/10"
+                  : "text-label2 active:text-label"
               }`}
             >
               {label}
@@ -156,15 +159,17 @@ export default async function RecitePage({
         </div>
 
         {/* 科目选择 */}
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap gap-2">
           {SUBJECT_TABS.map((s) => {
             const active = (s === "全部" && !subject) || s === subject;
             return (
               <Link
                 key={s}
                 href={qs(s === "全部" ? undefined : s, capacity, tab)}
-                className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
-                  active ? "bg-blue text-white" : "bg-card text-label2"
+                className={`rounded-full px-3.5 py-1.5 text-[13px] font-medium transition active:scale-95 ${
+                  active
+                    ? "bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
+                    : "border border-hairline bg-card2 text-label2"
                 }`}
               >
                 {s}
@@ -174,32 +179,47 @@ export default async function RecitePage({
         </div>
 
         {/* 背诵量选择 */}
-        <div className="mt-2.5 flex items-center gap-1.5">
-          <span className="text-[11px] text-label3">背诵量</span>
+        <div className="mt-3 flex items-center gap-1.5">
+          <span className="text-[12px] text-label3">背诵量</span>
           {CAPACITY_OPTIONS.map((n) => (
             <Link
               key={n}
               href={qs(subject, n, tab)}
-              className={`rounded-[8px] px-2.5 py-0.5 text-[12px] font-medium transition ${
-                n === capacity ? "bg-blue/15 text-blue-soft" : "bg-card text-label2"
+              className={`rounded-[8px] px-3 py-1 text-[13px] font-medium transition ${
+                n === capacity ? "bg-blue/15 text-blue-soft" : "bg-card2 text-label2"
               }`}
             >
               {n}
             </Link>
           ))}
-          <span className="ml-auto text-[11px] text-label3">未学剩余 {plan.counts.未学剩余}</span>
+          <span className="ml-auto text-[12px] text-label3">未学剩余 {plan.counts.未学剩余}</span>
         </div>
       </header>
 
       <div className="mt-3 flex flex-col gap-3">
         {shown.length === 0 ? (
-          <div className="glass-card rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
-            {tab === "new" ? (
-              <>新背诵已排满或额度用尽<br />（先清掉待复习，余量会自动补新考点）</>
-            ) : (
-              <>暂无待复习项<br />（复验请求与到期复习都会出现在这里）</>
-            )}
-          </div>
+          <EmptyState
+            tone={tab === "new" ? "blue" : "green"}
+            title={tab === "new" ? "新背诵已排满或额度用尽" : "暂无待复习项"}
+            desc={
+              tab === "new"
+                ? "先清掉待复习，余量会自动补新考点。"
+                : "复验请求与到期复习都会出现在这里。"
+            }
+            icon={
+              tab === "new" ? (
+                <>
+                  <rect x="4" y="3" width="16" height="18" rx="2" />
+                  <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+                </>
+              ) : (
+                <>
+                  <path d="M3 12a9 9 0 109-9 9 9 0 00-6.7 3" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M5 3v3h3M12 8v4l3 2" strokeLinecap="round" strokeLinejoin="round" />
+                </>
+              )
+            }
+          />
         ) : subject ? (
           <ChapterList items={bySubject.get(subject) ?? shown} tab={tab} hrefSuffix={cardSuffix} />
         ) : (

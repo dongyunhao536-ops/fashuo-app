@@ -2,6 +2,8 @@ import Link from "next/link";
 import { listDuelPairs, parsePair, readPairContent } from "@/lib/yixiao";
 import { DuelSession } from "@/components/DuelSession";
 import { TabBar } from "@/components/TabBar";
+import { PageNav } from "@/components/PageNav";
+import { EmptyState } from "@/components/EmptyState";
 
 /**
  * 易混对决（系统设计/03 §3.5，极简暗色版审查优化#1 补屏）。
@@ -28,13 +30,8 @@ export default async function DuelPage({
     const content = await readPairContent(path);
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
-        <header className="flex items-center justify-between">
-          <Link href="/duel" className="text-[15px] text-blue">
-            ‹ 易混
-          </Link>
-          <h1 className="text-[17px] font-semibold">{pair.subject} · 先背再战</h1>
-          <span className="w-10" />
-        </header>
+        <PageNav backHref="/duel" backLabel="易混" title={`${pair.subject} · 先背再战`} />
+
         <DuelSession path={path} label={pair.label} concepts={pair.concepts} content={content} />
         <TabBar active="recite" />
       </main>
@@ -57,25 +54,27 @@ export default async function DuelPage({
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <header>
-        <div className="flex items-baseline justify-between px-1">
-          <h1 className="text-[28px] font-bold tracking-tight">易混对决</h1>
-          <span className="text-[12px] text-label3">
+        <div className="flex items-center justify-between px-1">
+          <h1 className="text-[32px] font-bold leading-none tracking-tight">易混对决</h1>
+          <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">
             {subjectFilter ? `${shown.length} / ${pairs.length}` : pairs.length} 对
           </span>
         </div>
-        <p className="mt-1 px-1 text-[13px] leading-relaxed text-label2">
+        <p className="mt-2.5 px-1 text-[13.5px] leading-relaxed text-label2">
           先通读辨析档案（区分 test / 对照表 / 陷阱），背完再做踩分界线的迷你案例。混了会进弱项档。
         </p>
         {/* 科目筛选 */}
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
+        <div className="mt-3 flex flex-wrap gap-2">
           {["全部", ...SUB_ORDER].map((s) => {
             const active = (s === "全部" && !subjectFilter) || s === subjectFilter;
             return (
               <Link
                 key={s}
                 href={s === "全部" ? "/duel" : `/duel?subject=${encodeURIComponent(s)}`}
-                className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
-                  active ? "bg-blue text-white" : "bg-card text-label2"
+                className={`rounded-full px-3.5 py-1.5 text-[13px] font-medium transition active:scale-95 ${
+                  active
+                    ? "bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
+                    : "border border-hairline bg-card2 text-label2"
                 }`}
               >
                 {s}
@@ -86,11 +85,17 @@ export default async function DuelPage({
       </header>
 
       {pairs.length === 0 ? (
-        <div className="glass-card rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
-          易混概念库尚未镜像到云端
-          <br />
-          （PC 跑 sync-content 后这里就有题）
-        </div>
+        <EmptyState
+          tone="orange"
+          title="易混概念库尚未镜像到云端"
+          desc="在 PC 跑一次 sync-content，这里就会出现可对决的易混对。"
+          icon={
+            <>
+              <path d="M8 7l-4 5 4 5M16 7l4 5-4 5" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M13 5l-2 14" strokeLinecap="round" />
+            </>
+          }
+        />
       ) : (
         subjects.map((sub) => (
           <section key={sub}>

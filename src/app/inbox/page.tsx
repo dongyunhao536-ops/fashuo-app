@@ -1,7 +1,8 @@
-import Link from "next/link";
 import { supabaseAdmin } from "@/lib/supabase";
 import { bjDateStr } from "@/lib/dates";
 import { TabBar } from "@/components/TabBar";
+import { PageNav } from "@/components/PageNav";
+import { EmptyState } from "@/components/EmptyState";
 import { EventActions } from "@/components/EventActions";
 import { XindeQuickAdd } from "@/components/XindeQuickAdd";
 
@@ -54,15 +55,9 @@ export default async function InboxPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
-      <header className="flex items-center justify-between px-4">
-        <Link href="/" className="text-[15px] text-blue">
-          ‹ 今日
-        </Link>
-        <h1 className="text-[17px] font-semibold">待办筐</h1>
-        <span className="text-[13px] text-label3">{rows.length} 项</span>
-      </header>
+      <PageNav title="待办筐" meta={`${rows.length} 项`} />
 
-      <p className="px-5 pb-1 pt-3 text-[13px] leading-relaxed text-label2">
+      <p className="px-5 pb-1 pt-3 text-[13.5px] leading-relaxed text-label2">
         答疑、教练、检测中沉淀的候选。「收下」后会在你 PC 端登记进档案；去重只在 PC 一处。
       </p>
 
@@ -79,10 +74,18 @@ export default async function InboxPage() {
       {rows.length === 0 ? (
         // 读库失败时 rows 也是空的——只在真没数据时展示空态，别和上面的错误框打架
         error ? null : (
-          <div className="glass-card mx-4 mt-3 rounded-[16px] p-8 text-center text-[13px] leading-relaxed text-label3">
-            待办筐是空的
-            <br />
-            答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。
+          <div className="mx-4 mt-3">
+            <EmptyState
+              tone="blue"
+              title="待办筐是空的"
+              desc="答疑暴露弱项 / 检测连续失败 / 答疑澄清考点时，会自动往这里投候选。"
+              icon={
+                <>
+                  <path d="M3 13h4l2 3h6l2-3h4" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M5 5h14l2 8v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z" strokeLinejoin="round" />
+                </>
+              }
+            />
           </div>
         )
       ) : (

@@ -3,6 +3,7 @@ import { buildWeeklyReview } from "@/lib/weekly-review";
 import { supabaseAdmin } from "@/lib/supabase";
 import { RMB_PER_USD } from "@/lib/cost";
 import { TabBar } from "@/components/TabBar";
+import { PageNav } from "@/components/PageNav";
 import { WeeklyNarrative } from "@/components/WeeklyNarrative";
 
 /**
@@ -29,11 +30,8 @@ export default async function WeeklyPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
-      <header className="flex items-center justify-between px-4">
-        <Link href="/" className="text-[15px] text-blue">‹ 今日</Link>
-        <h1 className="text-[17px] font-semibold">周复盘</h1>
-        <span className="text-[12px] text-label3">{r.weekStart.slice(5)}~{r.weekEnd.slice(5)}</span>
-      </header>
+      <PageNav title="周复盘" meta={`${r.weekStart.slice(5)}~${r.weekEnd.slice(5)}`} />
+
 
       {/* 核心：复盘 + 下周指导 */}
       <WeeklyNarrative

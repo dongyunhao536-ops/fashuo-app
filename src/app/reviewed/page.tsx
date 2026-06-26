@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getTodayReviewed, type ReviewedItem } from "@/lib/today-review";
 import { TabBar } from "@/components/TabBar";
+import { EmptyState } from "@/components/EmptyState";
 import { ReviewedItemRow } from "@/components/ReviewedItemRow";
 
 /**
@@ -90,15 +91,24 @@ export default async function ReviewedPage() {
       </header>
 
       {total === 0 ? (
-        <div className="glass-card mt-2 rounded-[16px] p-8 text-center">
-          <div className="text-[14px] text-label2">今天还没背任何考点</div>
+        <EmptyState
+          tone="blue"
+          title="今天还没背任何考点"
+          desc="完成背诵检测后，会按科目 → 章 → 节摊开在这里。"
+          icon={
+            <>
+              <rect x="4" y="3" width="16" height="18" rx="2" />
+              <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
+            </>
+          }
+        >
           <Link
             href="/recite"
-            className="mt-3 inline-block rounded-[12px] bg-blue px-5 py-2.5 text-[14px] font-semibold text-white"
+            className="inline-block rounded-[12px] bg-blue px-5 py-2.5 text-[14px] font-semibold text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)] active:scale-95"
           >
             去今日清单 ›
           </Link>
-        </div>
+        </EmptyState>
       ) : (
         subjectsInList.map((s) => {
           const chapters = groupByChapter(bySubject.get(s)!);

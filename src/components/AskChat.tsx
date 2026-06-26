@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { AskAnswer } from "@/components/AskAnswer";
 import { XindeQuickAdd } from "@/components/XindeQuickAdd";
+import { ChatComposer } from "@/components/ChatComposer";
 
 /**
  * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
@@ -146,105 +147,131 @@ export function AskChat() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      {/* 科目选择器 */}
-      <div className="flex flex-wrap items-center gap-1.5">
-        <button
-          onClick={() => setSubject("")}
-          className={`rounded-full px-3 py-1 text-[12px] font-medium ${
-            subject === "" ? "bg-blue text-white" : "bg-card text-label2"
-          }`}
-        >
-          不限
-        </button>
-        {SUBJECTS.map((s) => (
-          <button
-            key={s}
-            onClick={() => setSubject(s)}
-            className={`rounded-full px-3 py-1 text-[12px] font-medium ${
-              subject === s ? "bg-blue text-white" : "bg-card text-label2"
-            }`}
-          >
-            {s}
-          </button>
-        ))}
+    <div className="flex flex-1 flex-col">
+      {/* 科目选择器：横滑一行，不限在首位 */}
+      <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {(["", ...SUBJECTS] as const).map((s) => {
+          const on = subject === s;
+          return (
+            <button
+              key={s || "all"}
+              onClick={() => setSubject(s)}
+              className={`shrink-0 rounded-full px-4 py-2 text-[14px] font-medium transition active:scale-95 ${
+                on
+                  ? "bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
+                  : "border border-hairline bg-card2 text-label2"
+              }`}
+            >
+              {s || "不限"}
+            </button>
+          );
+        })}
       </div>
 
       {/* 讲义拓展点答疑不认 → 主动存进心得候选（待真题背书后答疑就认） */}
-      <XindeQuickAdd defaultSubject={subject} />
-
-      {turns.length === 0 && (
-        <div className="glass-card rounded-[16px] p-5 text-[13px] leading-relaxed text-label2">
-          直答版答疑（v2.3）：问一道题或一个概念，我按「六步预检 → 心得/真题/教材 grep 锚定 →
-          四段式作答 → 证据卡 + 信心度」回答，结论都可追溯到教材原文 / 真题题号 / 心得规则。
-          <div className="mt-2 text-[12px] text-label3">
-            七牛云 RPM 限速，案例题可能要等 1-3 分钟。选个科目能让我顺带接上你之前的卡点。
-          </div>
-        </div>
-      )}
-
-      {/* 对话流 */}
-      {turns.map((t, i) => (
-        <div key={i} className="flex flex-col gap-2">
-          {/* 用户问题 */}
-          <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[4px] bg-blue px-3.5 py-2.5 text-[15px] leading-relaxed text-white">
-            {t.subject && (
-              <span className="mr-1.5 rounded-[5px] bg-white/20 px-1 py-0.5 text-[10px]">
-                {t.subject}
-              </span>
-            )}
-            {t.question}
-          </div>
-
-          {/* AI 答案 / loading / 错误 */}
-          {t.loading && (
-            <div className="flex items-center gap-2 self-start rounded-[18px] rounded-bl-[4px] bg-card px-3.5 py-3 text-[12.5px] text-label2">
-              <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
-              六步预检 + grep 教材中…（RPM 限速，案例题约 1-3 分钟）
-            </div>
-          )}
-          {t.error && (
-            <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[4px] bg-red/15 px-3.5 py-2.5 text-[13px] text-red">
-              {t.error}
-              <button
-                onClick={() => retry(i)}
-                disabled={busy}
-                className="ml-2 rounded-full bg-red/20 px-2.5 py-0.5 text-[12px] font-medium text-red disabled:opacity-40"
-              >
-                重试
-              </button>
-            </div>
-          )}
-          {t.result && <AnswerBubble result={t.result} />}
-        </div>
-      ))}
-
-      <div ref={bottomRef} />
-
-      {/* 输入区 */}
-      <div className="sticky bottom-20 mt-1 flex items-end gap-2 border-t border-hairline bg-bg/90 pt-2 backdrop-blur">
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-              e.preventDefault();
-              send();
-            }
-          }}
-          rows={2}
-          disabled={busy}
-          placeholder="问一道题或一个概念…（Ctrl/⌘+Enter 发送）"
-          className="flex-1 resize-none rounded-[18px] bg-card px-4 py-2.5 text-[15px] leading-relaxed text-label outline-none placeholder:text-label3"
-        />
-        <button
-          onClick={send}
-          disabled={busy || !input.trim()}
-          className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-blue text-[16px] font-bold text-white disabled:opacity-40"
-        >
-          ↑
-        </button>
+      <div className="mt-3">
+        <XindeQuickAdd defaultSubject={subject} />
       </div>
+
+      <div className="mt-2.5 flex flex-1 flex-col gap-2.5">
+        {turns.length === 0 && <AskWelcome />}
+
+        {/* 对话流 */}
+        {turns.map((t, i) => (
+          <div key={i} className="flex flex-col gap-2.5">
+            {/* 用户问题 */}
+            <div className="max-w-[85%] self-end rounded-[22px] rounded-br-[7px] bg-blue px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+              {t.subject && (
+                <span className="mr-1.5 rounded-[6px] bg-white/20 px-1.5 py-0.5 text-[11px] font-medium">
+                  {t.subject}
+                </span>
+              )}
+              {t.question}
+            </div>
+
+            {/* AI 答案 / loading / 错误 */}
+            {t.loading && (
+              <div className="glass-card flex items-center gap-2.5 self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                六步预检 + grep 教材中…<span className="text-label3">（限速，案例题约 1-3 分钟）</span>
+              </div>
+            )}
+            {t.error && (
+              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[22px] rounded-bl-[7px] bg-red/15 px-4 py-3 text-[14px] text-red">
+                <span className="min-w-0 flex-1">{t.error}</span>
+                <button
+                  onClick={() => retry(i)}
+                  disabled={busy}
+                  className="shrink-0 rounded-full bg-red/20 px-3 py-1 text-[13px] font-medium text-red transition active:scale-95 disabled:opacity-40"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+            {t.result && <AnswerBubble result={t.result} />}
+          </div>
+        ))}
+
+        <div ref={bottomRef} />
+      </div>
+
+      <ChatComposer
+        value={input}
+        onChange={setInput}
+        onSend={send}
+        disabled={busy}
+        placeholder="问一道题或一个概念…"
+      />
+    </div>
+  );
+}
+
+/** 空态：渐变徽标 + 作答流程竖向步骤条（带连线）。把"怎么答的"讲清楚，建立信任。 */
+function AskWelcome() {
+  const steps = [
+    { t: "六步预检", d: "锁定考点、识别陷阱" },
+    { t: "锚定证据", d: "grep 教材 / 真题 / 心得" },
+    { t: "四段式作答", d: "结论 → 依据 → 涵摄 → 结论" },
+    { t: "证据卡 + 信心度", d: "每个结论都可溯源" },
+  ];
+  return (
+    <div className="flex flex-col px-1 pt-5">
+      <div className="flex flex-col items-center text-center">
+        <div className="grid h-16 w-16 place-items-center rounded-[20px] bg-gradient-to-br from-[#4ad968] to-green text-white shadow-[0_10px_28px_rgba(48,209,88,0.4)]">
+          <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth={1.8}>
+            <path d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <h2 className="mt-4 text-[22px] font-bold tracking-tight text-label">证据链作答</h2>
+        <p className="mx-auto mt-2 max-w-[19rem] text-[14.5px] leading-relaxed text-label2">
+          问一道题或一个概念，每个结论都能追溯到原文出处。
+        </p>
+      </div>
+
+      {/* 作答流程：竖向步骤条 + 连线 */}
+      <div className="glass-card mt-7 rounded-[18px] border border-hairline p-4">
+        <div className="mb-3.5 text-[13px] font-semibold text-label2">作答流程</div>
+        <ol className="flex flex-col">
+          {steps.map((s, i) => (
+            <li key={s.t} className="relative flex gap-3.5 pb-4 last:pb-0">
+              {i < steps.length - 1 && (
+                <span className="absolute bottom-1 left-[15px] top-9 w-px bg-hairline" />
+              )}
+              <span className="z-10 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-green/15 text-[14px] font-bold text-green">
+                {i + 1}
+              </span>
+              <div className="flex-1 pt-0.5">
+                <div className="text-[15px] font-semibold text-label">{s.t}</div>
+                <div className="mt-0.5 text-[13px] leading-snug text-label2">{s.d}</div>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <p className="mt-4 px-1 text-[13px] leading-relaxed text-label3">
+        七牛云限速，案例题可能要等 1–3 分钟。选个科目能顺带接上你之前的卡点。
+      </p>
     </div>
   );
 }
@@ -264,12 +291,12 @@ function AnswerBubble({ result }: { result: AskResult }) {
           : "text-red";
 
   return (
-    <div className="w-full self-start rounded-[18px] rounded-bl-[4px] bg-card p-3.5">
+    <div className="glass-card w-full self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-4">
       {/* 答案正文：预检清单/证据卡渲染成结构化卡片，其余散文走 markdown */}
       <AskAnswer answer={result.answer} />
 
       {/* 元信息条 */}
-      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2 text-[11px]">
+      <div className="mt-3.5 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-hairline pt-2.5 text-[12.5px] font-medium">
         {result.confidence != null && (
           <span className={confTone}>
             信心度 {result.confidence}%{result.starred ? " ★" : ""}
@@ -288,7 +315,7 @@ function AnswerBubble({ result }: { result: AskResult }) {
 
       {/* 候选沉淀提示 */}
       {cand > 0 && (
-        <div className="mt-2 rounded-[8px] bg-blue/15 px-2.5 py-1.5 text-[12px] text-blue-soft">
+        <div className="mt-2.5 rounded-[10px] bg-blue/15 px-3 py-2.5 text-[13px] leading-relaxed text-blue-soft">
           本轮沉淀 {cand} 个候选（
           {[
             result.meta?.weak_candidates?.length

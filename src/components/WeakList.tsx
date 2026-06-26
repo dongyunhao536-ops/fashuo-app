@@ -1,6 +1,7 @@
 import Link from "next/link";
 import type { WeakKp } from "@/lib/weak";
 import { WeakMasterButton } from "@/components/WeakMasterButton";
+import { EmptyState } from "@/components/EmptyState";
 
 /**
  * 弱项列表（展示组件，无状态）。原 /weak 页的列表，2026-06-14 并入教练模块复用。
@@ -32,11 +33,20 @@ function StatusBadge({ level, status }: { level: string; status: string }) {
 export function WeakList({ list, subject }: { list: WeakKp[]; subject?: string }) {
   if (list.length === 0) {
     return (
-      <div className="glass-card rounded-[16px] p-8 text-center text-[13px] text-label3">
-        {subject
-          ? `${subject} 暂无弱项——这科目前还没有错次记录`
-          : "暂无弱项——背诵答错后会自动沉淀进来"}
-      </div>
+      <EmptyState
+        tone="green"
+        title={subject ? `${subject}暂无弱项` : "暂无弱项"}
+        desc={
+          subject
+            ? "这科目前还没有错次记录，保持住。"
+            : "背诵答错后会自动沉淀进来，便于集中攻克。"
+        }
+        icon={
+          <>
+            <path d="M5 13l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+          </>
+        }
+      />
     );
   }
   return (
