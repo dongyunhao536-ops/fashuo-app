@@ -43,15 +43,20 @@ export interface TodayReviewed {
   passedCount: number; // 最新结果=干净通过 的考点数
 }
 
-/** next_due → 相对今天（北京日）的友好文案。 */
+/** next_due → 相对今天（北京日）的友好文案 + 具体日期。
+ *  「已掌握」是里程碑（三档至少各过一次），不代表退出复习——卡仍按 next_due 复现，
+ *  故 mastered 也要显示具体日期（用户 2026-06-27：「我要具体日期」）。 */
 function nextDueLabel(nextDue: string | null, mastered: boolean, todayStr: string): string {
-  if (mastered) return "已掌握";
-  if (!nextDue) return "未排期";
+  if (!nextDue) return mastered ? "已掌握" : "未排期";
   const days = Math.round((Date.parse(nextDue) - Date.parse(todayStr)) / DAY_MS);
-  if (Number.isNaN(days)) return "未排期";
-  if (days <= 0) return "今天可复习";
-  if (days === 1) return "明天";
-  return `${days} 天后`;
+  if (Number.isNaN(days)) return mastered ? "已掌握" : "未排期";
+  const [, mm, dd] = nextDue.split("-");
+  const md = `${Number(mm)}月${Number(dd)}日`;
+  let rel: string;
+  if (days <= 0) rel = `今天可复习（${md}）`;
+  else if (days === 1) rel = `明天 ${md}`;
+  else rel = `${days} 天后 ${md}`;
+  return mastered ? `已掌握 · ${rel}` : rel;
 }
 
 export async function getTodayReviewed(): Promise<TodayReviewed> {
