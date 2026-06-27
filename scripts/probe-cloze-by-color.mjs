@@ -72,4 +72,14 @@ if (norm(buf).length >= 2) must.push(buf.trim());
 
 console.log("【颜色提取·必背关键词/句（蓝底蓝色）】");
 must.forEach((s, i) => console.log(`  ${i + 1}. ${s}`));
-console.log(`\n共 ${must.length} 条必背片段（这些就是 L1 挖空靶 / L2 必背靶，全部来自作者标注，零猜测）`);
+console.log(`\n共 ${must.length} 条必背片段\n`);
+
+// 蓝底 token 级结构：看关键词(红字口诀首字/亮蓝)和骨架(深蓝)怎么分色 → 定挖空粒度
+console.log("【蓝底 token 结构（text | fg）—— 红(192,0,0)=口诀首字, 亮蓝(64,62,214)=精确必背, 深蓝(36,64,97)=骨架】");
+let line = "";
+for (const t of toks) {
+  if (t.bg !== BLUE_BG) { if (line) { console.log("  " + line); line = ""; } continue; }
+  const tag = t.fg === "rgb(192,0,0)" ? "🔴" : t.fg === "rgb(64,62,214)" ? "🔵" : t.fg === "rgb(36,64,97)" ? "·" : `(${t.fg})`;
+  line += `[${t.text}${tag}]`;
+}
+if (line) console.log("  " + line);
