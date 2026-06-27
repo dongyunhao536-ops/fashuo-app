@@ -519,20 +519,31 @@ async function generateL2L3(kp: KpRow, level: Level): Promise<DetectQuestion> {
 
   const rubric =
     level === "L2"
-      ? "出一道【简答题】（要求考生分点回答概念/特征/法理依据，4-6 个要点）。"
+      ? "出一道【简答题】，考查考生能否把教材原文里的基本观点/概念/特征/法理背出来（4-6 个要点，每条都能在教材原文里找到落点）。不要出需要跨知识点综合、跨流派比较、分野判断或自由发挥的题——那是 L3 的范围。"
       : "出一道【迷你案例题】（一段 80-150 字案情，要求考生定性+说明法律关系/罪名+给出法律后果）。";
 
-  const planSys = `你只列检索查询不作答。围绕考点【${name}】（${kp.subject}）规划 3-5 条检索：
-- search_xinde：本考点相关心得规则
+  // L2=简答 recall：只锚教材原文（+真题），不检索心得——心得里的跨知识点综合/分野判断会把简答题
+  //   抬成"需要发挥的分析题"（用户 2026-06-27）。综合/应用留给 L3，L3 仍检索心得。
+  const genRetrieval =
+    level === "L2"
+      ? `- search_textbook：教材原文（必查，作答案锚）
+- search_zhenti：相关真题（若考点名常考则按年份枚举几年）`
+      : `- search_xinde：本考点相关心得规则
 - search_textbook：教材原文（必查，作答案锚）
-- search_zhenti：相关真题（若考点名常考则按年份枚举几年）
+- search_zhenti：相关真题（若考点名常考则按年份枚举几年）`;
+  const planSys = `你只列检索查询不作答。围绕考点【${name}】（${kp.subject}）规划 3-5 条检索：
+${genRetrieval}
 ${KEYWORD_RULE}
-只输出 JSON 数组（示例用短词）：[{"tool":"search_textbook","keyword":"${shortKeyword(name)}"},{"tool":"search_xinde","keyword":"${shortKeyword(name)}"}]`;
+只输出 JSON 数组（示例用短词）：[{"tool":"search_textbook","keyword":"${shortKeyword(name)}"}]`;
 
-  const answerSys = `你是法硕命题人。基于【系统预检索结果】里的教材原文、真题、心得，为考点【${name}】出一道${rubric}
+  const answerSys = `你是法硕命题人。基于【系统预检索结果】里的${level === "L2" ? "教材原文、真题" : "教材原文、真题、心得"}，为考点【${name}】出一道${rubric}
 
 【硬约束】
-1. 只在教材或真题已覆盖的范围内出题；超纲一票否决。
+1. 只在教材或真题已覆盖的范围内出题；超纲一票否决。${
+    level === "L2"
+      ? "\n1b. 【L2 简答】参考答案要点只取教材原文已写明的内容（概念/特征/法理依据/代表人物及其观点）；不得加入跨流派、跨知识点的综合比较、分野判断或心得引申——那是 L3 的范围。"
+      : ""
+  }
 2. 输出格式严格如下，不要任何额外文字：
 
 题目：（题干，不含答案）
@@ -1053,10 +1064,17 @@ async function gradeL2L3(
   opts: { level: Level; question: string; userAnswer: string; answerKey: string[] },
 ): Promise<L1Internal> {
   const name = (kp.ext as { name?: string })?.name ?? kp.kp_id;
-  const planSys = `你只列检索查询不作答。本次任务=评分考生对【${name}】（${kp.subject}）的简答/案例作答。规划 3-5 条 grep：
-- search_textbook：本考点教材原文（必查，评分锚）
+  // L2 判分只锚教材原文（不检索心得）：与出题对齐，避免把心得里的综合点当成简答的必答要点
+  //   而误压到勉强（用户 2026-06-27）。L3 仍检索心得（应用/综合需要）。
+  const gradeRetrieval =
+    opts.level === "L2"
+      ? `- search_textbook：本考点教材原文（必查，评分锚）
+- search_zhenti：若题干引自真题则查`
+      : `- search_textbook：本考点教材原文（必查，评分锚）
 - search_xinde：相关心得规则
-- search_zhenti：若题干引自真题则查
+- search_zhenti：若题干引自真题则查`;
+  const planSys = `你只列检索查询不作答。本次任务=评分考生对【${name}】（${kp.subject}）的简答/案例作答。规划 3-5 条 grep：
+${gradeRetrieval}
 ${KEYWORD_RULE}
 只输出 JSON 数组（示例用短词）：[{"tool":"search_textbook","keyword":"${shortKeyword(name)}"}]`;
 
@@ -1075,7 +1093,11 @@ ${opts.level === "L2" ? CFG.评分rubric.L2 : CFG.评分rubric.L3}
 【硬约束】
 1. 必须根据【系统预检索结果】里 search_textbook 命中的教材原文比对；缺锚点一律降信心度并标★。
 2. 判 干净通过 / 勉强 / 未过 三档之一；未过=核心要点缺失或定性错误。
-3. 列出"命中要点"和"缺失要点"，逐条引用教材行号（结果里没行号就不要编）。
+3. 列出"命中要点"和"缺失要点"，逐条引用教材行号（结果里没行号就不要编）。${
+    opts.level === "L2"
+      ? "\n4. 【本题为 L2 简答】判分只看教材原文已写明的基本观点/概念/特征/法理（含代表人物及其观点）是否背出；不得要求跨流派、跨知识点的综合比较或分野判断，也不要把心得里的引申点当作缺失要点——那是 L3 的范围。但教材已写明的核心要点仍须背到，缺了照扣，不放水。"
+      : ""
+  }
 
 ═══ 输出严格 JSON 块（不要其他文字，不要 markdown 代码块）═══
 {"grade":"干净通过|勉强|未过","hits":["..."],"missing":["..."],"confidence":0-100,"starred":true|false,"grep_lines":[行号数字],"explanation":"一句话评分理由"}
