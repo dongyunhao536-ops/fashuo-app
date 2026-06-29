@@ -428,7 +428,7 @@ async function getOrBuildCloze(kp: KpRow, keypoints: string[]): Promise<ClozeIte
 async function clozeFromKeypoints(keypoints: string[]): Promise<ClozeItem[]> {
   const picked = keypoints.slice(0, 8);
   const list = picked.map((k, i) => `${i + 1}. ${k}`).join("\n");
-  const system = `你把中文法考"背诵要点"改成"填空题"。规则：①逐条处理，保留整句结构，只把每条里【最该记的 1~2 个关键术语/数字】挖空，用全角符号 ▢ 占位（一个空一个 ▢）；②不要挖虚词、连词、"的/是/为/在/和"之类，也不要把整句都挖空；③输出严格 JSON 数组，每条形如 {"s":"挖空后的句子","a":["被挖掉的词1","被挖掉的词2"]}，a 的顺序与句中 ▢ 从左到右一一对应、个数相等；④只输出 JSON，不要任何解释。`;
+  const system = `你把中文法硕"背诵要点"改成"填空题"。规则：①逐条处理，保留整句结构，只把每条里【最该记的 1~2 个关键术语/数字】挖空，用全角符号 ▢ 占位（一个空一个 ▢）；②不要挖虚词、连词、"的/是/为/在/和"之类，也不要把整句都挖空；③输出严格 JSON 数组，每条形如 {"s":"挖空后的句子","a":["被挖掉的词1","被挖掉的词2"]}，a 的顺序与句中 ▢ 从左到右一一对应、个数相等；④只输出 JSON，不要任何解释。`;
   const user = `把下面每条要点改成填空：\n${list}`;
   try {
     const { message } = await runSingleTurn({
@@ -812,7 +812,7 @@ async function gradeSemanticBlanks(
   pairs: { answer: string; fill: string }[],
 ): Promise<{ verdicts: boolean[]; costUsd: number }> {
   const list = pairs.map((p, i) => `${i + 1}. 标准答案：「${p.answer}」 ｜ 考生填：「${p.fill}」`).join("\n");
-  const system = `你给中文法考填空题判对错。【按意思判，不要求逐字】：考生填入与标准答案【意思一致 / 同义 / 涵盖其关键点】=对(true)；意思错、答非所问、空泛套话、漏掉关键限定 =错(false)。不放水也不抠字面。仅输出一个 JSON 布尔数组，长度与条数相同（如 [true,false,true]），不要任何解释。`;
+  const system = `你给中文法硕填空题判对错。【按意思判，不要求逐字】：考生填入与标准答案【意思一致 / 同义 / 涵盖其关键点】=对(true)；意思错、答非所问、空泛套话、漏掉关键限定 =错(false)。不放水也不抠字面。仅输出一个 JSON 布尔数组，长度与条数相同（如 [true,false,true]），不要任何解释。`;
   const { message, costUsd } = await runSingleTurn({
     system,
     user: `逐条判断：\n${list}`,

@@ -3,9 +3,9 @@
 import { useState } from "react";
 
 /**
- * 手动记一条「讲义拓展点 / 自己悟到的规律」→ 投进心得候选（待办筐）。
- * 用于答疑「不认」外部讲义拓展点时，云主动把它存起来：走 收下→PC 登记进做题心得「待观察」表，
- * 真题背书后升正文，此后答疑就认它了（见 /api/xinde/add 注释）。
+ * 手动记一条「讲义拓展点 / 自己悟到的规律」→ 直接进做题心得【正文】（即时生效·无二次确认）。
+ * 用于答疑「不认」外部讲义拓展点时，云主动把它存起来：register-events 把它写进「手动登记」正文区，
+ * 同步后答疑与家教都优先认它，与旧心得/教材冲突时以这条为准（见 /api/xinde/add 注释）。
  * 复用于答疑页（defaultSubject=当前科目）与待办筐页（defaultSubject=""）。
  */
 
@@ -60,7 +60,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
         onClick={() => setOpen(true)}
         className="flex w-full items-center gap-1.5 rounded-[12px] border border-hairline bg-card2 px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-label2 transition active:scale-[0.99]"
       >
-        📝 讲义里的拓展点答疑不认？<span className="font-medium text-blue-soft">存进心得（待真题背书）</span>
+        📝 讲义里的拓展点答疑不认？<span className="font-medium text-blue-soft">直接存进心得正文（即时生效）</span>
       </button>
     );
   }
@@ -114,15 +114,15 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
           disabled={state === "busy"}
           className="rounded-[12px] bg-blue px-4 py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
         >
-          {state === "busy" ? "存…" : "存进心得候选"}
+          {state === "busy" ? "存…" : "存进心得正文"}
         </button>
         {state === "done" && (
-          <span className="text-[12px] text-green">✓ 已存进心得（无需确认）· PC 登记自动并入做题心得「待观察」</span>
+          <span className="text-[12px] text-green">✓ 已直接进心得正文（即时生效）· 答疑与家教都认它</span>
         )}
         {state === "error" && <span className="text-[12px] text-red">{err}</span>}
       </div>
       <p className="text-[11px] leading-relaxed text-label3">
-        不直接进答疑正文——先入「待观察」，凑够 1 次真题背书才升正文（做题心得规则2）；之后答疑就会认它。
+        直通正文·无需真题背书：录入即生效，答疑与家教都优先据此作答；与旧心得/教材冲突时以你这条为准。
       </p>
     </div>
   );

@@ -1,15 +1,17 @@
 import { supabaseAdmin } from "@/lib/supabase";
 
 /**
- * POST /api/xinde/add —— 手动把【辅导讲义拓展点 / 自己悟到的规律】直接存进心得（2026-06-21；2026-06-22 改为录入即确认）。
+ * POST /api/xinde/add —— 手动把【辅导讲义拓展点 / 自己悟到的规律】直接存进心得
+ * （2026-06-21；2026-06-22 录入即确认；2026-06-29 改为直通正文·无二次确认）。
  * 入参：{ subject: 刑法|民法|法理|宪法|法制史, rule: string, anchor?: string }
  *
  * 为什么要这条通道：答疑严守「考试分析→真题→教材」证据链，外部讲义拓展点没锚点它【不认】（设计如此）。
  * 但这些拓展点是有价值的补充——给云一个【主动登记】口。
  *
- * 【录入即确认】云手动录入 = 他已经判断过值得留 → 直接 status=confirmed（不用再去待办筐「收下」），
- * PC register-events 自动把 confirmed 心得候选并入 _{科目}做题心得.md 的「待观察」表（需≥1次真题背书才升正文，
- * 做题心得规则2）；同步后 search_xinde 查得到、答疑第①档优先认它。
+ * 【录入即生效·无二次确认】云手动录入 = 他已经背书过 → 直接 status=confirmed，
+ * PC/ECS register-events 把它写进 _{科目}做题心得.md 的「手动登记」正文区（即时生效·优先级最高·
+ * 与其它心得/教材冲突时以它为准），不再进「待观察」、不再要真题二次背书。
+ * 同步后 search_xinde 查得到 → 答疑第①档优先认它；家教正文注入也带上它。
  * 不直接写 markdown（手机只读档案，红线 #3：登记/去重只在 PC 一处）；故走 events，与答疑沉淀同管线。
  * 鉴权由 src/proxy.ts 统一网关处理（未登录的 /api/* 在网关被 401）。
  */
@@ -51,7 +53,7 @@ export async function POST(req: Request) {
     return Response.json({ ok: true, deduped: true });
   }
 
-  // 录入即确认：直接 confirmed，跳过待办筐「收下」；PC register-events 自动并入做题心得「待观察」。
+  // 录入即生效：直接 confirmed，跳过待办筐「收下」；register-events 把它写进做题心得「手动登记」正文区（直通，无需真题背书）。
   const { error } = await supabaseAdmin.from("events").insert({
     type: "心得候选",
     subject,
@@ -59,7 +61,7 @@ export async function POST(req: Request) {
     knowledge: rule,
     anchor,
     source: "讲义拓展",
-    payload: { note: "讲义拓展·需≥1次真题背书才入正文（做题心得规则2）", 拓展: true },
+    payload: { note: "云手动录入·直通正文·即时生效·冲突以它为准", 拓展: true },
     status: "confirmed",
   });
   if (error) {

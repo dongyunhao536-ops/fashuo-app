@@ -258,8 +258,48 @@ async function loadLedger(today: Date) {
   };
 }
 
-/** 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏 + 输出契约。 */
-function buildSystemStable(): string {
+/**
+ * 从一篇做题心得 markdown 里剥掉【非正文】段（待观察 / 候选规律 / 维护规则），只留权威正文。
+ * 段以 `## ` 二级标题切；标题含上述任一关键词的整段（直到下一个 `## ` 或文末）丢弃。
+ * 「手动登记」段标题不含这些词 → 保留（云直接录入的，最高优先级）。
+ */
+function stripProvisionalSections(md: string): string {
+  const PROVISIONAL = ["待观察", "候选规律", "维护规则"];
+  let skipping = false;
+  return md
+    .split(/\r?\n/)
+    .filter((ln) => {
+      if (/^##\s/.test(ln)) skipping = PROVISIONAL.some((k) => ln.includes(k));
+      return !skipping;
+    })
+    .join("\n")
+    .trim();
+}
+
+/**
+ * 五科做题心得【正文】（与答疑同源：content_mirror kind=xinde），剥掉待观察/候选/维护段后拼接。
+ * 注入家教稳定前缀（缓存）让家教也能引用心得。按 path 排序保证跨请求字节稳定（缓存命中）；
+ * 镜像每晚重生成，当天内稳定。冷启动/查不到时返回空串（家教退回纯账本，不阻塞）。
+ */
+async function loadZhengwenInsights(): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("content_mirror")
+    .select("path, content")
+    .eq("kind", "xinde");
+  if (error || !data || !data.length) return "";
+  return data
+    .slice()
+    .sort((a, b) => String(a.path).localeCompare(String(b.path)))
+    .map((r) => stripProvisionalSections(String(r.content)))
+    .filter(Boolean)
+    .join("\n\n———\n\n");
+}
+
+/**
+ * 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏 + 五科正文心得 + 输出契约。
+ * insightsBlock 折进缓存段：镜像每晚才变，当天内字节稳定，照常命中缓存。
+ */
+function buildSystemStable(insightsBlock = ""): string {
   const rounds = Object.entries(coachCfg.轮次表)
     .filter((e): e is [string, { 窗口: string; 范围: string; 强度: string }] => typeof e[1] === "object" && e[1] !== null)
     .map(([name, r]) => `${name}(${r.窗口})：${r.范围}·${r.强度}`)
@@ -281,7 +321,16 @@ ${METHODOLOGY}
 【云的节奏参考（来自他自己的设定，可随真实进度调）】
 - 四轮三阶段：${rounds}
 - 在职双轨：${tracks}。
-
+${
+  insightsBlock
+    ? `
+【五科做题心得·正文（与答疑同源·权威参考）】
+下面是从历年真题归纳的"怎么考、怎么答"规律（判断倾向／陷阱／答题套路）。考云理解、点他易错处、帮他打通时【按需引用】；这是参考、不是要你逐字背或主动复述（默写判分是背诵系统的事）。
+★【手动登记规则】区（标题含"手动登记"，云亲自录入）优先级最高：与其它心得条目或教材冲突时，一律以「手动登记」为准。
+${insightsBlock}
+`
+    : ""
+}
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
 {"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"最不懂一句或省略","wrongs":["今天明确做错/没掌握的考点短语"],"absorbed":["今天明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
@@ -335,10 +384,11 @@ export async function runCoach(
   const todayStr = bjDateStr(today);
   // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
   const isSunday = new Date(today.getTime() + 8 * 3600 * 1000).getUTCDay() === 0;
-  const ledger = await loadLedger(today);
+  // 账本与五科正文心得并行拉（心得注入稳定前缀，让家教也能引用做题心得）
+  const [ledger, insights] = await Promise.all([loadLedger(today), loadZhengwenInsights()]);
 
   const { message, costUsd } = await runSingleTurn({
-    system: { stable: buildSystemStable(), volatile: buildSystemVolatile(ledger, todayStr, isSunday) },
+    system: { stable: buildSystemStable(insights), volatile: buildSystemVolatile(ledger, todayStr, isSunday) },
     user: buildUserMessage(ledger.conversationLines, input),
     model: MODELS.COACH,
     signal,
