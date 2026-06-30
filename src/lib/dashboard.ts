@@ -1,70 +1,31 @@
-import { supabaseAdmin, fetchAllRows } from "./supabase";
-import { buildDailyPlan, type KpRow } from "./scheduler";
-import { bjDateStr, bjDayStart, bjDayEnd } from "./dates";
+import { supabaseAdmin } from "./supabase";
 
 /**
  * 仪表盘数据聚合（RSC 直接调，无需 HTTP 中转）。
- * 系统设计/14 §6 G3 仪表 = 账本只读视图；UI 层不写任何状态。
  *
- * 五块数据（对齐效果图 0. 仪表盘）：
- *   1. Hero  ：距 2026-12-21 初试天数 + 今日检测次数
- *   2. 双核  ：今日清单完成度 + 答疑开放卡点数 + 最近一条 confusion
- *   3. 雷达  ：五科 kp_state 聚合（mastered 数 / 总数）
- *   4. 待办  ：events pending 按 type 分组计数
- *   5. Top5  ：错次最多的考点
- *   6. 本周  ：近 7 天检测活动密度
+ * 背诵模块下线后（2026-06-29，云改用 Anki app）今日页重做为【答疑 + 教练】为中心，
+ * 原背诵衍生数据（每日清单/掌握度雷达/检测热力/今日检测）全部撤掉：
+ *   1. Hero ：距 2026-12-21 初试天数
+ *   2. 答疑 ：开放卡点数 + 最近一条 confusion
+ *   3. 教练 ：未吸收自报错题数（study_error open）
+ *   4. 待办 ：events pending 按 type 分组计数
+ *   5. Top5 ：错次最多的弱项考点（kp_state，mastered=false；教练账本同口径）
  */
 
 export interface DashboardData {
-  hero: {
-    examDate: string;
-    daysLeft: number;
-    todayDetections: number;
-  };
-  cores: {
-    plan: {
-      total: number; // 今日清单当前剩余（已背的会从桶里退出，故这是"还剩多少"）
-      doneToday: number; // 今天已检测的去重考点数（真实完成度分子）
-      dailyGoal: number; // 每日目标 = 清单容量（稳定分母，不随已背漂移）
-      bucketCounts: { 复验: number; 到期: number; 新考点: number };
-    };
-    ask: { openCount: number; lastConfusion: string | null };
-  };
-  radar: { subject: string; mastered: number; total: number; pct: number }[];
+  hero: { examDate: string; daysLeft: number };
+  ask: { openCount: number; lastConfusion: string | null };
+  coach: { openErrors: number };
   inbox: { pendingCount: number; byType: Record<string, number> };
-  top5: {
-    kp_id: string;
-    subject: string;
-    name: string;
-    error_count: number;
-    cur_level: string;
-  }[];
-  weekHeat: { date: string; detections: number }[];
+  top5: { kp_id: string; subject: string; name: string; error_count: number }[];
 }
 
 const EXAM_DATE = "2026-12-21";
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const PLAN_CAPACITY = 30;
 
 export async function getDashboard(): Promise<DashboardData> {
   const today = new Date();
-  const todayStr = bjDateStr(today); // 北京日历日（UTC 日期会让北京 0-8 点的"今天"错位）
-  const week0 = daysAgo(6, today); // 含今天往回 7 天
 
-  // 并行拉所有数据
-  const [
-    kpAll,
-    askLatest,
-    askCount,
-    eventsPending,
-    reviewEv,
-    top5,
-    weekDetect,
-    todayDetect,
-  ] = await Promise.all([
-    fetchAllRows<KpRow>((from, to) =>
-      supabaseAdmin.from("kp_state").select("*").order("kp_id").range(from, to),
-    ),
+  const [askLatest, askCount, eventsPending, openErr, top5] = await Promise.all([
     supabaseAdmin
       .from("ask_summary")
       .select("confusion, created_at")
@@ -77,117 +38,41 @@ export async function getDashboard(): Promise<DashboardData> {
       .eq("status", "open"),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
     supabaseAdmin
-      .from("events")
-      .select("kp_id")
-      .eq("type", "复验请求")
-      .eq("status", "pending"),
+      .from("study_error")
+      .select("*", { count: "exact", head: true })
+      .eq("status", "open"),
     supabaseAdmin
       .from("kp_state")
-      .select("kp_id, subject, ext, error_count, cur_level")
+      .select("kp_id, subject, ext, error_count")
       .gt("error_count", 0)
-      .eq("mastered", false) // 已强化的退场（与弱项页/教练 Top5 同口径）
+      .eq("mastered", false) // 已强化退场，与弱项页/教练 Top5 同口径
       .order("error_count", { ascending: false })
       .limit(5),
-    supabaseAdmin
-      .from("detection_log")
-      .select("ts, kp_id")
-      .gte("ts", bjDayStart(week0)),
-    supabaseAdmin
-      .from("detection_log")
-      .select("id, kp_id")
-      .gte("ts", bjDayStart(todayStr))
-      .lte("ts", bjDayEnd(todayStr)),
   ]);
 
-  // —— 1. Hero ——
-  const todayDetections = (todayDetect.data ?? []).length;
-  // 今日完成度分子：今天检测过的【去重考点数】（再测一次同考点不重复计）
-  const todayDoneKp = new Set(
-    (todayDetect.data ?? []).map((r) => r.kp_id).filter((x): x is string => !!x),
-  ).size;
   const daysLeft = Math.max(
     0,
     Math.ceil((new Date(EXAM_DATE).getTime() - today.getTime()) / 86400000),
   );
 
-  // —— 2. 双核：实算今日清单（复用调度器，保证与背诵 tab 一致）——
-  const reviewKpIds = (reviewEv.data ?? [])
-    .map((e) => e.kp_id)
-    .filter((x): x is string => !!x);
-  const plan = buildDailyPlan({
-    kps: kpAll,
-    reviewKpIds,
-    capacity: PLAN_CAPACITY,
-    today,
-  });
-  // —— 3. 雷达：按科目聚合 mastered/总数 ——
-  const radarMap = new Map<string, { mastered: number; total: number }>();
-  for (const s of SUBJECTS) radarMap.set(s, { mastered: 0, total: 0 });
-  for (const k of kpAll) {
-    const row = radarMap.get(k.subject);
-    if (!row) continue;
-    row.total++;
-    if (k.mastered) row.mastered++;
-  }
-  const radar = SUBJECTS.map((s) => {
-    const row = radarMap.get(s)!;
-    const pct = row.total === 0 ? 0 : Math.round((row.mastered / row.total) * 100);
-    return { subject: s, mastered: row.mastered, total: row.total, pct };
-  });
-
-  // —— 4. 待办筐 ——
   const byType: Record<string, number> = {};
   for (const e of eventsPending.data ?? []) byType[e.type] = (byType[e.type] ?? 0) + 1;
 
-  // —— 5. Top5 ——
   const top5List = (top5.data ?? []).map((k) => ({
     kp_id: k.kp_id,
     subject: k.subject,
     name: (k.ext as { name?: string })?.name ?? k.kp_id,
     error_count: k.error_count,
-    cur_level: k.cur_level,
-  }));
-
-  // —— 6. 本周复习密度（按当日检测次数）——
-  const dayMap = new Map<string, { detections: number }>();
-  for (let i = 6; i >= 0; i--) {
-    dayMap.set(daysAgo(i, today), { detections: 0 });
-  }
-  for (const d of weekDetect.data ?? []) {
-    const k = bjDateStr(new Date(String(d.ts))); // ts 是 UTC，切回北京日历日再归桶
-    const row = dayMap.get(k);
-    if (row) row.detections++;
-  }
-  const weekHeat = Array.from(dayMap.entries()).map(([date, v]) => ({
-    date,
-    ...v,
   }));
 
   return {
-    hero: { examDate: EXAM_DATE, daysLeft, todayDetections },
-    cores: {
-      plan: {
-        total: plan.items.length,
-        doneToday: todayDoneKp,
-        dailyGoal: PLAN_CAPACITY,
-        bucketCounts: {
-          复验: plan.counts.复验,
-          到期: plan.counts.到期,
-          新考点: plan.counts.新考点,
-        },
-      },
-      ask: {
-        openCount: askCount.count ?? 0,
-        lastConfusion: askLatest.data?.[0]?.confusion ?? null,
-      },
+    hero: { examDate: EXAM_DATE, daysLeft },
+    ask: {
+      openCount: askCount.count ?? 0,
+      lastConfusion: askLatest.data?.[0]?.confusion ?? null,
     },
-    radar,
+    coach: { openErrors: openErr.count ?? 0 },
     inbox: { pendingCount: (eventsPending.data ?? []).length, byType },
     top5: top5List,
-    weekHeat,
   };
-}
-
-function daysAgo(n: number, base: Date): string {
-  return bjDateStr(new Date(base.getTime() - n * 86400000));
 }

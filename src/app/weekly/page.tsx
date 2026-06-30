@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { buildWeeklyReview } from "@/lib/weekly-review";
 import { supabaseAdmin } from "@/lib/supabase";
 import { RMB_PER_USD } from "@/lib/cost";
@@ -93,16 +92,16 @@ export default async function WeeklyPage() {
 
       {/* 弱项 */}
       <Section title="弱项是什么">
-        <div className="text-[12px] text-label3">错次最高（检测实证）</div>
+        <div className="text-[12px] text-label3">错次最高</div>
         {r.weak.top.length === 0 ? (
           <Empty>暂无错次记录</Empty>
         ) : (
           <ul className="mt-1 flex flex-col divide-y divide-hairline">
             {r.weak.top.map((w) => (
               <li key={w.kp_id} className="flex items-center py-2 text-[13px]">
-                <Link href={`/recite/${w.kp_id}`} className="line-clamp-1 flex-1 text-label">
+                <span className="line-clamp-1 flex-1 text-label">
                   {SUB_SHORT[w.subject] ?? w.subject}·{w.name}
-                </Link>
+                </span>
                 <span className="ml-2 shrink-0 text-orange">错 {w.errorCount}</span>
               </li>
             ))}

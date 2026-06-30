@@ -27,9 +27,8 @@ interface EventRow {
 }
 
 const TYPE_DESC: Record<string, string> = {
-  弱项候选: "答疑/检测暴露的薄弱点，登记后进当前弱项加权",
+  弱项候选: "答疑/教练暴露的薄弱点，登记后进当前弱项加权",
   心得候选: "可复用规律，需真题二次背书才进心得正文",
-  复验请求: "答疑澄清后，背诵清单优先复验该考点（G2）",
   已强化: "之前的弱项已答对，可移入已强化项",
 };
 
@@ -46,7 +45,7 @@ export default async function InboxPage() {
     if (!byType.has(r.type)) byType.set(r.type, []);
     byType.get(r.type)!.push(r);
   }
-  const order = ["复验请求", "弱项候选", "心得候选", "已强化"];
+  const order = ["弱项候选", "心得候选", "已强化"];
   const rank = (t: string) => {
     const i = order.indexOf(t);
     return i === -1 ? order.length : i;
@@ -95,7 +94,6 @@ export default async function InboxPage() {
             <section key={type}>
               <h2 className="px-8 pb-1 pt-5 text-[13px] text-label2">
                 {type} · {items.length}
-                {type === "复验请求" && <span className="text-label3">（自动入清单）</span>}
               </h2>
               <div className="px-8 pb-2 text-[11px] text-label3">{TYPE_DESC[type] ?? ""}</div>
               <div className="glass-card mx-4 divide-y divide-hairline rounded-[16px]">
@@ -123,14 +121,7 @@ export default async function InboxPage() {
                         {bjDateStr(new Date(r.created_at))}
                       </span>
                     </div>
-                    {/* 复验请求由 G2 自动进背诵清单，不需云确认；其余候选给收下/忽略 */}
-                    {type === "复验请求" ? (
-                      <span className="mt-2 inline-block rounded-[6px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft">
-                        已排入清单
-                      </span>
-                    ) : (
-                      <EventActions id={r.id} />
-                    )}
+                    <EventActions id={r.id} />
                   </div>
                 ))}
               </div>

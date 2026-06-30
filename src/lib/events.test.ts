@@ -41,7 +41,7 @@ const h = vi.hoisted(() => {
 
 vi.mock("./supabase", () => ({ supabaseAdmin: { from: h.from } }));
 
-import { emitEvent, consumeReviewRequests, normalizeSubject } from "./events";
+import { emitEvent, normalizeSubject } from "./events";
 
 beforeEach(() => {
   h.state.selectResult = { data: null, error: null };
@@ -87,7 +87,7 @@ describe("emitEvent 投递 + pending 防重", () => {
 
   it("dedupBy=kp（考点级）按 kp_id 防重，不看 knowledge", async () => {
     h.state.selectResult = { data: [], error: null };
-    await emitEvent({ type: "复验请求", ...base, kp_id: "XF-0042", dedupBy: "kp" });
+    await emitEvent({ type: "已强化", ...base, kp_id: "XF-0042", dedupBy: "kp" });
     expect(h.state.selectFilters).toContain("eq:kp_id");
     expect(h.state.selectFilters).not.toContain("eq:knowledge");
   });
@@ -96,13 +96,6 @@ describe("emitEvent 投递 + pending 防重", () => {
     h.state.selectResult = { data: [], error: null };
     await emitEvent({ type: "弱项候选", ...base, subject: null });
     expect(h.state.selectFilters).toContain("is:subject");
-  });
-});
-
-describe("consumeReviewRequests G2 兑现", () => {
-  it("调用 update 消费该 kp 的 pending 复验请求（不抛）", async () => {
-    await expect(consumeReviewRequests("XF-0042")).resolves.toBeUndefined();
-    expect(h.state.updateCalled).toBe(true);
   });
 });
 

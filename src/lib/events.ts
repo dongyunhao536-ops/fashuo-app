@@ -8,7 +8,7 @@ import { supabaseAdmin } from "./supabase";
  * 错误频率的累计靠 PC 登记跨批次 +1，不靠重复 pending 行。
  */
 
-export type EventType = "弱项候选" | "心得候选" | "复验请求" | "已强化";
+export type EventType = "弱项候选" | "心得候选" | "已强化";
 
 /**
  * 科目名归一到 5 个规范名（刑法/民法/法理/宪法/法制史）。
@@ -46,7 +46,7 @@ export interface EmitEventArgs {
    * 防重键：
    * - "knowledge"（默认）：同 type+subject+knowledge 的 pending 已存在则跳过——
    *   适合自由短语类（答疑/教练/易混的弱项、心得）；同一 kp_id 可挂多条不同弱项。
-   * - "kp"：同 type+kp_id 的 pending 已存在则跳过——适合考点级事件（G1/复验请求/已强化）。
+   * - "kp"：同 type+kp_id 的 pending 已存在则跳过——适合考点级事件（已强化）。
    */
   dedupBy?: "kp" | "knowledge";
 }
@@ -89,29 +89,4 @@ export async function emitEvent(ev: EmitEventArgs): Promise<boolean> {
     return false;
   }
   return true;
-}
-
-/**
- * G2 兑现：考点完成一次检测后，把它 pending 的复验请求置 consumed。
- * 没有这一步，复验请求会永久 pending、每天占据每日清单复验桶（最高优先级），
- * 积累后把容量整个吃掉。复验的目的就是"澄清后优先重测一次"——测完即兑现；
- * 若这次没过，间隔退档会让它很快再到期，连续失败还有 G1 接手，不丢跟进。
- */
-export async function consumeReviewRequests(kpId: string): Promise<void> {
-  const { error } = await supabaseAdmin
-    .from("events")
-    .update({ status: "consumed", consumed_at: new Date().toISOString() })
-    .eq("type", "复验请求")
-    .eq("kp_id", kpId)
-    .eq("status", "pending");
-  if (error) console.error("[events] 复验请求消费失败：", error.message);
-
-  // 同步清复验硬状态（kp_state.pending_review，G2 调度权威）。独立 best-effort：
-  // 列尚未落库时只记日志、不抛——绝不阻断评分核心写（applyStateUpdate 已先成功）。
-  const { error: prErr } = await supabaseAdmin
-    .from("kp_state")
-    .update({ pending_review: false })
-    .eq("kp_id", kpId)
-    .eq("pending_review", true);
-  if (prErr) console.error("[events] pending_review 清零失败（列未落库?）：", prErr.message);
 }

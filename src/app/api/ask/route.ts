@@ -1,7 +1,7 @@
 import { runPlanThenAnswer, extractText, fmtCost } from "@/lib/anthropic";
 import { MODELS } from "@/lib/models";
 import { supabaseAdmin } from "@/lib/supabase";
-import { emitEvent, normalizeSubject } from "@/lib/events";
+import { emitEvent } from "@/lib/events";
 import { bjDateStr } from "@/lib/dates";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError } from "@/lib/anthropic";
@@ -168,33 +168,6 @@ async function recentlyHandled(
   return !!(data && data.length);
 }
 
-/**
- * G2 复验：把复验意图写进 kp_state.pending_review（硬状态·调度权威，取代 event-only 脆弱信号）。
- * kp_id 来自答疑模型，做存在性 + subject 一致性校验——"存在但错号"过得了存在性校验，故再比对该
- * 考点科目是否与本次答疑科目一致（normalize 后比，治"刑法 vs 刑法学"假阴）；对不上多半是错号 → 拒投。
- * 返回 true=合法（应投递通知 event）；false=幻影/错号（连通知都不投）。
- * pending_review 写失败（如列尚未落库）不拒投——event 作旧路径兜底，调度不中断。
- */
-async function markPendingReview(kpId: string, askSubject: string | null): Promise<boolean> {
-  const { data, error } = await supabaseAdmin
-    .from("kp_state")
-    .select("subject")
-    .eq("kp_id", kpId)
-    .maybeSingle();
-  if (error || !data) return false; // 考点不存在 / 查询失败 → 拒投
-  const ns = normalizeSubject(askSubject);
-  if (ns && data.subject !== ns) {
-    console.warn(`[/api/ask] 复验 kp_id ${kpId}(${data.subject}) 与答疑科目 ${ns} 不符，跳过（疑错号）`);
-    return false;
-  }
-  const { error: upErr } = await supabaseAdmin
-    .from("kp_state")
-    .update({ pending_review: true })
-    .eq("kp_id", kpId);
-  if (upErr) console.error(`[/api/ask] pending_review 写入失败 ${kpId}（列未落库?）：`, upErr.message);
-  return true;
-}
-
 /** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（pending 防重在 emitEvent；近期已处理防重在 recentlyHandled；登记去重在 PC） */
 async function sinkProposals(args: {
   subject: string | null;
@@ -230,27 +203,6 @@ async function sinkProposals(args: {
       anchor: x.anchor ?? null,
       source: "答疑",
       payload: { note: "需真题二次背书才进正文（做题心得规则2）" },
-    });
-  }
-
-  // G2：复验请求。把复验意图写进 kp_state.pending_review（硬状态·调度权威，丢不了）——
-  // 那条 event 降级为派生通知（待办筐/巡检可见，丢了也不影响调度）。见 BUILD_PLAN「软硬体制完整性」#1。
-  const reviewCands = (meta?.review_kp_candidates ?? []).filter(
-    (r): r is { kp_id: string; reason?: string } => !!r?.kp_id,
-  );
-  for (const r of reviewCands) {
-    // kp_id 来自答疑模型：存在性 + subject 一致性校验（"存在但错号"靠科目比对压低）。
-    // 不合法 → 连通知都不投，避免给错考点硬调度权威 + 待办筐噪音。
-    if (!(await markPendingReview(r.kp_id, subject))) continue;
-    await emitEvent({
-      type: "复验请求",
-      subject,
-      kp_id: r.kp_id,
-      knowledge: r.reason ?? null,
-      anchor: null,
-      source: "答疑",
-      payload: { reason: r.reason ?? null, 触发: "G2 答疑澄清后复验" },
-      dedupBy: "kp",
     });
   }
 

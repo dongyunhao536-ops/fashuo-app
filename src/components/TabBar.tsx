@@ -1,18 +1,17 @@
 import Link from "next/link";
 
 /**
- * 五 tab 底栏（极简暗色版方案：今日/背诵/答疑/教练/弱项，首页第一位）。
+ * 底栏（今日/答疑/教练，首页第一位）。
  * SF 单线风 SVG 图标，激活态 systemBlue。RSC 组件，无客户端 JS。
  */
 
 export interface TabBarProps {
-  active: "dash" | "recite" | "ask" | "coach";
+  active: "dash" | "ask" | "coach";
 }
 
-// 弱项 2026-06-14 并入教练模块（/coach?view=weak），底栏从 5 tab 收为 4。
+// 弱项 2026-06-14 并入教练（/coach?view=weak）；背诵模块 2026-06-29 下线（改用 Anki app），底栏收为 3 tab。
 const TABS = [
   { key: "dash", label: "今日", href: "/" },
-  { key: "recite", label: "背诵", href: "/recite" },
   { key: "ask", label: "答疑", href: "/ask" },
   { key: "coach", label: "教练", href: "/coach" },
 ] as const;
@@ -20,12 +19,6 @@ const TABS = [
 const ICONS: Record<TabBarProps["active"], React.ReactNode> = {
   dash: (
     <path d="M3 11l9-8 9 8M5 9v11h14V9" strokeLinejoin="round" strokeLinecap="round" />
-  ),
-  recite: (
-    <>
-      <rect x="4" y="3" width="16" height="18" rx="2" />
-      <path d="M8 7h8M8 11h8M8 15h5" strokeLinecap="round" />
-    </>
   ),
   ask: (
     <path

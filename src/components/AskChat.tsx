@@ -35,7 +35,6 @@ interface AskResult {
   meta?: {
     weak_candidates?: { knowledge: string }[];
     xinde_candidates?: { rule: string }[];
-    review_kp_candidates?: { kp_id: string }[];
   } | null;
 }
 
@@ -315,8 +314,7 @@ function AskWelcome() {
 function AnswerBubble({ result }: { result: AskResult }) {
   const cand =
     (result.meta?.weak_candidates?.length ?? 0) +
-    (result.meta?.xinde_candidates?.length ?? 0) +
-    (result.meta?.review_kp_candidates?.length ?? 0);
+    (result.meta?.xinde_candidates?.length ?? 0);
   const confTone =
     result.confidence == null
       ? "text-label3"
@@ -359,9 +357,6 @@ function AnswerBubble({ result }: { result: AskResult }) {
               : "",
             result.meta?.xinde_candidates?.length
               ? `${result.meta.xinde_candidates.length} 心得`
-              : "",
-            result.meta?.review_kp_candidates?.length
-              ? `${result.meta.review_kp_candidates.length} 复验`
               : "",
           ]
             .filter(Boolean)
