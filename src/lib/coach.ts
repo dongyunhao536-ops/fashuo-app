@@ -2,7 +2,6 @@ import { runSingleTurn, extractText } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import { currentStage } from "./scheduler";
-import { emitEvent } from "./events";
 import { matchKpByName } from "./kp-match";
 import { bjDateStr } from "./dates";
 import coachCfg from "../../config/coach.json";
@@ -335,9 +334,9 @@ ${insightsBlock}
 }
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"【严控·默认省略】仅云反复卡在同一点/明确表达困惑且值得跟进才填；顺口一问、一次性提问、泛泛不懂一律省略","wrongs":["【严控·默认空】仅云本轮确实做错并暴露具体误解的考点；单纯问到/不确定/没学到/还不熟都不算错题"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点；否则一律空，绝不因为云答错/没掌握就自动记"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
-规则（严控准入·宁缺毋滥）：wrongs 会进错题本、confusion 会进弱项库+待办筐，都要云【手动复核】，噪音=负担。**默认全部留空/省略**——只有云【确实做错了】才填 wrongs、【确实反复卡在同一个点】才填 confusion；一次提问、一次进度汇报、"感觉还行/还不太熟/大概懂了"这类【一律不记】。memory_updates 只发【新的/变化的】耐久事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
+规则（记录=云主动指令制，2026-06-30）：**错题本只在云本轮明确说"记进错题本/记录进错题本"时才记**（填 wrongs），其它一律空——云只是问问题、汇报进度、说"还不太熟/大概懂了"都【不记错题、不记弱项】。学习进度照常进学习日志（见下），错题/弱项只认云的主动指令。confusion 仅供你追问、不入库。memory_updates 只发【新的/变化的】耐久事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
 
 /** 易变块（每轮重发，不缓存）：长期记忆 + 学习数据账本。isSunday=周日做积压复盘。 */
@@ -355,9 +354,9 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 【当前账本】
 - 今天：${todayStr}　距初试 ${ledger.daysToExam} 天　距基础结业死线 ${ledger.daysToBase > 0 ? ledger.daysToBase + " 天" : "已过期 " + -ledger.daysToBase + " 天"}
 - 阶段模式：${ledger.stage}
-- Top5 弱项（检测实证）：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
+- Top5 弱项（按错次）：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
 
-【已学进度·学习流水聚合（每科最多6章、最近在前）】
+【已学进度·学习流水（云汇报的学习进度都自动记在这——你要【持续关注、主动对照引用】，让云觉得每次汇报都被记住、被跟进；每科最多6章、最近在前）】
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
 【自报错题·未吸收清单（云汇报做错的，按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）
@@ -439,21 +438,11 @@ export async function runCoach(
     logId = (logRow?.id as number | undefined) ?? null;
   }
 
-  // 困惑点 → 待办筐弱项候选（vague 标记）
-  let weakEmitted = false;
-  if (parsed.confusion) {
-    weakEmitted = await emitEvent({
-      type: "弱项候选",
-      subject: parsed.subject ?? "未分类",
-      kp_id: null,
-      knowledge: parsed.confusion,
-      anchor: null,
-      source: "复盘",
-      payload: { from: "教练复盘", chapter: parsed.chapter, vague: true },
-    });
-  }
+  // 困惑点仅作本轮理解上下文，【不再自动进弱项库/待办筐】——云 2026-06-30 拍板：只在他主动说"记录"时才记。
+  const weakEmitted = false;
 
-  // 错题闭环：钉考点→study_error；钉不到按科目记+投待办筐兜底（A 期逻辑，改由 META 喂）
+  // 错题本：只有云本轮【明确说"记进错题本"】时 META.wrongs 才有值（见 prompt 严控）；否则 wrongs 恒空、不写。
+  // 且不再对没钉到考点的错题兜底投待办筐弱项候选（那是过去的噪音来源）。
   const errorsRecorded: { knowledge: string; matched: boolean }[] = [];
   for (const phrase of wrongs.slice(0, 12)) {
     let kpId: string | null = null;
@@ -472,17 +461,6 @@ export async function runCoach(
       raw_input: input,
     });
     if (seErr) console.error("[coach] study_error 写入失败：", seErr.message);
-    if (!kpId) {
-      await emitEvent({
-        type: "弱项候选",
-        subject: parsed.subject ?? "未分类",
-        kp_id: null,
-        knowledge: phrase,
-        anchor: null,
-        source: "教练错题",
-        payload: { from: "教练自报错题", chapter: parsed.chapter, unmatched: true },
-      });
-    }
     errorsRecorded.push({ knowledge: phrase, matched: !!kpId });
   }
 

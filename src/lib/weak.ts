@@ -2,11 +2,10 @@ import { supabaseAdmin, fetchAllRows } from "./supabase";
 
 /**
  * 弱项清单（RSC 直接调）。
- * "弱项" = 未 mastered 且（error_count > 0 或 任一档 status=failed）。
- * mastered 的退场——检测在弱项三档全过时投「已强化」事件，PC 登记把档案行移入已强化段，
- * 弱项有进有出，列表不随备考推进失真。
+ * "弱项" = 未 mastered 且 error_count > 0。
+ * （背诵/检测模块 2026-06-29 下线后，L1/L2/L3 档位状态已弃用，不再作为弱项判据——只认错次。）
  * 排序：error_count desc → 最近 last_review desc → kp_id asc。
- * 口径对齐：仪表盘 Top5 / 教练账本 Top5 与本页同源（都排除 mastered），此页是完整版。
+ * 口径对齐：仪表盘 Top5 / 教练账本 Top5 与本页同源（都 error_count>0 且排除 mastered）。
  */
 
 export interface WeakKp {
@@ -50,8 +49,8 @@ export async function getWeakKps(subject?: string): Promise<WeakKp[]> {
       .select(
         "kp_id, subject, ext, error_count, review_count, cur_level, cap_level, l1_status, l2_status, l3_status, difficulty, last_review, next_due",
       )
-      .or("error_count.gt.0,l1_status.eq.failed,l2_status.eq.failed,l3_status.eq.failed")
-      .eq("mastered", false) // 已强化（三档全过）的考点从弱项页退场
+      .gt("error_count", 0)
+      .eq("mastered", false) // 已强化的考点从弱项页退场
       .order("error_count", { ascending: false })
       .order("last_review", { ascending: false, nullsFirst: false })
       .order("kp_id")

@@ -108,7 +108,6 @@ export async function POST(req: Request) {
         // kp_id 列只收 XF-0042 式真编号；meta.kp 是考点短语，混进去会污染按 kp_id 的 join/聚合
         kpId: meta?.kp_id ?? body.kpId ?? null,
         meta,
-        grepLines: grepHits.flatMap((h) => h.lines).slice(0, 30),
       });
 
       return {
@@ -138,8 +137,7 @@ export async function POST(req: Request) {
   });
 }
 
-/** 每问候选上限（防灌筐）：弱项至多 2、心得至多 1。提示词已要求从严默认空，这是兜底硬闸。 */
-const MAX_WEAK_PER_ASK = 2;
+/** 每问心得候选上限（防灌筐）：至多 1。提示词已要求仅"记录进心得"指令时投，这是兜底硬闸。 */
 const MAX_XINDE_PER_ASK = 1;
 /** 近期已"处理过"（收下/已登记/已忽略）的同一候选，N 天内不再重复投（pending 防重由 emitEvent 兜） */
 const RECENT_HANDLED_DAYS = 30;
@@ -173,25 +171,11 @@ async function sinkProposals(args: {
   subject: string | null;
   kpId: string | null;
   meta: AskMeta | null;
-  grepLines: number[];
 }) {
-  const { subject, kpId, meta, grepLines } = args;
+  const { subject, kpId, meta } = args;
 
-  // 先筛（太短/批内重复/封顶），再逐条查"近期是否已处理过"，双闸过滤，治"问一个问题灌进来好几个+重复"
-  const weakCands = screenCandidates(meta?.weak_candidates, (w) => w?.knowledge ?? "", MAX_WEAK_PER_ASK);
-  for (const w of weakCands) {
-    if (await recentlyHandled("弱项候选", subject, w.knowledge)) continue;
-    await emitEvent({
-      type: "弱项候选",
-      subject,
-      kp_id: kpId,
-      knowledge: w.knowledge,
-      anchor: w.anchor ?? null,
-      source: "答疑",
-      payload: { grep_lines: grepLines, question_type: meta?.question_type ?? null },
-      // 同一 kp 可挂多条不同弱项短语 → 按 subject+knowledge 防重（默认），不能按 kp_id
-    });
-  }
+  // 弱项候选：答疑【不再自动记】（云 2026-06-30 指令制）——硬关，无论 META 是否吐 weak_candidates 都不投。
+  // 心得候选：仅在云本题明确说"记录进心得"时（prompt 严控），才落进待办筐。
   const xindeCands = screenCandidates(meta?.xinde_candidates, (x) => x?.rule ?? "", MAX_XINDE_PER_ASK);
   for (const x of xindeCands) {
     if (await recentlyHandled("心得候选", subject, x.rule)) continue;

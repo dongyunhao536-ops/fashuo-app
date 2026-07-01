@@ -38,6 +38,9 @@ body {
   color: var(--color-label);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  /* 全局比例调小（云 2026-06-30 觉得偏大）：zoom 在 iOS Safari / Chrome 都生效，按比例缩放整页。
+     觉得还大就调更小（0.85）、还想大就调回 1。 */
+  zoom: 0.9;
 }
 
 /* 玻璃卡：在 bg-card 之上加一道顶部 1px 内高光 + 微妙向下渐变，
