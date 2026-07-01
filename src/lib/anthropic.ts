@@ -391,7 +391,7 @@ export async function runPlanThenAnswer(opts: {
   if (plan.searches.length === 0) {
     plan = await doPlan(model, "plan-retry");
   }
-  const searches = dedupeSearches(plan.searches).slice(0, 12); // 封顶 12 条，防规划器发散
+  const searches = dedupeSearches(plan.searches).slice(0, 16); // 封顶 16 条（强制心得+教材全覆盖需更多条），防规划器发散
 
   // ② 批量执行 grep（共享镜像缓存：每个 kind 只从 Supabase 拉一次）
   const mirrorCache = createMirrorCache();
