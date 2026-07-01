@@ -285,7 +285,9 @@ async function loadZhengwenInsights(): Promise<string> {
   const { data, error } = await supabaseAdmin
     .from("content_mirror")
     .select("path, content")
-    .eq("kind", "xinde");
+    .eq("kind", "xinde")
+    // 刑法讲义心得(230KB)只供答疑 search_xinde；教练暂不接讲义（太大、会撑爆注入），按路径排除
+    .not("path", "ilike", "%讲义%");
   if (error || !data || !data.length) return "";
   return data
     .slice()

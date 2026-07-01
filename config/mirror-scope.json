@@ -10,6 +10,7 @@
     { "pattern": "教材/法制史_文本.txt",         "kind": "textbook" },
 
     { "pattern": "真题分析/_刑法做题心得.md",     "kind": "xinde" },
+    { "pattern": "真题分析/_刑法讲义心得.md",     "kind": "xinde" },
     { "pattern": "真题分析/_民法做题心得.md",     "kind": "xinde" },
     { "pattern": "真题分析/_法理做题心得.md",     "kind": "xinde" },
     { "pattern": "真题分析/_宪法做题心得.md",     "kind": "xinde" },

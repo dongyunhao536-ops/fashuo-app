@@ -51,7 +51,7 @@ export const SEARCH_TOOLS: Anthropic.Tool[] = [
   {
     name: "search_xinde",
     description:
-      "在刑法/民法做题心得中检索规则。答疑优先级第一档：心得已有规则则优先据此作答（含真题证据+法理+应用建议）。",
+      "在刑法/民法做题心得 + 刑法讲义心得（《刑法精讲一本通》作者标注的提示/易错/辨析框，逐字提取）中检索规则。答疑优先级第一档：心得/讲义心得已有规则则优先据此作答。",
     input_schema: {
       type: "object",
       properties: {
