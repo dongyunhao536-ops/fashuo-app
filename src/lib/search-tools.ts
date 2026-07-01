@@ -39,7 +39,7 @@ export const SEARCH_TOOLS: Anthropic.Tool[] = [
   {
     name: "search_textbook",
     description:
-      "在《考试分析》教材原文中检索关键词，返回命中片段+行号。回答概念辨析/法条理解/真题答案质疑前必须先调用，核对教材原文（v2.3 机制①⑨）。",
+      "在《考试分析》教材 + 《刑法精讲一本通》讲义原文中检索关键词，返回命中片段+行号。两者同级权威。回答概念辨析/法条理解/真题答案质疑前必须先调用，核对原文（v2.3 机制①⑨）。",
     input_schema: {
       type: "object",
       properties: {
