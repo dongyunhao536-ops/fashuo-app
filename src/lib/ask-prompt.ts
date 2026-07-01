@@ -166,7 +166,7 @@ export function buildAskSystemStable(): string {
 ═══ 最后：输出机器可读元数据块（给系统沉淀待办筐用，会从展示中剥离）═══
 在全部回答之后，另起一行输出且仅输出一个如下块（严格 JSON，字段缺省给 null 或空数组）：
 ${META_OPEN}
-{"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"用户卡在哪/本题易混点，一句话","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}]}
+{"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"【默认省略】仅云本题确实卡住/答错、值得下次答疑跟进才填一句；普通提问、云只是没学过、答完就懂的一律省略","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}]}
 ${META_CLOSE}
 说明（务必区分两类候选的触发条件，错填会污染飞轮；【宁可漏投，不要灌筐】——待办筐是云手动复核的，噪音=负担）：
 - weak_candidates：【从严，默认空数组】只在云本题里【确实答错了 / 暴露了具体误解】才投，且【至多 1 个、最多不超过 2 个】，只挑最关键那个。
