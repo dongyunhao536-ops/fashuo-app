@@ -14,6 +14,14 @@ export function bjDateStr(d: Date = new Date()): string {
   return new Date(d.getTime() + BJ_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+/** 北京时区里 d 所在自然周的周一 YYYY-MM-DD（周复盘窗口 = 周一~周日，与云的体感一周对齐） */
+export function bjWeekMonday(d: Date = new Date()): string {
+  const bj = new Date(d.getTime() + BJ_OFFSET_MS);
+  const dow = bj.getUTCDay(); // 0=周日 … 6=周六（已偏移，getUTC* 即北京钟面）
+  const sinceMonday = (dow + 6) % 7; // 周一=0 … 周日=6
+  return new Date(bj.getTime() - sinceMonday * 86400_000).toISOString().slice(0, 10);
+}
+
 /** 北京日期 dateStr 当天 0 点（带 +08:00 偏移）——给 timestamptz 列做窗口下界 */
 export const bjDayStart = (dateStr: string) => `${dateStr}T00:00:00+08:00`;
 

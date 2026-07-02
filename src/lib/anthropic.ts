@@ -212,7 +212,7 @@ export async function runWithSearchTools(opts: {
   throw new Error("runWithSearchTools: 工具调用超过上限未收口");
 }
 
-interface PlannedSearch {
+export interface PlannedSearch {
   tool: string;
   keyword?: string;
   year?: string;
@@ -242,8 +242,9 @@ function normalizeSearches(arr: unknown): PlannedSearch[] {
  * 兼容两种形态：
  * - 新对象形（答疑）：{"subject":"民法","searches":[{...}]}
  * - 旧数组形（检测出题/评分的 planSystem）：[{...},{...}]
+ * 导出供教练两段式复用（coach.ts 按需查教材原文，2026-07-01）。
  */
-function parsePlan(text: string): ParsedPlan {
+export function parsePlan(text: string): ParsedPlan {
   const oStart = text.indexOf("{");
   const oEnd = text.lastIndexOf("}");
   if (oStart !== -1 && oEnd > oStart) {
@@ -270,8 +271,8 @@ function parsePlan(text: string): ParsedPlan {
   }
 }
 
-/** 去掉规划里完全重复的检索（规划器偶尔同一关键词吐两遍） */
-function dedupeSearches(searches: PlannedSearch[]): PlannedSearch[] {
+/** 去掉规划里完全重复的检索（规划器偶尔同一关键词吐两遍）。导出供教练两段式复用。 */
+export function dedupeSearches(searches: PlannedSearch[]): PlannedSearch[] {
   const seen = new Set<string>();
   return searches.filter((s) => {
     const key = `${s.tool}|${s.keyword ?? ""}|${s.year ?? ""}|${s.question_no ?? ""}`;

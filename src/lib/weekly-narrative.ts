@@ -3,7 +3,8 @@ import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import { currentStage } from "./scheduler";
 import { bjDateStr, bjDayStart } from "./dates";
-import { METHODOLOGY } from "./coach";
+import { METHODOLOGY, SUBJECT_METHODS, loadGaopin } from "./coach";
+import { EXAM_OUTLINE } from "./exam-outline.gen";
 import { buildWeeklyReview, formatWeeklyDataText, type WeeklyReview } from "./weekly-review";
 import coachCfg from "../../config/coach.json";
 
@@ -58,15 +59,21 @@ function buildStable(): string {
 
 ${METHODOLOGY}
 
+${SUBJECT_METHODS}
+
+【《考试分析》知识架构（官方教材章节，指导的坐标系）】
+下周指导必须落到具体科目+章节（如"民法第十四章 合同通则"），并结合弱项点出跨章节联系；不许只给"多背民法"式空话。
+${EXAM_OUTLINE}
+
 【云的节奏参考（来自他的设定，可按真实进度调）】
 - 四轮三阶段：${roundsLine()}
 - 在职双轨：${tracksLine()}`;
 }
 
-/** 易变块（每周变，不缓存）：长期记忆 + 时间位点 + 本周真实数据 + 本周教练对话摘录。 */
+/** 易变块（每周变，不缓存）：长期记忆 + 时间位点 + 本周真实数据 + 本周教练对话摘录 + 真题高频。 */
 async function buildVolatile(review: WeeklyReview, today: Date): Promise<string> {
   const sinceTs = bjDayStart(review.weekStart);
-  const [memRes, msgRes] = await Promise.all([
+  const [memRes, msgRes, gaopin] = await Promise.all([
     supabaseAdmin.from("coach_memory").select("fact, category").order("updated_at", { ascending: false }).limit(40),
     supabaseAdmin
       .from("coach_message")
@@ -74,6 +81,7 @@ async function buildVolatile(review: WeeklyReview, today: Date): Promise<string>
       .gte("created_at", sinceTs)
       .order("id", { ascending: true })
       .limit(30),
+    loadGaopin(),
   ]);
   const memory = (memRes.data ?? []).map((m) => `- ${m.category ? `[${m.category}] ` : ""}${m.fact}`).join("\n") || "（暂无）";
   const convo =
@@ -90,7 +98,14 @@ ${memory}
 ${formatWeeklyDataText(review)}
 
 【本周教练对话摘录（仅供理解云这周的状态/语气；复盘事实仍以上方真实数据为准，别把对话当数据编进去）】
-${convo}`;
+${convo}${
+    gaopin
+      ? `
+
+【真题高频考点（2014-2025 归纳）——下周指导按它排章节优先级，⭐⭐⭐ 必考核心优先】
+${gaopin}`
+      : ""
+  }`;
 }
 
 /** 生成本周复盘 + 下周指导（markdown）。返回 { content, costUsd }。 */

@@ -42,9 +42,12 @@ export default async function DashboardPage() {
           <span className="ml-2 text-[16px] text-label2">天</span>
         </div>
         <div className="mt-3.5 flex flex-wrap gap-1.5">
-          <span className="rounded-[8px] bg-green/15 px-2 py-0.5 text-[11px] font-medium text-green">
-            答疑未收口 {d.ask.openCount}
-          </span>
+          <Link
+            href="/ask/points"
+            className="rounded-[8px] bg-green/15 px-2 py-0.5 text-[11px] font-medium text-green"
+          >
+            答疑未收口 {d.ask.openCount} ›
+          </Link>
           <span className="rounded-[8px] bg-blue/15 px-2 py-0.5 text-[11px] font-medium text-blue-soft">
             未吸收错题 {d.coach.openErrors}
           </span>

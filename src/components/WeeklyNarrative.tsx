@@ -14,9 +14,11 @@ interface Props {
   initialContent: string | null;
   initialGeneratedAt: string | null;
   costText?: string | null;
+  /** 这份报告覆盖的自然周（MM-DD~MM-DD）；周一早看到的是上一整周的复盘 */
+  weekLabel?: string | null;
 }
 
-export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText }: Props) {
+export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText, weekLabel }: Props) {
   const [content, setContent] = useState<string | null>(initialContent);
   const [generatedAt, setGeneratedAt] = useState<string | null>(initialGeneratedAt);
   const [loading, setLoading] = useState(false);
@@ -57,7 +59,10 @@ export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText }
   return (
     <section className="glass-card mx-4 mt-3 rounded-[18px] border border-blue/20 p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold text-label">本周复盘 · 下周指导</h2>
+        <h2 className="text-[15px] font-semibold text-label">
+          复盘 · 下周指导
+          {weekLabel && <span className="ml-1.5 text-[11px] font-normal text-label3">{weekLabel} 周</span>}
+        </h2>
         <button
           onClick={generate}
           disabled={loading}

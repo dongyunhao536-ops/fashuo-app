@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "./supabase";
-import { bjDateStr, bjDayStart } from "./dates";
+import { bjDayStart, bjWeekMonday } from "./dates";
 import { getErrorBook, type ErrorItem } from "./errorbook";
 
 /**
@@ -30,15 +30,19 @@ const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵"]);
 
 export async function buildWeeklyReview(today = new Date()): Promise<WeeklyReview> {
-  const weekEnd = bjDateStr(today);
-  const weekStartDate = new Date(today.getTime() - 6 * 86400000);
-  const weekStart = bjDateStr(weekStartDate);
+  // 自然周窗口（云 2026-07-01）：北京时间本周一 ~ 周日，不再滚动最近 7 天。
+  // week_start 整周不变 → weekly_report 同周覆盖真正生效；周一 cron 传昨天锚点即复盘上一整周。
+  const weekStart = bjWeekMonday(today);
+  // 纯日期加法（按 UTC 零点算，只为 +6 天得周日，不涉及时刻）
+  const weekEnd = new Date(new Date(`${weekStart}T00:00:00Z`).getTime() + 6 * 86400000)
+    .toISOString()
+    .slice(0, 10);
   const sinceTs = bjDayStart(weekStart);
 
   const [studyRes, askRes, evCreatedRes, evPendingRes, usageRes, absorbedRes, errorBook] =
     await Promise.all([
       supabaseAdmin.from("study_log").select("subject, chapter, activity").gte("log_date", weekStart),
-      supabaseAdmin.from("ask_summary").select("subject, confusion, question_type").gte("created_at", sinceTs),
+      supabaseAdmin.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs),
       supabaseAdmin.from("events").select("type").gte("created_at", sinceTs),
       supabaseAdmin.from("events").select("type").eq("status", "pending"),
       supabaseAdmin.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs),
@@ -77,9 +81,9 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     .filter((r) => r.knowledge)
     .map((r) => ({ subject: (r.subject as string | null) ?? "未分类", knowledge: String(r.knowledge) }));
 
-  // —— 高频答疑卡点 ——
+  // —— 答疑未收口卡点：只认 status=open（已收口/被顶掉的不算"需关注"，与首页计数同口径）——
   const askPoints = asks
-    .filter((a) => a.confusion)
+    .filter((a) => a.confusion && a.status === "open")
     .slice(0, 10)
     .map((a) => ({ subject: a.subject, confusion: String(a.confusion), type: a.question_type ?? null }));
 

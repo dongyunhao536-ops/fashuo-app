@@ -153,7 +153,7 @@ create table if not exists ask_summary (
   question_type text,                     -- 选择/案例/简答
   step_stuck   int,                       -- 卡在五步第几步
   confusion    text,                      -- 具体混淆点
-  status       text not null default 'open', -- open/clarified（已澄清）/superseded（同考点被更新轮次顶掉）；非 open 不注入
+  status       text not null default 'open', -- open/clarified（云在 /ask/points 点"打通了"）/dismissed（"不算卡点"移噪）/superseded（同考点被更新轮次顶掉）；非 open 不注入
   ttl_until    date,                      -- 时效衰减：过期降权
   created_at   timestamptz not null default now()
 );

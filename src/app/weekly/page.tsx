@@ -18,23 +18,28 @@ const SUB_SHORT: Record<string, string> = { 刑法: "刑", 民法: "民", 法理
 
 export default async function WeeklyPage() {
   const r = await buildWeeklyReview();
+  // 取最新一份报告（不锁本周）：周一早 cron 生成的是【上一整周】的复盘，本周还没有报告时也该能看到它
   const { data: report } = await supabaseAdmin
     .from("weekly_report")
-    .select("content, generated_at, cost_usd")
-    .eq("week_start", r.weekStart)
-    .order("generated_at", { ascending: false })
+    .select("content, generated_at, cost_usd, week_start, week_end")
+    .order("week_start", { ascending: false })
     .limit(1)
     .maybeSingle();
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
-      <PageNav title="周复盘" meta={`${r.weekStart.slice(5)}~${r.weekEnd.slice(5)}`} />
+      <PageNav title="周复盘" meta={`本周 ${r.weekStart.slice(5)}~${r.weekEnd.slice(5)}`} />
 
       {/* 核心：复盘 + 下周指导 */}
       <WeeklyNarrative
         initialContent={report?.content ?? null}
         initialGeneratedAt={report?.generated_at ?? null}
         costText={report?.cost_usd != null ? yuan(Number(report.cost_usd)) : null}
+        weekLabel={
+          report?.week_start
+            ? `${String(report.week_start).slice(5)}~${String(report.week_end ?? "").slice(5)}`
+            : null
+        }
       />
 
       <p className="px-6 pb-1 pt-4 text-[12px] text-label3">↓ 本周真实数据（复盘依据）</p>

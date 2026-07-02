@@ -1,9 +1,11 @@
-import { runSingleTurn, extractText } from "./anthropic";
+import { runSingleTurn, extractText, parsePlan, dedupeSearches } from "./anthropic";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import { currentStage } from "./scheduler";
 import { matchKpByName } from "./kp-match";
 import { bjDateStr } from "./dates";
+import { executeSearchTool, createMirrorCache } from "./search-tools";
+import { EXAM_OUTLINE } from "./exam-outline.gen";
 import coachCfg from "../../config/coach.json";
 
 /**
@@ -20,6 +22,9 @@ import coachCfg from "../../config/coach.json";
  *   教练觉得值得记可以在正文里【询问】，云答应后下一轮才落 META——绝不自作主张记录。
  * 互通：教练每轮注入 答疑最近卡点(ask_summary open)；答疑侧注入 错题本+学习进度（ask-prompt.ts volatile）。
  * 检验=理解层（有没有吸收），云的逐字背诵在 Anki app 做，教练不判分。
+ * 考试分析接入（2026-07-01 升级）：① 知识架构（exam-outline.gen.ts 五科章节）+ 真题高频考点
+ *   注入稳定前缀 → 建议落到具体章节、知道哪章重点；② 两段式按需检索（Sonnet 规划 → 本地 grep
+ *   → 结果进 user 消息）→ 聊到具体考点时能引《考试分析》原文，不破坏 system 缓存（七牛云带 tools 缓存失效）。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
@@ -53,6 +58,20 @@ export const METHODOLOGY = `【方法论参考·浓缩自 10+ 篇高分/在职/�
 分歧（判断项，按云处境定，别一刀切）：启动时长 / 全面背vs重点背 / 串学vs学透——经验帖无统一定论。
 针对云（在职·五战）：最大风险不是学得不细，而是【重复犯老错 + 启动晚 + 不复盘】(=云自述病根)。
 故教练优先级：复盘 > 错题闭环 > 模考节奏 > 进度铺开。"串学还是学透"的答案是【双轨】(刑民精学+法综碎片背)落地到今晚/明天，别空谈原则。`;
+
+/**
+ * 科目级学习方法（浓缩自 docs/科目学习方法经验贴.md，2026-07-01 教练升级）。
+ * 比 METHODOLOGY（宏观计划层）细一层：到科目/章节/背书/做题的具体做法。
+ * 与知识架构(EXAM_OUTLINE)+真题高频配合。导出供周报指导层复用。
+ */
+export const SUBJECT_METHODS = `【科目级方法参考·浓缩自科目学习方法经验贴（到科目/章节/背书/做题层面）】
+刑法：总则重理解（犯罪论是地基：构成→正当化→停止形态→共犯→罪数一条线）；分则按类罪名抓"构成要件+近似罪区分点"，高频罪名优先、冷门混脸熟。学完一章白纸默画简版思维导图+做该章分章真题，错的回分析对应节补漏。案例题先看设问，列主体×行为清单逐一定性。
+民法：先总后分（总则/物权通则/合同通则先吃透，越抽象越要扎实）。法律行为效力五格表（有效/无效/可撤销/效力待定/不成立）是最大题仓（每年6-8道），每格挂真题例子。紧跟民法典新制度。法条分析五步：识考点→默框架(定义/要件/范围/例外)→定位原文→分析→分点归纳。
+法理：论述大头踏实背；规则/原则、法律关系等分类辨析靠例子理解着背（真题爱在分类挖坑）；论述骨架=概念→特征分类→意义/联系实际。
+宪法：最抽象+超纲——立法法/选举法/民族区域自治法/监督法要额外记；国家机构做职权对比表（谁提名/谁决定/谁任免）；数字类(比例/期限/人数)单独过。
+法制史：背多分——朝代主线+制度纵线（五刑/会审等跨朝演变）双向组织；口诀标页边后期对口诀回忆；每周至少滚3次，隋唐/明清极高频优先。
+背书通用：理解1-2遍后再开背；重复>单次时长（5分钟×3胜15分钟×1），必须滚动复背；框架先行再填肉、别一字不差强迫症；单科推进别五科并行背；目标=考场那天记忆最新鲜。
+做题复盘通用：简答第一步先写概念（分析原文口径）再分点；一切主观题分点作答；真题2-3遍（分章→成套→滚错题）；错题定位到分析具体章节→回原文补漏→记错题本→滚动检验。`;
 
 interface CoachMeta {
   /** 云本轮是否在【汇报学习进度】——只有 true 才写学习日志（提问/讨论/被考=false） */
@@ -246,6 +265,25 @@ function stripProvisionalSections(md: string): string {
 }
 
 /**
+ * 五科真题高频考点（content_mirror kind=zhenti，真题分析/0X_XX高频考点.md，2014-2025 归纳）。
+ * 注入稳定前缀：教练据此知道【哪章是重点、真题怎么考】，把建议落到章节。按 path 排序字节稳定（缓存）。
+ * 导出供周报指导层复用（weekly-narrative.ts，下周指导也要按章节排优先级）。
+ */
+export async function loadGaopin(): Promise<string> {
+  const { data, error } = await supabaseAdmin
+    .from("content_mirror")
+    .select("path, content")
+    .eq("kind", "zhenti")
+    .ilike("path", "%高频考点%");
+  if (error || !data || !data.length) return "";
+  return data
+    .slice()
+    .sort((a, b) => String(a.path).localeCompare(String(b.path)))
+    .map((r) => String(r.content).trim())
+    .join("\n\n———\n\n");
+}
+
+/**
  * 五科做题心得【正文】（与答疑同源：content_mirror kind=xinde），剥掉待观察/候选/维护段后拼接。
  * 注入家教稳定前缀（缓存）让家教也能引用心得。按 path 排序保证跨请求字节稳定（缓存命中）；
  * 镜像每晚重生成，当天内稳定。冷启动/查不到时返回空串（家教退回纯账本，不阻塞）。
@@ -267,10 +305,11 @@ async function loadZhengwenInsights(): Promise<string> {
 }
 
 /**
- * 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏 + 五科正文心得 + 输出契约。
- * insightsBlock 折进缓存段：镜像每晚才变，当天内字节稳定，照常命中缓存。
+ * 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏
+ *   + 考试分析知识架构/真题高频（2026-07-01 教练升级）+ 五科正文心得 + 输出契约。
+ * insightsBlock/gaopinBlock 折进缓存段：镜像每晚才变，当天内字节稳定，照常命中缓存。
  */
-function buildSystemStable(insightsBlock = ""): string {
+function buildSystemStable(insightsBlock = "", gaopinBlock = ""): string {
   const rounds = Object.entries(coachCfg.轮次表)
     .filter((e): e is [string, { 窗口: string; 范围: string; 强度: string }] => typeof e[1] === "object" && e[1] !== null)
     .map(([name, r]) => `${name}(${r.窗口})：${r.范围}·${r.强度}`)
@@ -289,6 +328,20 @@ function buildSystemStable(insightsBlock = ""): string {
 
 ${METHODOLOGY}
 
+${SUBJECT_METHODS}
+
+【《考试分析》知识架构（官方教材章节，你给建议的坐标系）】
+给学习建议/规划/复盘时【必须落到具体科目和章节】（如"民法第十四章 合同通则·第三节 合同的效力"），不许只说"多背民法"这种空话；主动点出跨章节联系（如刑法停止形态×共同犯罪、民法物权变动×合同效力），带云把散点串成架构。
+${EXAM_OUTLINE}
+${
+  gaopinBlock
+    ? `
+【真题高频考点（2014-2025 真题归纳·哪章是重点就看这）】
+排学习/背诵/做题优先级时对照它：⭐⭐⭐ 必考核心优先攻，冷门章别让云死磕。考他、复盘也优先从高频点下手。
+${gaopinBlock}
+`
+    : ""
+}
 【云的节奏参考（来自他自己的设定，可随真实进度调）】
 - 四轮三阶段：${rounds}
 - 在职双轨：${tracks}。
@@ -339,14 +392,72 @@ ${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join
 ${ledger.askStuckLines.length ? ledger.askStuckLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
 }
 
-/** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息（仿答疑做法，runSingleTurn 只收单条 user）。 */
-function buildUserMessage(conversationLines: string[], input: string): string {
-  if (conversationLines.length === 0) return input;
-  return `【此前对话（最近几轮，供你理解上文/指代；引用证据仍以账本为准）】
+/** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息 + 可选教材检索结果
+ *  （仿答疑做法，runSingleTurn 只收单条 user；检索结果放 user 侧，不碰 system 缓存前缀）。 */
+function buildUserMessage(conversationLines: string[], input: string, grepBlock = ""): string {
+  const convo =
+    conversationLines.length === 0
+      ? ""
+      : `【此前对话（最近几轮，供你理解上文/指代；引用证据仍以账本为准）】
 ${conversationLines.join("\n")}
 
-【本轮云说】
-${input}`;
+`;
+  if (!convo && !grepBlock) return input;
+  return `${convo}【本轮云说】
+${input}${grepBlock ? `\n\n${grepBlock}` : ""}`;
+}
+
+/** 教练侧检索结果总量兜底（字符，≈4-5 千 token）：教练引用原文是佐证不是判卷，比答疑(2.4万)砍一半再一半 */
+const COACH_GREP_CLIP = 9000;
+
+/**
+ * 两段式·段①（2026-07-01 教练升级）：Sonnet 小调用判断本轮要不要查《考试分析》原文/心得/真题，
+ * 要则列关键词 → 本地 grep content_mirror → 结果拼成注入块。
+ * 闲聊/汇报进度等与具体知识点无关的轮次规划器给空数组 → 零注入零额外 Opus input。
+ * 任何一步失败都吞掉返回空串（教练退回纯账本+架构作答，不阻塞）。
+ */
+async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal): Promise<{ block: string; costUsd: number }> {
+  const planSystem = `你是法硕教练的检索规划器。教练回答前可先查库：search_textbook（《考试分析》教材+刑法讲义原文）/ search_xinde（做题心得）/ search_zhenti（真题，参数 year、question_no）。
+判断云本轮消息需不需要查库：
+- 需要：聊到具体科目/章节/考点的学习安排或疑问、问某章重点/怎么学、让教练考他、涉及具体法律概念——列出检索词。
+- 不需要：纯闲聊、汇报进度、谈时间/情绪/节奏、与具体知识点无关 → "searches" 给空数组。
+输出且仅输出 JSON（无其他文字）：{"searches":[{"tool":"search_textbook","keyword":"教材原词≤8字"}]}
+最多 4 条；keyword 用教材里会出现的短词（如"想象竞合""表见代理"），别整句。`;
+  try {
+    const { message, costUsd } = await runSingleTurn({
+      system: planSystem,
+      user: conversationTail.length
+        ? `【最近对话】\n${conversationTail.join("\n")}\n\n【云本轮说】\n${input}`
+        : input,
+      model: MODELS.PLAN,
+      maxTokens: 500,
+      route: "coach:plan",
+      signal,
+    });
+    const searches = dedupeSearches(parsePlan(extractText(message)).searches).slice(0, 4);
+    if (searches.length === 0) return { block: "", costUsd };
+
+    const cache = createMirrorCache();
+    const parts: string[] = [];
+    let used = 0;
+    for (const s of searches) {
+      const inputArgs: Record<string, unknown> =
+        s.tool === "search_zhenti" ? { year: s.year, question_no: s.question_no } : { keyword: s.keyword };
+      const { result } = await executeSearchTool(s.tool, inputArgs, cache);
+      const seg = `■ ${s.tool}「${s.keyword ?? s.year ?? ""}」\n${result}`;
+      if (used + seg.length > COACH_GREP_CLIP && parts.length > 0) continue;
+      parts.push(seg);
+      used += seg.length;
+    }
+    return {
+      block: `【系统预检索（考试分析/心得/真题命中，供你把建议钉到原文和章节；与云的问题无关的命中忽略）】\n${parts.join("\n\n")}`,
+      costUsd,
+    };
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError") throw err;
+    console.error("[coach] 预检索失败（本轮退回纯账本作答）：", err instanceof Error ? err.message : String(err));
+    return { block: "", costUsd: 0 };
+  }
 }
 
 export async function runCoach(
@@ -357,17 +468,31 @@ export async function runCoach(
   const todayStr = bjDateStr(today);
   // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
   const isSunday = new Date(today.getTime() + 8 * 3600 * 1000).getUTCDay() === 0;
-  // 账本与五科正文心得并行拉（心得注入稳定前缀，让家教也能引用做题心得）
-  const [ledger, insights] = await Promise.all([loadLedger(today), loadZhengwenInsights()]);
+  // 账本、五科正文心得、真题高频并行拉（心得/高频注入稳定前缀，让家教能引用心得+知道哪章重点）
+  const [ledger, insights, gaopin] = await Promise.all([
+    loadLedger(today),
+    loadZhengwenInsights(),
+    loadGaopin(),
+  ]);
+  // 两段式段①：按本轮话题按需查《考试分析》原文（结果进 user 消息，system 缓存前缀不动）
+  const { block: grepBlock, costUsd: planCost } = await planAndSearch(
+    input,
+    ledger.conversationLines.slice(-4),
+    signal,
+  );
 
-  const { message, costUsd } = await runSingleTurn({
-    system: { stable: buildSystemStable(insights), volatile: buildSystemVolatile(ledger, todayStr, isSunday) },
-    user: buildUserMessage(ledger.conversationLines, input),
+  const { message, costUsd: answerCost } = await runSingleTurn({
+    system: {
+      stable: buildSystemStable(insights, gaopin),
+      volatile: buildSystemVolatile(ledger, todayStr, isSunday),
+    },
+    user: buildUserMessage(ledger.conversationLines, input, grepBlock),
     model: MODELS.COACH,
     signal,
     route: "coach",
     maxTokens: 4000, // 对话式回复可能较长 + 尾部 META
   });
+  const costUsd = planCost + answerCost;
 
   const { clean, meta } = splitCoachMeta(extractText(message));
   const reply = clean || "（这轮我没接住，换种说法再说一次？）";
