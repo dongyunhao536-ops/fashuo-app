@@ -281,16 +281,30 @@ function dedupeSearches(searches: PlannedSearch[]): PlannedSearch[] {
   });
 }
 
+/** 预检索结果总量兜底（字符）：≈1.2 万 token。超出的检索条整条截去（保留前面优先级高的心得/教材），
+ *  防宽词命中海量块把 Opus input 撑爆——这是答疑单题成本与首字延迟的最大变量（2026-07-02 降本）。 */
+const EXECUTED_TOTAL_CLIP = 24000;
+
 function formatExecuted(
   executed: { tool: string; query: string; result: string }[],
 ): string {
   if (executed.length === 0) {
     return "【系统预检索结果】（规划器未产出有效检索词——本题请谨慎作答、降低信心度并标★，在 META.confusion 里说明缺哪些检索）";
   }
-  const body = executed
-    .map((e) => `■ ${e.tool}「${e.query}」\n${e.result}`)
-    .join("\n\n");
-  return `【系统已按 v2.3 优先级预检索，命中结果如下，请据此作答并在六步预检清单如实反映】\n${body}`;
+  const parts: string[] = [];
+  let used = 0;
+  let dropped = 0;
+  for (const e of executed) {
+    const seg = `■ ${e.tool}「${e.query}」\n${e.result}`;
+    if (used + seg.length > EXECUTED_TOTAL_CLIP && parts.length > 0) {
+      dropped++;
+      continue;
+    }
+    parts.push(seg);
+    used += seg.length;
+  }
+  const note = dropped > 0 ? `\n（另有 ${dropped} 条检索因篇幅截去——已保留优先级更高的心得/教材命中）` : "";
+  return `【系统已按 v2.3 优先级预检索，命中结果如下，请据此作答并在六步预检清单如实反映】\n${parts.join("\n\n")}${note}`;
 }
 
 /**
@@ -391,7 +405,7 @@ export async function runPlanThenAnswer(opts: {
   if (plan.searches.length === 0) {
     plan = await doPlan(model, "plan-retry");
   }
-  const searches = dedupeSearches(plan.searches).slice(0, 16); // 封顶 16 条（强制心得+教材全覆盖需更多条），防规划器发散
+  const searches = dedupeSearches(plan.searches).slice(0, 12); // 封顶 12 条（两库全覆盖=每概念心得+教材各一条，6 个核心概念封顶足够；2026-07-02 降本 16→12）
 
   // ② 批量执行 grep（共享镜像缓存：每个 kind 只从 Supabase 拉一次）
   const mirrorCache = createMirrorCache();

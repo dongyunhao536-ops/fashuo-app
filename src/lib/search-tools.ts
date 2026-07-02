@@ -80,10 +80,11 @@ const KIND_BY_TOOL: Record<string, string> = {
   search_zhenti: "zhenti",
 };
 
-/** 命中行前后各带几行上下文 */
+/** 命中行前后各带几行上下文（±2 保证证据卡引用不被腰斩，别降） */
 const CONTEXT_LINES = 2;
-/** 每次检索最多返回几个上下文块（防"2024"这类宽词把 token 撑爆） */
-const MAX_BLOCKS = 8;
+/** 每次检索最多返回几个上下文块。2026-07-02 降本：8→5——强制两库全覆盖后检索条数上去了，
+ *  每条给 8 块会把作答 input 撑到 2-3 万 token（Opus 计费+拖慢首字）；5 块 × 10 来条查询覆盖已足。 */
+const MAX_BLOCKS = 5;
 /** 单行超过这个长度就裁剪（教材 txt 一段一行，可能几千字） */
 const LINE_CLIP = 160;
 

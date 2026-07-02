@@ -139,6 +139,20 @@ export default async function DashboardPage() {
         )}
       </section>
 
+      {/* 周复盘入口（删背诵重做时曾丢失，2026-07-02 加回） */}
+      <section className="glass-card mx-4 mt-4 mb-2 rounded-[16px]">
+        <Link href="/weekly" className="flex min-h-11 items-center px-4 py-3">
+          <IconTile tone="neutral">
+            <path d="M4 19V5M4 17l5-5 4 3 7-8" strokeLinecap="round" strokeLinejoin="round" />
+          </IconTile>
+          <div className="min-w-0 flex-1">
+            <div className="text-[16px]">周复盘</div>
+            <div className="mt-0.5 text-[12.5px] text-label3">本周复盘 + 下周指导 · 真实数据依据</div>
+          </div>
+          <Chevron />
+        </Link>
+      </section>
+
       <TabBar active="dash" />
     </main>
   );
