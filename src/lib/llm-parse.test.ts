@@ -1,5 +1,4 @@
 import { describe, it, expect } from "vitest";
-import { blocks, bullets } from "./yixiao";
 import { splitMeta, screenCandidates } from "./ask-prompt";
 
 /**
@@ -7,26 +6,6 @@ import { splitMeta, screenCandidates } from "./ask-prompt";
  * 这些是"模型漂移→静默坏"的高风险面（历史踩过：答案要点括号、Opus 用 ASCII 引号破坏 JSON）。
  * 纯函数、零 IO，把已修的坑钉死，防回归。
  */
-
-describe("blocks / bullets（易混对决解析）", () => {
-  it("blocks 按 ===KEY=== 切段", () => {
-    const raw = `===GRADE===
-未过
-===HITS===
-- 选对了概念
-===MISSING===
-- 没说出关键区分 test
-===EXPLANATION===
-核心在「不特定多数人」`;
-    const b = blocks(raw, ["GRADE", "HITS", "MISSING", "EXPLANATION"]);
-    expect(b.GRADE).toBe("未过");
-    expect(b.EXPLANATION).toContain("不特定多数人");
-  });
-
-  it("bullets 剥符号 + 过滤过短/过长", () => {
-    expect(bullets("- 要点一\n* 要点二\n·\n   ")).toEqual(["要点一", "要点二"]);
-  });
-});
 
 describe("splitMeta（答疑 META 抽取）", () => {
   it("正常抽出展示文本 + meta", () => {

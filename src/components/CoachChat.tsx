@@ -13,13 +13,12 @@ import { ChatComposer } from "@/components/ChatComposer";
 
 interface CoachResult {
   reply: string; // 自然对话正文（markdown）
-  weakEmitted: boolean;
-  errorsRecorded: { knowledge: string; matched: boolean }[];
+  errorsRecorded: { knowledge: string; matched: boolean }[]; // 云指令"记进错题本"
+  xindeRecorded: string[]; // 云指令"记录进心得"（直通正文）
   absorbedRecorded: string[];
-  askWeakAbsorbed: number;
   memorized: string[];
   logId: number | null;
-  logSkipped: boolean;
+  logSkipped: boolean; // 非汇报轮（提问/讨论）不记学习日志
   costText?: string;
   metaParsed?: boolean;
 }
@@ -266,8 +265,8 @@ function ReceiptLine({ tone, children }: { tone: "green" | "orange" | "label" | 
 function CoachReply({ r }: { r: CoachResult }) {
   const hasReceipt =
     r.errorsRecorded?.length > 0 ||
+    r.xindeRecorded?.length > 0 ||
     r.absorbedRecorded?.length > 0 ||
-    r.askWeakAbsorbed > 0 ||
     r.memorized?.length > 0;
 
   return (
@@ -288,7 +287,7 @@ function CoachReply({ r }: { r: CoachResult }) {
           </div>
           {r.errorsRecorded?.length > 0 && (
             <ReceiptLine tone="label">
-              记录 {r.errorsRecorded.length} 个错题：
+              按你的指令记入错题本 {r.errorsRecorded.length} 条：
               {r.errorsRecorded.map((e, i) => (
                 <span key={i}>
                   {i > 0 && "、"}
@@ -298,13 +297,15 @@ function CoachReply({ r }: { r: CoachResult }) {
               ))}
             </ReceiptLine>
           )}
-          {r.absorbedRecorded?.length > 0 && (
+          {r.xindeRecorded?.length > 0 && (
             <ReceiptLine tone="green">
-              销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} · 退出未吸收清单
+              按你的指令记入心得 {r.xindeRecorded.length} 条（直通正文）：{r.xindeRecorded.join("、")}
             </ReceiptLine>
           )}
-          {r.askWeakAbsorbed > 0 && (
-            <ReceiptLine tone="green">顺带吸收 {r.askWeakAbsorbed} 个「答疑暴露弱项」· 退出待办筐</ReceiptLine>
+          {r.absorbedRecorded?.length > 0 && (
+            <ReceiptLine tone="green">
+              销账 {r.absorbedRecorded.length} 个「已吸收」：{r.absorbedRecorded.join("、")} · 退出错题本
+            </ReceiptLine>
           )}
           {r.memorized?.length > 0 && (
             <ReceiptLine tone="label3">🧠 已记住：{r.memorized.join("；")}</ReceiptLine>
@@ -314,9 +315,8 @@ function CoachReply({ r }: { r: CoachResult }) {
 
       {/* 系统侧状态 */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[12px] text-label3">
-        {r.weakEmitted && <span className="text-orange">困惑点已投待办筐（PC 登记后进弱项）</span>}
         <span className="ml-auto">
-          {r.logId != null ? "已记入学习日志" : r.logSkipped ? "未记日志（纯交流）" : "⚠️ 日志入库失败"}
+          {r.logId != null ? "已记入学习日志（你汇报的进度）" : r.logSkipped ? "未记日志（非进度汇报）" : "⚠️ 日志入库失败"}
           {r.costText ? ` · ${r.costText}` : ""}
         </span>
       </div>

@@ -1,7 +1,6 @@
 import { runPlanThenAnswer, extractText, fmtCost } from "@/lib/anthropic";
 import { MODELS } from "@/lib/models";
 import { supabaseAdmin } from "@/lib/supabase";
-import { emitEvent } from "@/lib/events";
 import { bjDateStr } from "@/lib/dates";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError } from "@/lib/anthropic";
@@ -102,12 +101,13 @@ export async function POST(req: Request) {
       const full = extractText(message);
       const { clean, meta } = splitMeta(full);
 
-      // —— 沉淀到 events 待办筐（append-only，pending，PC 登记后才 consumed）——
+      // —— 指令制沉淀：心得直通正文 / 错题进错题本 / confusion 进跨会话记忆 ——
       await sinkProposals({
         subject: meta?.subject ?? subject ?? plannedSubject ?? null,
         // kp_id 列只收 XF-0042 式真编号；meta.kp 是考点短语，混进去会污染按 kp_id 的 join/聚合
         kpId: meta?.kp_id ?? body.kpId ?? null,
         meta,
+        question,
       });
 
       return {
@@ -137,57 +137,63 @@ export async function POST(req: Request) {
   });
 }
 
-/** 每问心得候选上限（防灌筐）：至多 1。提示词已要求仅"记录进心得"指令时投，这是兜底硬闸。 */
-const MAX_XINDE_PER_ASK = 1;
-/** 近期已"处理过"（收下/已登记/已忽略）的同一候选，N 天内不再重复投（pending 防重由 emitEvent 兜） */
-const RECENT_HANDLED_DAYS = 30;
+/** 每问指令记录上限（兜底硬闸）：心得至多 2、错题至多 3。提示词已限定仅云主动指令时才有值。 */
+const MAX_XINDE_PER_ASK = 2;
+const MAX_ERROR_PER_ASK = 3;
 
 /**
- * 防重二道闸：该 (type, subject, knowledge) 在近 N 天内是否已被处理过（confirmed/consumed/dismissed）。
- * emitEvent 只挡 pending（筐内噪音）；这里挡"问过、登记过/忽略过、又被模型重新吐出来"的跨批次重复。
+ * 沉淀（全部指令制，2026-07-01）：
+ * - 心得（云说"记录进心得"）→ 心得候选 status=confirmed + payload.拓展 → register-events 写进
+ *   做题心得「手动登记」正文区（与 /api/xinde/add、教练 xinde_notes 同管线同语义，直通无需背书）。
+ * - 错题（云说"记进错题本"）→ study_error(source=ask)，错题本=弱项，教练页/仪表盘同看。
+ * - 答疑摘要（confusion）→ ask_summary 跨会话记忆（不进任何待复核筐）。
  */
-async function recentlyHandled(
-  type: string,
-  subject: string | null,
-  knowledge: string,
-): Promise<boolean> {
-  const since = new Date(Date.now() - RECENT_HANDLED_DAYS * 86400_000).toISOString();
-  let q = supabaseAdmin
-    .from("events")
-    .select("id")
-    .eq("type", type)
-    .eq("knowledge", knowledge)
-    .in("status", ["confirmed", "consumed", "dismissed"])
-    .gte("created_at", since)
-    .limit(1);
-  q = subject == null ? q.is("subject", null) : q.eq("subject", subject);
-  const { data, error } = await q;
-  if (error) return false; // 查不动宁可冒重复也别丢候选
-  return !!(data && data.length);
-}
-
-/** 把候选弱项/候选心得 + 答疑摘要写入 events + ask_summary（pending 防重在 emitEvent；近期已处理防重在 recentlyHandled；登记去重在 PC） */
 async function sinkProposals(args: {
   subject: string | null;
   kpId: string | null;
   meta: AskMeta | null;
+  question: string;
 }) {
-  const { subject, kpId, meta } = args;
+  const { subject, kpId, meta, question } = args;
+  const todayStr = bjDateStr();
 
-  // 弱项候选：答疑【不再自动记】（云 2026-06-30 指令制）——硬关，无论 META 是否吐 weak_candidates 都不投。
-  // 心得候选：仅在云本题明确说"记录进心得"时（prompt 严控），才落进待办筐。
+  // 心得指令 → confirmed 直通（去重同 /api/xinde/add：同科目同规律 pending/confirmed 已有则跳过）
   const xindeCands = screenCandidates(meta?.xinde_candidates, (x) => x?.rule ?? "", MAX_XINDE_PER_ASK);
   for (const x of xindeCands) {
-    if (await recentlyHandled("心得候选", subject, x.rule)) continue;
-    await emitEvent({
+    const { data: dup } = await supabaseAdmin
+      .from("events")
+      .select("id")
+      .eq("type", "心得候选")
+      .eq("subject", subject ?? "")
+      .eq("knowledge", x.rule)
+      .in("status", ["pending", "confirmed"])
+      .limit(1);
+    if (dup && dup.length) continue;
+    const { error: xdErr } = await supabaseAdmin.from("events").insert({
       type: "心得候选",
       subject,
       kp_id: kpId,
       knowledge: x.rule,
       anchor: x.anchor ?? null,
-      source: "答疑",
-      payload: { note: "需真题二次背书才进正文（做题心得规则2）" },
+      source: "答疑记录",
+      payload: { note: "云主动指令·直通正文·即时生效", 拓展: true },
+      status: "confirmed",
     });
+    if (xdErr) console.error("[/api/ask] 心得记录失败：", xdErr.message);
+  }
+
+  // 错题指令 → study_error（错题本=弱项）
+  const errCands = screenCandidates(meta?.error_notes, (e) => e?.knowledge ?? "", MAX_ERROR_PER_ASK);
+  for (const e of errCands) {
+    const { error: seErr } = await supabaseAdmin.from("study_error").insert({
+      log_date: todayStr,
+      subject,
+      kp_id: kpId,
+      knowledge: e.knowledge,
+      source: "ask",
+      raw_input: question.slice(0, 500),
+    });
+    if (seErr) console.error("[/api/ask] 错题记录失败：", seErr.message);
   }
 
   // 写跨会话答疑记忆（ask_summary），90 天 TTL。

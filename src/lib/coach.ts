@@ -15,10 +15,11 @@ import coachCfg from "../../config/coach.json";
  *   （参考非法条，浓缩自 docs/经验帖方法论对比.md）+ config 轮次/双轨节奏。
  * 持续更新：账本每轮重查 + 对话(coach_message)每轮追加并回喂 + 长期记忆(coach_memory)按
  *   META.memory_updates 增量同步（进易变块，小、每轮重发）。
- * 闭环不动（A 期）：错题→study_error(独立通道，不碰 kp_state)、销账、复盘弱项→待办筐，均从 META 喂。
- * 检验=理解层（有没有吸收），逐字默写是背诵系统(L1/L2/L3)的事，教练不判分。
- * 复习闭环（2026-06-21 概念1）：答疑暴露的【非背诵】弱项候选（events,source=答疑,pending）并入账本，
- *   教练聊到相关时理解层捞回考；云吸收后报进 absorbed → 同时销 study_error + 把该答疑弱项置 consumed 退出待办筐。
+ * 记录=云主动指令制（2026-07-01）：错题本(study_error，=弱项唯一事实源)只在云说"记进错题本"才写；
+ *   心得只在云说"记录进心得"才写（confirmed 直通「手动登记」正文）；学习日志只在云【汇报】(is_report)才写。
+ *   教练觉得值得记可以在正文里【询问】，云答应后下一轮才落 META——绝不自作主张记录。
+ * 互通：教练每轮注入 答疑最近卡点(ask_summary open)；答疑侧注入 错题本+学习进度（ask-prompt.ts volatile）。
+ * 检验=理解层（有没有吸收），云的逐字背诵在 Anki app 做，教练不判分。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
@@ -54,6 +55,8 @@ export const METHODOLOGY = `【方法论参考·浓缩自 10+ 篇高分/在职/�
 故教练优先级：复盘 > 错题闭环 > 模考节奏 > 进度铺开。"串学还是学透"的答案是【双轨】(刑民精学+法综碎片背)落地到今晚/明天，别空谈原则。`;
 
 interface CoachMeta {
+  /** 云本轮是否在【汇报学习进度】——只有 true 才写学习日志（提问/讨论/被考=false） */
+  is_report?: boolean;
   subject?: string | null;
   chapter?: string | null;
   activity?: string | null;
@@ -61,19 +64,20 @@ interface CoachMeta {
   feeling?: string | null;
   confusion?: string | null;
   wrongs?: string[];
+  /** 云明确说"记录进心得"时才有值（指令制）→ 直通心得「手动登记」正文 */
+  xinde_notes?: string[];
   absorbed?: string[];
   memory_updates?: { fact: string; category?: string | null }[];
 }
 
 export interface CoachResult {
   reply: string; // 自然对话正文（markdown，展示用，已剥离 META）
-  errorsRecorded: { knowledge: string; matched: boolean }[]; // 自报错题写入 study_error（matched=钉到考点否）
+  errorsRecorded: { knowledge: string; matched: boolean }[]; // 云指令"记进错题本"→ study_error（matched=钉到考点否）
+  xindeRecorded: string[]; // 云指令"记录进心得"→ 心得候选 confirmed 直通正文
   absorbedRecorded: string[]; // 云说"懂了"→标 absorbed 销账退场
-  askWeakAbsorbed: number; // 顺带吸收掉的「答疑暴露弱项」条数（从待办筐消费）
-  weakEmitted: boolean; // 困惑点是否投待办筐
   memorized: string[]; // 本轮新记住的长期事实（UI 轻提示）
   logId: number | null; // study_log 行 id（仅状态展示用）
-  logSkipped: boolean; // true=纯咨询/无学习要素，主动不入库
+  logSkipped: boolean; // true=非汇报轮（提问/讨论），不入学习日志
   costUsd: number;
   metaParsed: boolean; // META 是否解析成功（debug）
 }
@@ -111,29 +115,19 @@ const cleanList = (arr: unknown): string[] =>
         .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s))
     : [];
 
-interface WeakItem {
-  label: string;
-  errorCount: number;
-}
-
 /**
- * 读账本：阶段/死线/Top5弱项/近N周投入/已学章节/最近流水/未吸收自报错题
- *   + 近 N 轮对话(coach_message) + 长期记忆(coach_memory)。每轮重查 → 数据/记忆持续更新。
+ * 读账本：阶段/死线/近N周投入/已学章节/最近流水/错题本(=弱项，study_error)
+ *   + 答疑最近卡点(ask_summary，互通只读) + 近 N 轮对话(coach_message) + 长期记忆(coach_memory)。
+ * 每轮重查 → 数据/记忆持续更新。2026-07-01：弱项与错题本合一（只有 study_error 一个事实源）；
+ * 答疑侧数据经 ask_summary 注入（原 events 弱项候选链已随指令制下线）。
  */
 async function loadLedger(today: Date) {
   const stage = currentStage(today);
   const daysToExam = Math.max(0, daysBetween(new Date(EXAM_DATE), today));
   const daysToBase = daysBetween(new Date(BASE_DEADLINE), today);
 
-  const [weakRes, progressRes, recentRes, selfErrRes, askWeakRes, msgRes, memRes] =
+  const [progressRes, recentRes, selfErrRes, askStuckRes, msgRes, memRes] =
     await Promise.all([
-      supabaseAdmin
-        .from("kp_state")
-        .select("subject, ext, error_count")
-        .gt("error_count", 0)
-        .eq("mastered", false)
-        .order("error_count", { ascending: false })
-        .limit(5),
       supabaseAdmin
         .from("study_log")
         .select("log_date, subject, chapter")
@@ -145,20 +139,19 @@ async function loadLedger(today: Date) {
         .select("log_date, subject, chapter, activity, raw_input")
         .order("id", { ascending: false })
         .limit(3),
-      // 未吸收自报错题（独立通道，仅教练读；不碰 kp_state）
+      // 错题本 = 弱项（云主动记录的，status=open 未吸收）
       supabaseAdmin
         .from("study_error")
         .select("id, subject, kp_id, knowledge, log_date")
         .eq("status", "open"),
-      // 答疑暴露、尚未处理的弱项候选（非背诵点）——并入教练复习闭环：聊天里理解层捞回考、吸收即销账
+      // 答疑最近卡点（互通只读：云在答疑里确实卡过的点，ask_summary 指令制严控后噪音低）
       supabaseAdmin
-        .from("events")
-        .select("subject, knowledge, anchor, created_at")
-        .eq("type", "弱项候选")
-        .eq("status", "pending")
-        .eq("source", "答疑")
+        .from("ask_summary")
+        .select("subject, confusion, created_at")
+        .eq("status", "open")
+        .not("confusion", "is", null)
         .order("created_at", { ascending: false })
-        .limit(8),
+        .limit(6),
       // 近 8 条对话（对话连续性）
       supabaseAdmin
         .from("coach_message")
@@ -172,11 +165,6 @@ async function loadLedger(today: Date) {
         .order("updated_at", { ascending: false })
         .limit(40),
     ]);
-
-  const topWeak: WeakItem[] = (weakRes.data ?? []).map((k) => ({
-    label: `${k.subject}·${(k.ext as { name?: string })?.name ?? "?"}（错${k.error_count}）`,
-    errorCount: k.error_count ?? 0,
-  }));
 
   const chaptersBySubject = new Map<string, string[]>();
   for (const r of progressRes.data ?? []) {
@@ -198,29 +186,11 @@ async function loadLedger(today: Date) {
     return `${head}${quote}`;
   });
 
-  // 自报错题自动退场：匹配考点已在背诵 mastered → 标 absorbed（仅【读】kp_state 判定）
+  // 错题本 = 弱项（唯一事实源 study_error）：按 (考点/科目+短语) 聚合，频次×新近排序
   const openErrs = selfErrRes.data ?? [];
-  const openKpIds = [...new Set(openErrs.map((r) => r.kp_id).filter((x): x is string => !!x))];
-  let masteredIds = new Set<string>();
-  if (openKpIds.length) {
-    const { data: mas } = await supabaseAdmin
-      .from("kp_state")
-      .select("kp_id")
-      .in("kp_id", openKpIds)
-      .eq("mastered", true);
-    masteredIds = new Set((mas ?? []).map((r) => r.kp_id as string));
-    if (masteredIds.size) {
-      await supabaseAdmin
-        .from("study_error")
-        .update({ status: "absorbed", absorbed_via: "kp_mastered", absorbed_at: new Date().toISOString() })
-        .in("kp_id", [...masteredIds])
-        .eq("status", "open");
-    }
-  }
   const escT = coachCfg.红线.同弱项错次转专题;
   const errMap = new Map<string, { label: string; n: number; last: string }>();
   for (const r of openErrs) {
-    if (r.kp_id && masteredIds.has(r.kp_id)) continue;
     const subj = (r.subject as string | null) ?? "未分类";
     const key = (r.kp_id as string | null) ?? `${subj}::${r.knowledge}`;
     const cur = errMap.get(key) ?? { label: `${subj}·${r.knowledge}`, n: 0, last: "" };
@@ -234,11 +204,11 @@ async function loadLedger(today: Date) {
     .slice(0, 8)
     .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}${e.n >= escT ? " 🔺转专题" : ""}（最近${e.last || "?"}）`);
 
-  // 答疑暴露弱项（非背诵点）：并入复习闭环，聊到相关时理解层捞回考、吸收即销账
-  const askWeakLines = (askWeakRes.data ?? []).map((r) => {
+  // 答疑最近卡点（互通只读）：云在答疑里确实卡过的点，聊到相关时可顺手帮他打通
+  const askStuckLines = (askStuckRes.data ?? []).map((r) => {
     const subj = (r.subject as string | null) ?? "未分类";
     const d = r.created_at ? bjDateStr(new Date(r.created_at)) : "?";
-    return `${subj}·${r.knowledge}${r.anchor ? `（锚${r.anchor}）` : ""}（答疑${d}）`;
+    return `${subj}·${String(r.confusion).slice(0, 60)}（答疑${d}）`;
   });
 
   // 对话历史（chronological：旧→新；每条截断防爆）
@@ -252,8 +222,8 @@ async function loadLedger(today: Date) {
   );
 
   return {
-    stage, daysToExam, daysToBase, topWeak,
-    progressLines, recentLines, selfErrorLines, askWeakLines, conversationLines, memoryFacts,
+    stage, daysToExam, daysToBase,
+    progressLines, recentLines, selfErrorLines, askStuckLines, conversationLines, memoryFacts,
   };
 }
 
@@ -334,9 +304,12 @@ ${insightsBlock}
 }
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点；否则一律空，绝不因为云答错/没掌握就自动记"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"is_report":true/false（云本轮是否在【汇报自己学了什么】——他主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
-规则（记录=云主动指令制，2026-06-30）：**错题本只在云本轮明确说"记进错题本/记录进错题本"时才记**（填 wrongs），其它一律空——云只是问问题、汇报进度、说"还不太熟/大概懂了"都【不记错题、不记弱项】。学习进度照常进学习日志（见下），错题/弱项只认云的主动指令。confusion 仅供你追问、不入库。memory_updates 只发【新的/变化的】耐久事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
+规则（记录=云主动指令制，2026-06-30）：
+- **学习日志只认汇报**：is_report=true（云明确在汇报学习进度）时才填 subject/chapter/activity/accuracy；云提问/讨论/被考时这些全省略、is_report=false——系统只在 is_report=true 时写学习日志。
+- **错题本/心得只认指令**：wrongs 只在云说"记进错题本"时填；xinde_notes 只在云说"记录进心得"时填。你觉得某个错误/规律很值得记时，【可以在正文里问一句】"要不要我记进错题本/心得？"——云答应了，下一轮再填；【绝不允许不问自记】。
+- confusion 仅供你追问、不入库。memory_updates 只发【新的/变化的】耐久事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
 
 /** 易变块（每轮重发，不缓存）：长期记忆 + 学习数据账本。isSunday=周日做积压复盘。 */
@@ -354,17 +327,16 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 【当前账本】
 - 今天：${todayStr}　距初试 ${ledger.daysToExam} 天　距基础结业死线 ${ledger.daysToBase > 0 ? ledger.daysToBase + " 天" : "已过期 " + -ledger.daysToBase + " 天"}
 - 阶段模式：${ledger.stage}
-- Top5 弱项（按错次）：${ledger.topWeak.length ? ledger.topWeak.map((w) => w.label).join("；") : "（暂无错次记录）"}
 
-【已学进度·学习流水（云汇报的学习进度都自动记在这——你要【持续关注、主动对照引用】，让云觉得每次汇报都被记住、被跟进；每科最多6章、最近在前）】
+【已学进度·学习流水（云在教练页汇报的学习进度记在这——你要【持续关注、主动对照引用】，让云觉得每次汇报都被记住、被跟进；每科最多6章、最近在前）】
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
-【自报错题·未吸收清单（云汇报做错的，按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）
+【错题本（=弱项·唯一事实源，云主动说"记进错题本"才进来；按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）
 ${backlogDirective}】
-${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （无未吸收的自报错题）"}
+${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （错题本是空的）"}
 
-【答疑暴露·待复习吸收（云在答疑里卡过/可能答错的【非背诵点】，吸收前一直挂着——聊到相关时顺手用【理解层】考他、帮他打通；他用自己话讲清/会辨析了，就在 absorbed 里报上来销账）】
-${ledger.askWeakLines.length ? ledger.askWeakLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
+【答疑最近卡点（互通·只读参考：云在答疑页确实卡过的点——聊到相关时顺手用【理解层】考他、帮他打通；他讲清了就引导他自己去答疑页或跟你说"记进错题本/我会了"）】
+${ledger.askStuckLines.length ? ledger.askStuckLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
 }
 
 /** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息（仿答疑做法，runSingleTurn 只收单条 user）。 */
@@ -412,11 +384,14 @@ export async function runCoach(
   };
   const wrongs = cleanList(meta?.wrongs);
   const absorbed = cleanList(meta?.absorbed);
+  const xindeNotes = cleanList(meta?.xinde_notes);
 
-  // 入库门槛：有学习要素才写 study_log（纯咨询不污染进度记录）
+  // 学习日志只认汇报（云 2026-07-01）：is_report=true（云明确在汇报学了什么）且有实质学习要素才写；
+  // 提问/讨论/被考一律不记——系统绝不自作主张记进度。
   const isStudyRecord =
-    parsed.subject != null || parsed.chapter != null ||
-    parsed.accuracy != null || (parsed.activity != null && parsed.activity !== "其他") || wrongs.length > 0;
+    meta?.is_report === true &&
+    (parsed.subject != null || parsed.chapter != null ||
+      parsed.accuracy != null || (parsed.activity != null && parsed.activity !== "其他"));
 
   let logId: number | null = null;
   if (isStudyRecord) {
@@ -438,11 +413,7 @@ export async function runCoach(
     logId = (logRow?.id as number | undefined) ?? null;
   }
 
-  // 困惑点仅作本轮理解上下文，【不再自动进弱项库/待办筐】——云 2026-06-30 拍板：只在他主动说"记录"时才记。
-  const weakEmitted = false;
-
   // 错题本：只有云本轮【明确说"记进错题本"】时 META.wrongs 才有值（见 prompt 严控）；否则 wrongs 恒空、不写。
-  // 且不再对没钉到考点的错题兜底投待办筐弱项候选（那是过去的噪音来源）。
   const errorsRecorded: { knowledge: string; matched: boolean }[] = [];
   for (const phrase of wrongs.slice(0, 12)) {
     let kpId: string | null = null;
@@ -464,9 +435,38 @@ export async function runCoach(
     errorsRecorded.push({ knowledge: phrase, matched: !!kpId });
   }
 
+  // 心得（指令制）：云明确说"记录进心得"→ 走手动直通管线（心得候选 status=confirmed + payload.拓展，
+  // register-events 认它并写进做题心得「手动登记」正文区，与 /api/xinde/add 同管线同语义）。
+  const xindeRecorded: string[] = [];
+  for (const rule of xindeNotes.slice(0, 5)) {
+    const { data: dup } = await supabaseAdmin
+      .from("events")
+      .select("id")
+      .eq("type", "心得候选")
+      .eq("subject", parsed.subject ?? "")
+      .eq("knowledge", rule)
+      .in("status", ["pending", "confirmed"])
+      .limit(1);
+    if (dup && dup.length) {
+      xindeRecorded.push(rule);
+      continue;
+    }
+    const { error: xdErr } = await supabaseAdmin.from("events").insert({
+      type: "心得候选",
+      subject: parsed.subject,
+      kp_id: null,
+      knowledge: rule,
+      anchor: null,
+      source: "教练记录",
+      payload: { note: "云主动指令·直通正文·即时生效", 拓展: true },
+      status: "confirmed",
+    });
+    if (xdErr) console.error("[coach] 心得记录失败：", xdErr.message);
+    else xindeRecorded.push(rule);
+  }
+
   // 销账：云说"懂了"→ 把未吸收的对应 study_error 标 absorbed（手动退场）
   const absorbedRecorded: string[] = [];
-  let askWeakAbsorbed = 0;
   for (const phrase of absorbed.slice(0, 12)) {
     let kpId: string | null = null;
     try {
@@ -483,19 +483,6 @@ export async function runCoach(
     const { error: absErr } = await q;
     if (absErr) console.error("[coach] 销账失败：", absErr.message);
     else absorbedRecorded.push(phrase);
-
-    // 同步关掉「答疑暴露弱项」里被吸收的那条（教练理解层吸收 = 一种合法消费，退出待办筐）
-    let ev = supabaseAdmin
-      .from("events")
-      .update({ status: "consumed", consumed_at: new Date().toISOString() })
-      .eq("type", "弱项候选")
-      .eq("status", "pending")
-      .eq("source", "答疑")
-      .ilike("knowledge", `%${phrase}%`);
-    if (parsed.subject) ev = ev.eq("subject", parsed.subject);
-    const { data: closedEv, error: evErr } = await ev.select("id");
-    if (evErr) console.error("[coach] 答疑弱项消费失败：", evErr.message);
-    else askWeakAbsorbed += closedEv?.length ?? 0;
   }
 
   // 长期记忆增量同步（云要的"随时同步记忆"）：只写新事实，精确去重
@@ -525,9 +512,8 @@ export async function runCoach(
   return {
     reply,
     errorsRecorded,
+    xindeRecorded,
     absorbedRecorded,
-    askWeakAbsorbed,
-    weakEmitted,
     memorized,
     logId,
     logSkipped: !isStudyRecord,

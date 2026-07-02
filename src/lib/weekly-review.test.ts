@@ -7,7 +7,7 @@ const empty: WeeklyReview = {
   activity: { asks: 0, coachLogs: 0 },
   studied: [],
   solved: { absorbedErrors: [] },
-  weak: { top: [], openErrors: [] },
+  weak: { top: [] },
   askPoints: [],
   inbox: { createdByType: {}, pendingBacklog: 0 },
   cost: { totalUsd: 0, byRoute: [] },
@@ -31,15 +31,17 @@ describe("formatWeeklyDataText（喂复盘层的真实数据序列化）", () =>
         absorbedErrors: [{ subject: "刑法", knowledge: "正当防卫限度" }],
       },
       weak: {
-        top: [{ kp_id: "XF-0009", subject: "刑法", name: "因果关系", errorCount: 4 }],
-        openErrors: [{ subject: "民法", knowledge: "善意取得" }],
+        top: [
+          { subject: "刑法", knowledge: "因果关系", n: 4, last: "2026-06-10" },
+          { subject: "民法", knowledge: "善意取得", n: 1, last: "2026-06-09" },
+        ],
       },
     };
     const t = formatWeeklyDataText(r);
     expect(t).toContain("刑法：第3章、第4章");
     expect(t).toContain("答疑 3 次 / 教练打卡 5 条");
     expect(t).toContain("本周吸收错题 1 个：刑法·正当防卫限度");
-    expect(t).toContain("刑法·因果关系(错4)");
+    expect(t).toContain("刑法·因果关系(×4)");
     expect(t).toContain("民法·善意取得");
   });
 });

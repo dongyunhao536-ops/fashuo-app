@@ -105,7 +105,7 @@ export default async function DashboardPage() {
         </Link>
       </section>
 
-      {/* 最需要攻克（弱项·答疑/教练沉淀） */}
+      {/* 最需要攻克（错题本=弱项，你主动记录的） */}
       <div className="mt-6 flex items-baseline justify-between px-8 pb-2">
         <h2 className="text-[13px] text-label2">最需要攻克</h2>
         <Link href="/errors" className="text-[12px] text-blue">错题本 ›</Link>
@@ -113,27 +113,27 @@ export default async function DashboardPage() {
       <section className="glass-card mx-4 mb-2 rounded-[16px]">
         {d.top5.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-label3">
-            暂无弱项——答疑/教练里暴露的薄弱点会沉淀到这里
+            错题本是空的——在教练/答疑里说「记进错题本」才会进来
           </div>
         ) : (
           <div className="divide-y divide-hairline">
-            {d.top5.map((w) => (
+            {d.top5.map((w, i) => (
               <Link
-                key={w.kp_id}
+                key={i}
                 href="/coach?view=weak"
                 className="flex min-h-11 items-center px-4 py-3"
               >
                 <div className="flex-1">
-                  <div className="line-clamp-1 text-[15px]">{w.name}</div>
+                  <div className="line-clamp-1 text-[15px]">{w.knowledge}</div>
                   <div className="mt-0.5 text-[13px] text-label2">
-                    {SUB_SHORT[w.subject] ?? w.subject} · 错 {w.error_count} 次
+                    {w.subject ? (SUB_SHORT[w.subject] ?? w.subject) : "未分类"} · 记 {w.n} 次
                   </div>
                 </div>
                 <span className="ml-2 text-[14px] text-label3">›</span>
               </Link>
             ))}
             <Link href="/coach?view=weak" className="block px-4 py-2.5 text-[13px] text-blue">
-              全部弱项 ›
+              全部错题 ›
             </Link>
           </div>
         )}

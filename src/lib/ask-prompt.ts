@@ -31,7 +31,8 @@ export interface AskMeta {
   starred?: boolean | null;
   step_stuck?: number | null;
   confusion?: string | null;
-  weak_candidates?: { knowledge: string; anchor?: string }[];
+  /** 云明确说"记进错题本"时才有值（指令制）→ 写 study_error（错题本=弱项） */
+  error_notes?: { knowledge: string }[];
   xinde_candidates?: { rule: string; anchor?: string }[];
 }
 
@@ -166,43 +167,90 @@ export function buildAskSystemStable(): string {
 ═══ 最后：输出机器可读元数据块（给系统沉淀待办筐用，会从展示中剥离）═══
 在全部回答之后，另起一行输出且仅输出一个如下块（严格 JSON，字段缺省给 null 或空数组）：
 ${META_OPEN}
-{"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"【默认省略】仅云本题确实卡住/答错、值得下次答疑跟进才填一句；普通提问、云只是没学过、答完就懂的一律省略","weak_candidates":[{"knowledge":"知识点","anchor":"行号/题号/心得号"}],"xinde_candidates":[{"rule":"规律一句话","anchor":"真题/心得依据"}]}
+{"subject":"刑法|民法|...","kp":"考点短语（自由文本）","kp_id":"XF-0042 式准确编号，不能确定就 null【禁止编造】","question_type":"概念|案例|法条|选项排除|简答","confidence":0-100,"starred":true/false,"step_stuck":1-6或null,"confusion":"【默认省略】仅云本题确实卡住/答错、值得下次答疑跟进才填一句；普通提问、云只是没学过、答完就懂的一律省略","error_notes":[{"knowledge":"【默认空·仅主动指令】只有云明确说'记进错题本/记录进错题本'时才填对应考点短语"}],"xinde_candidates":[{"rule":"【默认空·仅主动指令】只有云明确说'记录进心得/这条记下来'时才填那条规律","anchor":"真题/教材/讲义依据"}]}
 ${META_CLOSE}
-说明（记录=云主动指令制，2026-06-30；待办筐是云手动复核的，默认什么都别投）：
-- weak_candidates：【永远空数组】答疑不再自动记弱项——云嫌噪音，一律不投。
-- xinde_candidates：【默认空】只有云本题里【明确说"记录进心得 / 记进心得 / 这条记下来"】时，才把那条规律投进来；否则空——不许因为你觉得是个规律就自动投。
+说明（记录=云主动指令制，2026-07-01）：
+- error_notes：【默认空】只有云明确说"记进错题本"才填 → 系统写进错题本（错题本=弱项，教练同看这份）。
+- xinde_candidates：【默认空】只有云明确说"记录进心得"才填 → 直通心得「手动登记」正文。
+- 你觉得本题的错误/规律很值得记时，【可以在答案末尾问一句】"要不要我记进错题本/心得？"——云答应了，他下一轮说记你再填；【绝不允许不问自记】。
+- 答疑里的问答【不写学习日志】：云在这里问问题不算"学了"，进度只在教练页汇报才记录。
 全部为空时给空数组 []。这个块不要加任何解释文字。`;
 }
 
 /**
- * 易变记忆段（不缓存）：按 subject 检索 ask_summary 里 open 且未过期的历史卡点，注入跨会话记忆。
- * 系统设计/12 §五：结构化字段 + TTL，检索式注入，不回 markdown。
+ * 易变记忆段（不缓存）：
+ * ① 教练侧互通数据（只读参考）：错题本 open（=弱项，云主动记录的）+ 最近学习进度（study_log）——
+ *    答疑据此个性化（本题撞上他的错题就点破"这是你错题本里挂着的"；结合他学到哪了把握讲解深度）。
+ * ② 按 subject 检索 ask_summary 里 open 且未过期的历史卡点（跨会话记忆）。
  */
 export async function buildAskSystemVolatile(subject?: string): Promise<string> {
-  if (!subject) return "";
   const today = bjDateStr();
-  const { data, error } = await supabaseAdmin
-    .from("ask_summary")
-    .select("kp_id, question_type, step_stuck, confusion, created_at")
-    .eq("subject", subject)
-    .eq("status", "open")
-    .not("confusion", "is", null) // 历史上写过 confusion=null 的空行，注入只取有内容的
-    .or(`ttl_until.is.null,ttl_until.gte.${today}`)
-    .order("created_at", { ascending: false })
-    .limit(5);
+  const [errRes, logRes, stuckRes] = await Promise.all([
+    supabaseAdmin
+      .from("study_error")
+      .select("subject, knowledge, log_date")
+      .eq("status", "open")
+      .order("log_date", { ascending: false })
+      .limit(30),
+    supabaseAdmin
+      .from("study_log")
+      .select("log_date, subject, chapter, activity")
+      .order("id", { ascending: false })
+      .limit(5),
+    subject
+      ? supabaseAdmin
+          .from("ask_summary")
+          .select("kp_id, question_type, step_stuck, confusion, created_at")
+          .eq("subject", subject)
+          .eq("status", "open")
+          .not("confusion", "is", null)
+          .or(`ttl_until.is.null,ttl_until.gte.${today}`)
+          .order("created_at", { ascending: false })
+          .limit(5)
+      : Promise.resolve({ data: null, error: null }),
+  ]);
 
-  if (error || !data || data.length === 0) return "";
+  const parts: string[] = [];
 
-  const lines = data
-    .map((r) => {
-      const head = [r.kp_id, r.question_type].filter(Boolean).join("·");
-      return `· ${head ? `【${head}】` : ""}${r.confusion ?? ""}${
-        r.step_stuck ? `（曾卡在第${r.step_stuck}步）` : ""
-      }`;
-    })
-    .join("\n");
+  // 错题本聚合（subject+knowledge 去重计数），最多 10 条
+  const agg = new Map<string, { label: string; n: number }>();
+  for (const r of errRes.data ?? []) {
+    if (!r.knowledge) continue;
+    const key = `${r.subject ?? "未分类"}::${r.knowledge}`;
+    const cur = agg.get(key) ?? { label: `${r.subject ?? "未分类"}·${r.knowledge}`, n: 0 };
+    cur.n++;
+    agg.set(key, cur);
+  }
+  const errLines = [...agg.values()]
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 10)
+    .map((e) => `· ${e.label}${e.n > 1 ? ` ×${e.n}` : ""}`);
+  const logLines = (logRes.data ?? []).map(
+    (r) => `· ${r.log_date} ${[r.subject, r.chapter, r.activity].filter(Boolean).join(" ")}`,
+  );
+  if (errLines.length || logLines.length) {
+    parts.push(`═══ 教练侧数据（互通·只读参考，个性化用，别在答案里逐条复述）═══
+【错题本（=弱项，云主动记录的未吸收错题）】
+${errLines.length ? errLines.join("\n") : "· （空）"}
+【最近学习进度（云在教练页汇报的）】
+${logLines.length ? logLines.join("\n") : "· （暂无）"}
+本题若撞上错题本条目 → 明确点破"这是你错题本里挂着的 X"并着重讲透；讲解深浅可参考他学到哪了。`);
+  }
 
-  return `═══ 跨会话答疑记忆（${subject}，仅供参考，别硬套）═══
+  const stuck = stuckRes.data ?? [];
+  if (subject && stuck.length > 0) {
+    const lines = stuck
+      .map((r) => {
+        const head = [r.kp_id, r.question_type].filter(Boolean).join("·");
+        return `· ${head ? `【${head}】` : ""}${r.confusion ?? ""}${
+          r.step_stuck ? `（曾卡在第${r.step_stuck}步）` : ""
+        }`;
+      })
+      .join("\n");
+    parts.push(`═══ 跨会话答疑记忆（${subject}，仅供参考，别硬套）═══
 云之前在以下点卡过，若本题相关可顺带点一句帮他打通；若无关则忽略：
-${lines}`;
+${lines}`);
+  }
+
+  return parts.join("\n\n");
 }

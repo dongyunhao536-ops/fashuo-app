@@ -33,7 +33,7 @@ interface AskResult {
   costText?: string;
   grepHits?: { tool: string; query: string; lines: number[] }[];
   meta?: {
-    weak_candidates?: { knowledge: string }[];
+    error_notes?: { knowledge: string }[];
     xinde_candidates?: { rule: string }[];
   } | null;
 }
@@ -313,7 +313,7 @@ function AskWelcome() {
 
 function AnswerBubble({ result }: { result: AskResult }) {
   const cand =
-    (result.meta?.weak_candidates?.length ?? 0) +
+    (result.meta?.error_notes?.length ?? 0) +
     (result.meta?.xinde_candidates?.length ?? 0);
   const confTone =
     result.confidence == null
@@ -347,21 +347,21 @@ function AnswerBubble({ result }: { result: AskResult }) {
         {result.costText && <span className="text-label3">{result.costText}</span>}
       </div>
 
-      {/* 候选沉淀提示 */}
+      {/* 指令记录回执（仅你说"记进错题本/记录进心得"时出现） */}
       {cand > 0 && (
         <div className="mt-2.5 rounded-[10px] bg-blue/15 px-3 py-2.5 text-[13px] leading-relaxed text-blue-soft">
-          本轮沉淀 {cand} 个候选（
+          按你的指令记录 {cand} 条（
           {[
-            result.meta?.weak_candidates?.length
-              ? `${result.meta.weak_candidates.length} 弱项`
+            result.meta?.error_notes?.length
+              ? `${result.meta.error_notes.length} 错题 → 错题本`
               : "",
             result.meta?.xinde_candidates?.length
-              ? `${result.meta.xinde_candidates.length} 心得`
+              ? `${result.meta.xinde_candidates.length} 心得 → 直通正文`
               : "",
           ]
             .filter(Boolean)
             .join(" · ")}
-          ）已进待办筐，PC 登记后生效。
+          ）。
         </div>
       )}
     </div>

@@ -1,52 +1,28 @@
-import { supabaseAdmin } from "@/lib/supabase";
 import { bjDateStr } from "@/lib/dates";
 import { TabBar } from "@/components/TabBar";
 import { PageNav } from "@/components/PageNav";
 import { EmptyState } from "@/components/EmptyState";
 import { ErrorActions } from "@/components/ErrorActions";
+import { getErrorBook } from "@/lib/errorbook";
 
 /**
- * 错题本（自报未吸收错题，study_error status=open）。
- * 给云一个随时清的口子：「我会了」收口、「不是错题」移噪。教练也读同一份清单（聊到就考你；周日做积压复盘）。
- * 按 (科目, 知识点) 聚合，频次×新近排序。
+ * 错题本（= 弱项，study_error status=open，云主动"记进错题本"才进——指令制）。
+ * 「我会了」收口、「不是错题」移噪。教练/答疑都读同一份（教练错题tab、答疑互通注入、周日积压复盘）。
  */
 
 export const dynamic = "force-dynamic";
 
-interface Agg {
-  subject: string | null;
-  knowledge: string;
-  n: number;
-  last: string;
-}
-
 export default async function ErrorsPage() {
-  const { data, error } = await supabaseAdmin
-    .from("study_error")
-    .select("subject, knowledge, log_date")
-    .eq("status", "open")
-    .order("log_date", { ascending: false });
-
-  const map = new Map<string, Agg>();
-  for (const r of data ?? []) {
-    if (!r.knowledge) continue;
-    const subject = (r.subject as string | null) ?? null;
-    const key = `${subject ?? "未分类"}::${r.knowledge}`;
-    const cur = map.get(key) ?? { subject, knowledge: String(r.knowledge), n: 0, last: "" };
-    cur.n++;
-    const d = String(r.log_date ?? "");
-    if (d > cur.last) cur.last = d;
-    map.set(key, cur);
-  }
-  const items = [...map.values()].sort((a, b) => b.n - a.n || (a.last < b.last ? 1 : -1));
+  const items = await getErrorBook();
+  const error = null as { message: string } | null;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
       <PageNav title="错题本" meta={`${items.length} 条未吸收`} />
 
       <p className="px-5 pb-1 pt-3 text-[13.5px] leading-relaxed text-label2">
-        你汇报给教练的未吸收错题。「我会了」收口退出清单；「不是错题」移噪。
-        教练也读这份清单——聊到就考你，周日做积压复盘。
+        你在教练/答疑里说「记进错题本」的条目（错题本=弱项）。「我会了」收口退出；「不是错题」移噪。
+        教练和答疑都读这份清单——聊到就考你、答到就点破。
       </p>
 
       {error && (
@@ -59,7 +35,7 @@ export default async function ErrorsPage() {
             <EmptyState
               tone="green"
               title="错题本是空的"
-              desc='跟教练汇报"今天做错了 X"会沉淀到这里，吸收后自动退出。'
+              desc='在教练或答疑里说"记进错题本"才会进来——只记你亲自拍板的。'
               icon={
                 <>
                   <circle cx="12" cy="12" r="9" />

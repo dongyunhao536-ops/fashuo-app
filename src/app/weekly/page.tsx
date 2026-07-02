@@ -69,10 +69,10 @@ export default async function WeeklyPage() {
         <Section title="需关注">
           {r.weak.top.length > 0 && (
             <div className="text-[13px] text-label2">
-              <span className="text-label3">错次最高：</span>
+              <span className="text-label3">错题本（=弱项）：</span>
               {r.weak.top
                 .slice(0, 5)
-                .map((w) => `${SUB_SHORT[w.subject] ?? w.subject}·${w.name}(错${w.errorCount})`)
+                .map((w) => `${w.subject ? (SUB_SHORT[w.subject] ?? w.subject) : "未分类"}·${w.knowledge}${w.n > 1 ? `(×${w.n})` : ""}`)
                 .join("、")}
             </div>
           )}
