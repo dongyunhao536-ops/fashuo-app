@@ -16,7 +16,7 @@ export type EventType = "弱项候选" | "心得候选" | "已强化";
  * PC 登记员 XINDE_FILE 键（规范名）对不上，会被当「暂无心得文件」跳过、永远卡在待办筐。
  * 在唯一投递口归一，从源头断掉这类沉淀漂移。
  */
-const SUBJECT_CANON = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
+export const SUBJECT_CANON = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
 const SUBJECT_ALIAS: Record<string, string> = {
   法理学: "法理",
   宪法学: "宪法",

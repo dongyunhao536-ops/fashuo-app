@@ -1,7 +1,7 @@
 import { runPlanThenAnswer, extractText, fmtCost } from "@/lib/anthropic";
 import { MODELS } from "@/lib/models";
 import { supabaseAdmin } from "@/lib/supabase";
-import { bjDateStr } from "@/lib/dates";
+import { bjDateStr, bjDayStart } from "@/lib/dates";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError } from "@/lib/anthropic";
 import {
@@ -10,8 +10,10 @@ import {
   buildAskSystemVolatile,
   splitMeta,
   screenCandidates,
+  isNoiseConfusion,
   type AskMeta,
 } from "@/lib/ask-prompt";
+import { normalizeSubject, SUBJECT_CANON } from "@/lib/events";
 import { streamJson } from "@/lib/stream-response";
 
 /**
@@ -108,6 +110,8 @@ export async function POST(req: Request) {
         kpId: meta?.kp_id ?? body.kpId ?? null,
         meta,
         question,
+        // 带 history = 同一场对话的追问轮（confusion 每轮在收敛，只留最新一条）
+        hasHistory: history.length > 0,
       });
 
       return {
@@ -153,8 +157,13 @@ async function sinkProposals(args: {
   kpId: string | null;
   meta: AskMeta | null;
   question: string;
+  /** 本轮是否带对话历史（追问轮）——决定 ask_summary 是置换还是新增 */
+  hasHistory: boolean;
 }) {
-  const { subject, kpId, meta, question } = args;
+  const { kpId, meta, question, hasHistory } = args;
+  // 科目归一（法理学→法理等）：ask_summary/study_error 与 kp_state、教练注入、PC 登记员
+  // 都按规范名分组，全称漂移会让同一科的卡点被拆成两组（2026-07-02 线上见"法理学"行）
+  const subject = normalizeSubject(args.subject);
   const todayStr = bjDateStr();
 
   // 心得指令 → confirmed 直通（去重同 /api/xinde/add：同科目同规律 pending/confirmed 已有则跳过）
@@ -196,11 +205,29 @@ async function sinkProposals(args: {
     if (seErr) console.error("[/api/ask] 错题记录失败：", seErr.message);
   }
 
-  // 写跨会话答疑记忆（ask_summary），90 天 TTL。
-  // 卫生规则（2026-06-11）：没有 confusion 的轮次不写（原先每问必写，空行挤占注入的 5 个名额、
-  // dashboard open 计数虚高）；同 subject+kp_id 的旧 open 行先置 superseded，记忆只留最新一条。
+  // 写跨会话答疑记忆（ask_summary），90 天 TTL。这是首页「答疑未收口」的唯一来源，
+  // 必须只收云本人的真实卡点（2026-07-03 收严，此前 45 条里混着检索缺口注记/追问马拉松刷屏）：
+  // - 卫生规则（2026-06-11）：没有 confusion 的轮次不写。
+  // - 五科门禁：科目归一后不在五科（如"备考规划"）不写——那不是考点卡点。
+  // - 噪音闸（isNoiseConfusion）：检索缺口/题干笔误类系统注记不写，只打日志。
+  // - 追问置换：带 history 的轮次先把同科目【当天】的 open 置 superseded——同一场对话
+  //   的 confusion 每轮在收敛（越聊越准），只留最新一条；旧版每轮追加，一场"打击错误"
+  //   对话灌了 10 条 open（2026-06-28 实录）。同 subject+kp_id 的旧 open 照旧置换。
   const confusion = meta?.confusion?.trim();
-  if (subject && confusion) {
+  if (subject && SUBJECT_CANON.has(subject) && confusion) {
+    if (isNoiseConfusion(confusion)) {
+      console.log("[/api/ask] confusion 判为系统注记（非云的卡点），不入 ask_summary：", confusion.slice(0, 80));
+      return;
+    }
+    if (hasHistory) {
+      const { error: supErr } = await supabaseAdmin
+        .from("ask_summary")
+        .update({ status: "superseded" })
+        .eq("subject", subject)
+        .eq("status", "open")
+        .gte("created_at", bjDayStart(todayStr));
+      if (supErr) console.error("[/api/ask] ask_summary 追问置换失败：", supErr.message);
+    }
     if (kpId) {
       const { error: supErr } = await supabaseAdmin
         .from("ask_summary")

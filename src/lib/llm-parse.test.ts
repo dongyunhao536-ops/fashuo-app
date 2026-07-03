@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitMeta, screenCandidates } from "./ask-prompt";
+import { splitMeta, screenCandidates, isNoiseConfusion } from "./ask-prompt";
 
 /**
  * LLM 输出解析器回归锁（云 2026-06-14）。
@@ -76,5 +76,21 @@ describe("screenCandidates（待办筐防灌筐：封顶+去短+批内去重）"
       3,
     );
     expect(out).toHaveLength(1);
+  });
+});
+
+describe("isNoiseConfusion（答疑未收口噪音闸：系统注记不算云的卡点）", () => {
+  it("检索缺口/冷启动/行号类系统注记 → 噪音（2026-07-02 线上实录原文）", () => {
+    expect(isNoiseConfusion("「避险起因」关键词content_mirror冷启动未同步，未能核到原文")).toBe(true);
+    expect(isNoiseConfusion("心得镜像对『单罚制』关键词冷启动未命中，无法确认是否已有专条")).toBe(true);
+    expect(isNoiseConfusion("预检索未命中该句完整原文行号，仅命中零散片段")).toBe(true);
+    expect(isNoiseConfusion("题干疑似笔误（问甲乙实应甲丙），需用户补全题干裁定")).toBe(true);
+  });
+
+  it("云的真实卡点 → 放行（含'锚定/误中'等易撞词的合法表述）", () => {
+    expect(isNoiseConfusion("把缔约动机误当合同目的")).toBe(false);
+    expect(isNoiseConfusion("云困惑于『无目的』与『有动机』看似矛盾，没区分目的锚定结果、动机锚定行为")).toBe(false);
+    expect(isNoiseConfusion("云把'误击/误中'表象等同于打击错误，忽略了同一构成要件前提")).toBe(false);
+    expect(isNoiseConfusion("分不清自然法学派(恶法非法)与分析法学派(恶法亦法)")).toBe(false);
   });
 });
