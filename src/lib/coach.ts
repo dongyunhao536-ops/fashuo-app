@@ -22,9 +22,14 @@ import coachCfg from "../../config/coach.json";
  *   教练觉得值得记可以在正文里【询问】，云答应后下一轮才落 META——绝不自作主张记录。
  * 互通：教练每轮注入 答疑最近卡点(ask_summary open)；答疑侧注入 错题本+学习进度（ask-prompt.ts volatile）。
  * 检验=理解层（有没有吸收），云的逐字背诵在 Anki app 做，教练不判分。
- * 考试分析接入（2026-07-01 升级）：① 知识架构（exam-outline.gen.ts 五科章节）+ 真题高频考点
- *   注入稳定前缀 → 建议落到具体章节、知道哪章重点；② 两段式按需检索（Sonnet 规划 → 本地 grep
- *   → 结果进 user 消息）→ 聊到具体考点时能引《考试分析》原文，不破坏 system 缓存（七牛云带 tools 缓存失效）。
+ * 考试分析接入（2026-07-01 升级，2026-07-03 降本重构）：① 知识架构（exam-outline.gen.ts 五科章节）
+ *   注入稳定前缀 → 建议落到具体章节；② 两段式按需检索（Sonnet 规划 → 本地 grep → 结果进 user 消息）
+ *   → 聊到具体考点时能引《考试分析》原文/心得/真题，不破坏 system 缓存（七牛云带 tools 缓存失效）；
+ *   ③ 当轮科目的真题高频考点（规划器顺带判科目，~4千字）注入 user 侧——五科全量高频/心得不再常驻前缀。
+ * 成本教训（2026-07-03，api_usage 实锤）：七牛云缓存 TTL 5 分钟 < 教练对话轮间隔（云在思考/答题）
+ *   → 实战几乎轮轮 cache miss、每轮重付全量 cache_write（且 $6.25/M > input $5/M，miss 为主时缓存净亏）。
+ *   全量心得(5万字)+高频(2万字)曾把前缀撑到 7 万 token ≈ ¥3.4/轮；两段式检索本就覆盖同一批库，纯冗余，已删。
+ *   前缀瘦身后 ≈6 千 token，miss 轮典型 ≈¥0.7（上限 ≈¥1.1）、命中轮 ≈¥0.5。改回全量注入前先算这笔账。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
@@ -171,12 +176,12 @@ async function loadLedger(today: Date) {
         .not("confusion", "is", null)
         .order("created_at", { ascending: false })
         .limit(6),
-      // 近 8 条对话（对话连续性）
+      // 近 12 条对话（对话连续性；截断策略见 conversationLines 注释）
       supabaseAdmin
         .from("coach_message")
         .select("role, content")
         .order("id", { ascending: false })
-        .limit(8),
+        .limit(12),
       // 长期记忆（关于云的耐久事实）
       supabaseAdmin
         .from("coach_memory")
@@ -230,11 +235,16 @@ async function loadLedger(today: Date) {
     return `${subj}·${String(r.confusion).slice(0, 60)}（答疑${d}）`;
   });
 
-  // 对话历史（chronological：旧→新；每条截断防爆）
-  const conversationLines = (msgRes.data ?? [])
-    .slice()
-    .reverse()
-    .map((m) => `${m.role === "user" ? "云" : "教练"}：${String(m.content).slice(0, 500)}`);
+  // 对话历史（chronological：旧→新）。最近 4 条全文（封顶 1600 字兜底）、更早的只留【尾部】500 字——
+  // 教练的追问都在回复末尾，旧版 slice(0,500) 截头会把"它自己上一轮问了什么"截掉，
+  // 导致教练看不懂云在答哪一问、连环张冠李戴（2026-07-02 #60→#64 实锤）。截断必须保尾不保头。
+  const msgs = (msgRes.data ?? []).slice().reverse();
+  const conversationLines = msgs.map((m, i) => {
+    const text = String(m.content);
+    const cap = msgs.length - i <= 4 ? 1600 : 500;
+    const kept = text.length <= cap ? text : "……" + text.slice(-cap);
+    return `${m.role === "user" ? "云" : "教练"}：${kept}`;
+  });
 
   const memoryFacts = (memRes.data ?? []).map(
     (m) => `- ${m.category ? `[${m.category}] ` : ""}${m.fact}`,
@@ -247,27 +257,9 @@ async function loadLedger(today: Date) {
 }
 
 /**
- * 从一篇做题心得 markdown 里剥掉【非正文】段（待观察 / 候选规律 / 维护规则），只留权威正文。
- * 段以 `## ` 二级标题切；标题含上述任一关键词的整段（直到下一个 `## ` 或文末）丢弃。
- * 「手动登记」段标题不含这些词 → 保留（云直接录入的，最高优先级）。
- */
-function stripProvisionalSections(md: string): string {
-  const PROVISIONAL = ["待观察", "候选规律", "维护规则"];
-  let skipping = false;
-  return md
-    .split(/\r?\n/)
-    .filter((ln) => {
-      if (/^##\s/.test(ln)) skipping = PROVISIONAL.some((k) => ln.includes(k));
-      return !skipping;
-    })
-    .join("\n")
-    .trim();
-}
-
-/**
- * 五科真题高频考点（content_mirror kind=zhenti，真题分析/0X_XX高频考点.md，2014-2025 归纳）。
- * 注入稳定前缀：教练据此知道【哪章是重点、真题怎么考】，把建议落到章节。按 path 排序字节稳定（缓存）。
- * 导出供周报指导层复用（weekly-narrative.ts，下周指导也要按章节排优先级）。
+ * 五科真题高频考点全量（content_mirror kind=zhenti，真题分析/0X_XX高频考点.md，2014-2025 归纳）。
+ * 【仅周报用】（weekly-narrative.ts，周频调用注入 2 万字可接受）。教练侧 2026-07-03 起
+ * 不再全量注入——改走 loadGaopinFor 按当轮科目取一份进 user 侧（成本账见文件头注释）。
  */
 export async function loadGaopin(): Promise<string> {
   const { data, error } = await supabaseAdmin
@@ -284,32 +276,32 @@ export async function loadGaopin(): Promise<string> {
 }
 
 /**
- * 五科做题心得【正文】（与答疑同源：content_mirror kind=xinde），剥掉待观察/候选/维护段后拼接。
- * 注入家教稳定前缀（缓存）让家教也能引用心得。按 path 排序保证跨请求字节稳定（缓存命中）；
- * 镜像每晚重生成，当天内稳定。冷启动/查不到时返回空串（家教退回纯账本，不阻塞）。
+ * 当轮科目的真题高频考点（约 4 千字），注入 user 侧（不碰 system 缓存前缀）。
+ * 科目由规划器顺带判定；无科目轮（闲聊/谈节奏/情绪）返回空串 → 零注入零成本。
+ * 心得不做对应的常驻注入：聊到具体考点时规划器会列 search_xinde 检索，同库按需取。
  */
-async function loadZhengwenInsights(): Promise<string> {
+async function loadGaopinFor(subject: string | null | undefined): Promise<string> {
+  if (!subject || !SUBJECTS.includes(subject)) return "";
   const { data, error } = await supabaseAdmin
     .from("content_mirror")
-    .select("path, content")
-    .eq("kind", "xinde")
-    // 刑法讲义心得(230KB)只供答疑 search_xinde；教练暂不接讲义（太大、会撑爆注入），按路径排除
-    .not("path", "ilike", "%讲义%");
+    .select("content")
+    .eq("kind", "zhenti")
+    .ilike("path", `%${subject}%高频考点%`);
   if (error || !data || !data.length) return "";
-  return data
-    .slice()
-    .sort((a, b) => String(a.path).localeCompare(String(b.path)))
-    .map((r) => stripProvisionalSections(String(r.content)))
-    .filter(Boolean)
-    .join("\n\n———\n\n");
+  const body = data.map((r) => String(r.content).trim()).join("\n\n");
+  return `【${subject}真题高频考点（2014-2025 真题归纳·哪章是重点就看这）】
+排学习/背诵/做题优先级时对照它：⭐⭐⭐ 必考核心优先攻，冷门章别让云死磕。考他、复盘也优先从高频点下手。
+${body}`;
 }
 
 /**
- * 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + config 节奏
- *   + 考试分析知识架构/真题高频（2026-07-01 教练升级）+ 五科正文心得 + 输出契约。
- * insightsBlock/gaopinBlock 折进缓存段：镜像每晚才变，当天内字节稳定，照常命中缓存。
+ * 稳定前缀（跨请求字节稳定 → cache_control 缓存）：人设 + 方法论参考 + 考试分析知识架构
+ *   + config 节奏 + 输出契约。≈8 千字 ≈6 千 token。
+ * ⚠️ 别再往这里塞按科目/按话题才用得上的大块参考（高频/心得/原文）——缓存 TTL 5 分钟
+ *   扛不住对话轮间隔，前缀每大 1 万 token ≈ miss 轮多 ¥0.45（cache_write $6.25/M）。
+ *   那类内容走 planAndSearch 检索或 loadGaopinFor 按科注入 user 侧。
  */
-function buildSystemStable(insightsBlock = "", gaopinBlock = ""): string {
+function buildSystemStable(): string {
   const rounds = Object.entries(coachCfg.轮次表)
     .filter((e): e is [string, { 窗口: string; 范围: string; 强度: string }] => typeof e[1] === "object" && e[1] !== null)
     .map(([name, r]) => `${name}(${r.窗口})：${r.范围}·${r.强度}`)
@@ -333,28 +325,16 @@ ${SUBJECT_METHODS}
 【《考试分析》知识架构（官方教材章节，你给建议的坐标系）】
 给学习建议/规划/复盘时【必须落到具体科目和章节】（如"民法第十四章 合同通则·第三节 合同的效力"），不许只说"多背民法"这种空话；主动点出跨章节联系（如刑法停止形态×共同犯罪、民法物权变动×合同效力），带云把散点串成架构。
 ${EXAM_OUTLINE}
-${
-  gaopinBlock
-    ? `
-【真题高频考点（2014-2025 真题归纳·哪章是重点就看这）】
-排学习/背诵/做题优先级时对照它：⭐⭐⭐ 必考核心优先攻，冷门章别让云死磕。考他、复盘也优先从高频点下手。
-${gaopinBlock}
-`
-    : ""
-}
+
+【按需参考（系统按当轮话题注入 user 消息，不在这里常驻）】
+- 聊到具体考点时，系统会预检索《考试分析》原文/做题心得/真题命中给你——引用时钉到原文和章节。
+- 心得命中里标「手动登记」的条目（云亲自录入）优先级最高：与其它心得或教材冲突时一律以它为准。
+- 云聊某科时，该科真题高频考点会随消息给你——排优先级、考他、复盘优先从高频点下手。
+
 【云的节奏参考（来自他自己的设定，可随真实进度调）】
 - 四轮三阶段：${rounds}
 - 在职双轨：${tracks}。
-${
-  insightsBlock
-    ? `
-【五科做题心得·正文（与答疑同源·权威参考）】
-下面是从历年真题归纳的"怎么考、怎么答"规律（判断倾向／陷阱／答题套路）。考云理解、点他易错处、帮他打通时【按需引用】；这是参考、不是要你逐字背或主动复述（默写判分是背诵系统的事）。
-★【手动登记规则】区（标题含"手动登记"，云亲自录入）优先级最高：与其它心得条目或教材冲突时，一律以「手动登记」为准。
-${insightsBlock}
-`
-    : ""
-}
+
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
 {"is_report":true/false（云本轮是否在【汇报自己学了什么】——他主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
@@ -392,9 +372,9 @@ ${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join
 ${ledger.askStuckLines.length ? ledger.askStuckLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
 }
 
-/** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息 + 可选教材检索结果
- *  （仿答疑做法，runSingleTurn 只收单条 user；检索结果放 user 侧，不碰 system 缓存前缀）。 */
-function buildUserMessage(conversationLines: string[], input: string, grepBlock = ""): string {
+/** 拼用户消息：嵌入近 N 轮对话（供理解上文）+ 本轮新消息 + 可选按需块（当科高频 + 检索命中）
+ *  （仿答疑做法，runSingleTurn 只收单条 user；按需块放 user 侧，不碰 system 缓存前缀）。 */
+function buildUserMessage(conversationLines: string[], input: string, extraBlock = ""): string {
   const convo =
     conversationLines.length === 0
       ? ""
@@ -402,9 +382,9 @@ function buildUserMessage(conversationLines: string[], input: string, grepBlock 
 ${conversationLines.join("\n")}
 
 `;
-  if (!convo && !grepBlock) return input;
+  if (!convo && !extraBlock) return input;
   return `${convo}【本轮云说】
-${input}${grepBlock ? `\n\n${grepBlock}` : ""}`;
+${input}${extraBlock ? `\n\n${extraBlock}` : ""}`;
 }
 
 /** 教练侧检索结果总量兜底（字符，≈4-5 千 token）：教练引用原文是佐证不是判卷，比答疑(2.4万)砍一半再一半 */
@@ -416,12 +396,14 @@ const COACH_GREP_CLIP = 9000;
  * 闲聊/汇报进度等与具体知识点无关的轮次规划器给空数组 → 零注入零额外 Opus input。
  * 任何一步失败都吞掉返回空串（教练退回纯账本+架构作答，不阻塞）。
  */
-async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal): Promise<{ block: string; costUsd: number }> {
+async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal): Promise<{ block: string; costUsd: number; subject: string | null }> {
   const planSystem = `你是法硕教练的检索规划器。教练回答前可先查库：search_textbook（《考试分析》教材+刑法讲义原文）/ search_xinde（做题心得）/ search_zhenti（真题，参数 year、question_no）。
-判断云本轮消息需不需要查库：
+两件事：
+① 判科目：云本轮主要涉及哪科（刑法|民法|法理|宪法|法制史）——汇报进度/提问/被考都算；跨科或无科目给 null。
+② 判断需不需要查库：
 - 需要：聊到具体科目/章节/考点的学习安排或疑问、问某章重点/怎么学、让教练考他、涉及具体法律概念——列出检索词。
 - 不需要：纯闲聊、汇报进度、谈时间/情绪/节奏、与具体知识点无关 → "searches" 给空数组。
-输出且仅输出 JSON（无其他文字）：{"searches":[{"tool":"search_textbook","keyword":"教材原词≤8字"}]}
+输出且仅输出 JSON（无其他文字）：{"subject":"刑法或null","searches":[{"tool":"search_textbook","keyword":"教材原词≤8字"}]}
 最多 4 条；keyword 用教材里会出现的短词（如"想象竞合""表见代理"），别整句。`;
   try {
     const { message, costUsd } = await runSingleTurn({
@@ -434,8 +416,10 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
       route: "coach:plan",
       signal,
     });
-    const searches = dedupeSearches(parsePlan(extractText(message)).searches).slice(0, 4);
-    if (searches.length === 0) return { block: "", costUsd };
+    const plan = parsePlan(extractText(message));
+    const subject = plan.subject && SUBJECTS.includes(plan.subject) ? plan.subject : null;
+    const searches = dedupeSearches(plan.searches).slice(0, 4);
+    if (searches.length === 0) return { block: "", costUsd, subject };
 
     const cache = createMirrorCache();
     const parts: string[] = [];
@@ -452,11 +436,12 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
     return {
       block: `【系统预检索（考试分析/心得/真题命中，供你把建议钉到原文和章节；与云的问题无关的命中忽略）】\n${parts.join("\n\n")}`,
       costUsd,
+      subject,
     };
   } catch (err) {
     if ((err as { name?: string })?.name === "AbortError") throw err;
     console.error("[coach] 预检索失败（本轮退回纯账本作答）：", err instanceof Error ? err.message : String(err));
-    return { block: "", costUsd: 0 };
+    return { block: "", costUsd: 0, subject: null };
   }
 }
 
@@ -468,25 +453,23 @@ export async function runCoach(
   const todayStr = bjDateStr(today);
   // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
   const isSunday = new Date(today.getTime() + 8 * 3600 * 1000).getUTCDay() === 0;
-  // 账本、五科正文心得、真题高频并行拉（心得/高频注入稳定前缀，让家教能引用心得+知道哪章重点）
-  const [ledger, insights, gaopin] = await Promise.all([
-    loadLedger(today),
-    loadZhengwenInsights(),
-    loadGaopin(),
-  ]);
-  // 两段式段①：按本轮话题按需查《考试分析》原文（结果进 user 消息，system 缓存前缀不动）
-  const { block: grepBlock, costUsd: planCost } = await planAndSearch(
+  const ledger = await loadLedger(today);
+  // 两段式段①：按本轮话题按需查《考试分析》原文/心得/真题 + 顺带判科目（结果都进 user 消息，
+  // system 缓存前缀不动）；再按科目取该科真题高频。前缀常驻大块已删，成本账见文件头注释。
+  const { block: grepBlock, costUsd: planCost, subject: planSubject } = await planAndSearch(
     input,
     ledger.conversationLines.slice(-4),
     signal,
   );
+  const gaopinBlock = await loadGaopinFor(planSubject);
+  const extraBlocks = [gaopinBlock, grepBlock].filter(Boolean).join("\n\n");
 
   const { message, costUsd: answerCost } = await runSingleTurn({
     system: {
-      stable: buildSystemStable(insights, gaopin),
+      stable: buildSystemStable(),
       volatile: buildSystemVolatile(ledger, todayStr, isSunday),
     },
-    user: buildUserMessage(ledger.conversationLines, input, grepBlock),
+    user: buildUserMessage(ledger.conversationLines, input, extraBlocks),
     model: MODELS.COACH,
     signal,
     route: "coach",
