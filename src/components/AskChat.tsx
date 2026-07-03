@@ -13,7 +13,7 @@ import { ChatComposer } from "@/components/ChatComposer";
  * 答疑沉淀的候选弱项/心得已由路由写 events 待办筐，UI 给一句提示。
  *
  * 2026-06-11：
- * - 请求带最近 2 轮 Q/A（history）——后端原本无状态，追问"那如果…"模型拿不到上文。
+ * - 请求带最近几轮 Q/A（history，轮数=HISTORY_TURNS）——后端原本无状态，追问"那如果…"模型拿不到上文。
  * - 失败轮次给"重试"按钮（蜂窝网掐断后不用重新打字）。
  * - turns 存 sessionStorage（切 tab 组件卸载即丢的问题）；挂载后恢复，避免 SSR 水合不一致。
  */
@@ -23,8 +23,8 @@ const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"] as const;
 const STORAGE_KEY = "ask-chat-turns";
 /** 持久化/渲染最多保留的轮数（防 sessionStorage 膨胀） */
 const MAX_TURNS = 12;
-/** 随请求上送的历史轮数（与后端 HISTORY_TURNS 对齐） */
-const HISTORY_TURNS = 2;
+/** 随请求上送的历史轮数（与后端 HISTORY_TURNS 对齐，2026-07-03 追问链常超 2 轮 → 3） */
+const HISTORY_TURNS = 3;
 
 interface AskResult {
   answer: string;

@@ -29,7 +29,8 @@ import coachCfg from "../../config/coach.json";
  * 成本教训（2026-07-03，api_usage 实锤）：七牛云缓存 TTL 5 分钟 < 教练对话轮间隔（云在思考/答题）
  *   → 实战几乎轮轮 cache miss、每轮重付全量 cache_write（且 $6.25/M > input $5/M，miss 为主时缓存净亏）。
  *   全量心得(5万字)+高频(2万字)曾把前缀撑到 7 万 token ≈ ¥3.4/轮；两段式检索本就覆盖同一批库，纯冗余，已删。
- *   前缀瘦身后 ≈6 千 token，miss 轮典型 ≈¥0.7（上限 ≈¥1.1）、命中轮 ≈¥0.5。改回全量注入前先算这笔账。
+ *   前缀瘦身后 ≈6 千 token。2026-07-03 云拍板预算 ¥1.5/轮（含答疑）→ 用省出的空间加质量：
+ *   检索 6 条/1.2 万字、历史 12 条(近 6 全文)——miss 轮典型 ≈¥0.9-1.1（全项叠满 ≈¥1.4）、命中轮 ≈¥0.6。
  */
 
 const EXAM_DATE = coachCfg.考试日期;
@@ -235,13 +236,13 @@ async function loadLedger(today: Date) {
     return `${subj}·${String(r.confusion).slice(0, 60)}（答疑${d}）`;
   });
 
-  // 对话历史（chronological：旧→新）。最近 4 条全文（封顶 1600 字兜底）、更早的只留【尾部】500 字——
+  // 对话历史（chronological：旧→新）。最近 6 条全文（封顶 1600 字兜底）、更早的只留【尾部】500 字——
   // 教练的追问都在回复末尾，旧版 slice(0,500) 截头会把"它自己上一轮问了什么"截掉，
   // 导致教练看不懂云在答哪一问、连环张冠李戴（2026-07-02 #60→#64 实锤）。截断必须保尾不保头。
   const msgs = (msgRes.data ?? []).slice().reverse();
   const conversationLines = msgs.map((m, i) => {
     const text = String(m.content);
-    const cap = msgs.length - i <= 4 ? 1600 : 500;
+    const cap = msgs.length - i <= 6 ? 1600 : 500;
     const kept = text.length <= cap ? text : "……" + text.slice(-cap);
     return `${m.role === "user" ? "云" : "教练"}：${kept}`;
   });
@@ -387,8 +388,9 @@ ${conversationLines.join("\n")}
 ${input}${extraBlock ? `\n\n${extraBlock}` : ""}`;
 }
 
-/** 教练侧检索结果总量兜底（字符，≈4-5 千 token）：教练引用原文是佐证不是判卷，比答疑(2.4万)砍一半再一半 */
-const COACH_GREP_CLIP = 9000;
+/** 教练侧检索结果总量兜底（字符，≈8-9 千 token）。2026-07-03 云拍板预算 ¥1.5/轮后从 9000 放宽：
+ *  前缀瘦身省出的空间买检索深度——教练考云/带章节时引原文更扎实。顶格轮全项叠满 ≈¥1.4，仍在预算内。 */
+const COACH_GREP_CLIP = 12000;
 
 /**
  * 两段式·段①（2026-07-01 教练升级）：Sonnet 小调用判断本轮要不要查《考试分析》原文/心得/真题，
@@ -404,7 +406,7 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
 - 需要：聊到具体科目/章节/考点的学习安排或疑问、问某章重点/怎么学、让教练考他、涉及具体法律概念——列出检索词。
 - 不需要：纯闲聊、汇报进度、谈时间/情绪/节奏、与具体知识点无关 → "searches" 给空数组。
 输出且仅输出 JSON（无其他文字）：{"subject":"刑法或null","searches":[{"tool":"search_textbook","keyword":"教材原词≤8字"}]}
-最多 4 条；keyword 用教材里会出现的短词（如"想象竞合""表见代理"），别整句。`;
+最多 6 条；涉及具体考点时同一概念尽量 search_textbook + search_xinde 各一条（原文+考法都拿到）；keyword 用教材里会出现的短词（如"想象竞合""表见代理"），别整句。`;
   try {
     const { message, costUsd } = await runSingleTurn({
       system: planSystem,
@@ -418,7 +420,8 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
     });
     const plan = parsePlan(extractText(message));
     const subject = plan.subject && SUBJECTS.includes(plan.subject) ? plan.subject : null;
-    const searches = dedupeSearches(plan.searches).slice(0, 4);
+    // 封顶 6（2026-07-03 从 4 放宽）：同一概念 教材+心得 各一条 → 3 个概念全覆盖；总量由 COACH_GREP_CLIP 兜底
+    const searches = dedupeSearches(plan.searches).slice(0, 6);
     if (searches.length === 0) return { block: "", costUsd, subject };
 
     const cache = createMirrorCache();

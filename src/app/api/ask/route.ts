@@ -31,9 +31,13 @@ import { streamJson } from "@/lib/stream-response";
 // 七牛云 RPM 限速 → 规划+作答两次 Opus 调用（含 429 退避）可能耗时数分钟，放宽超时上限
 export const maxDuration = 300;
 
-/** 历史轮带几轮、单轮答案最多保留多少字符（掐头去尾留中间省略号，控制 token） */
-const HISTORY_TURNS = 2;
-const HISTORY_ANSWER_CLIP = 1600;
+/** 历史轮带几轮、单轮答案最多保留多少字符（掐头去尾留中间省略号，控制 token）。
+ *  2026-07-03 云拍板预算 ¥1.5/题后 2→3 轮、1600→2000 字：追问链经常 3 轮以上
+ *  （2026-06-28"打击错误"聊了 10 轮），只带 2 轮时第 3 轮起模型看不到最初的题干。
+ *  只影响追问轮成本（+≈¥0.06）；检索总量兜底(EXECUTED_TOTAL_CLIP=2.4万字)是按
+ *  预算校准的天花板，别动它——答疑的成本大头在 Opus 输出费，input 已无多少余量。 */
+const HISTORY_TURNS = 3;
+const HISTORY_ANSWER_CLIP = 2000;
 
 function clipMiddle(s: string, max: number): string {
   if (s.length <= max) return s;
