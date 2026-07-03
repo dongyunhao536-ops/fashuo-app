@@ -100,6 +100,53 @@ export function isNoiseConfusion(confusion: string): boolean {
 }
 
 /**
+ * 纯记录指令识别（2026-07-03 降本）：云在答疑里只说"记进错题本/记录进心得"这类记账指令时，
+ * 不该走完整答疑管线（规划+全库检索+Opus 长答 ≈¥1+），短路到 Sonnet 小调用提取入库（≈¥0.04）。
+ * 判据故意保守（漏判只是多花钱走老路，误判会吞掉真问题）：
+ * - ≤40 字（纯指令都很短，"把刚才那个正当防卫限度记进错题本"也才 19 字）；
+ * - 命中记录动词+目标库模式；
+ * - 不含提问/求讲解特征词（"讲讲表见代理然后记进错题本"是混合意图 → 走完整管线）。
+ * 纯函数便于单测。
+ */
+const RECORD_CMD_RE = /记(录)?[进入到]?\s*(错题|心得)/;
+const ASKING_RE = /讲|问|为什么|为啥|怎么|如何|是什么|什么是|什么意思|区别|辨析|解释|对比|考(我|一下)|吗[？?]?$/;
+export function isRecordCommand(q: string): boolean {
+  const t = q.trim();
+  return t.length <= 40 && RECORD_CMD_RE.test(t) && !ASKING_RE.test(t);
+}
+
+/** 记录指令提取器 system（Sonnet 小调用；不作答、只提取要记什么） */
+export function buildRecordExtractSystem(): string {
+  return `你是法硕答疑的「记录指令」处理器。云刚在答疑里下了一句记录指令（如"记进错题本"），你根据【此前对话】判断他要记的是什么。不作答、不解释。
+输出且仅输出 JSON（无其他文字）：
+{"subject":"刑法|民法|法理|宪法|法制史 或 null","errors":["要记进错题本的考点短语，每条≤20字"],"xinde":["要记进心得的规律，每条整理成≤60字一句"]}
+规则：
+- 云说"记(进)错题本/记错题"→ 填 errors：从对话里提炼他答错/卡住的那个考点（教材口径名词，如"正当防卫限度""间接故意与过于自信过失的区分"，不要整句）。
+- 云说"记(录进)心得"→ 填 xinde：把他指的那条规律原话整理成一句。
+- 只记指令指向的那一两条，别把对话里所有考点都倒进来；判断不出要记什么就两个都给空数组。`;
+}
+
+/** 提取器输出解析（容错 \`\`\`json 包裹/前后杂文；解析失败返回全空，调用方据此提示云说具体点） */
+export function parseRecordExtract(text: string): { subject: string | null; errors: string[]; xinde: string[] } {
+  const empty = { subject: null, errors: [], xinde: [] };
+  const s = text.indexOf("{");
+  const e = text.lastIndexOf("}");
+  if (s === -1 || e <= s) return empty;
+  try {
+    const obj = JSON.parse(text.slice(s, e + 1).replace(/```json|```/g, ""));
+    const list = (a: unknown): string[] =>
+      Array.isArray(a) ? a.map((x) => String(x).trim()).filter((x) => x.length >= 4).slice(0, 3) : [];
+    return {
+      subject: typeof obj.subject === "string" && obj.subject !== "null" ? obj.subject : null,
+      errors: list(obj.errors),
+      xinde: list(obj.xinde),
+    };
+  } catch {
+    return empty;
+  }
+}
+
+/**
  * 规划器系统提示（第 1 段·小调用）：读题 → 列出所有要检索的查询，不作答。
  * grep 是逐行子串匹配 → 关键词必须是【单个连续词、不含空格】，需要多个就拆成多条。
  */

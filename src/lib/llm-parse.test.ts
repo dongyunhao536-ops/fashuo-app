@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { splitMeta, screenCandidates, isNoiseConfusion } from "./ask-prompt";
+import { splitMeta, screenCandidates, isNoiseConfusion, isRecordCommand, parseRecordExtract } from "./ask-prompt";
 
 /**
  * LLM 输出解析器回归锁（云 2026-06-14）。
@@ -92,5 +92,44 @@ describe("isNoiseConfusion（答疑未收口噪音闸：系统注记不算云的
     expect(isNoiseConfusion("云困惑于『无目的』与『有动机』看似矛盾，没区分目的锚定结果、动机锚定行为")).toBe(false);
     expect(isNoiseConfusion("云把'误击/误中'表象等同于打击错误，忽略了同一构成要件前提")).toBe(false);
     expect(isNoiseConfusion("分不清自然法学派(恶法非法)与分析法学派(恶法亦法)")).toBe(false);
+  });
+});
+
+describe("isRecordCommand（纯记录指令快路径判据：漏判无害、误判会吞真问题）", () => {
+  it("纯记录指令 → 快路径", () => {
+    expect(isRecordCommand("记进错题本")).toBe(true);
+    expect(isRecordCommand("这个记录进错题本")).toBe(true);
+    expect(isRecordCommand("把刚才那个正当防卫限度记进错题本")).toBe(true);
+    expect(isRecordCommand("这条记录进心得")).toBe(true);
+    expect(isRecordCommand("记到心得里")).toBe(true);
+    expect(isRecordCommand("记进错题本：表见代理构成要件")).toBe(true);
+  });
+
+  it("提问/求讲解/混合意图 → 走完整管线", () => {
+    expect(isRecordCommand("为什么这道错题选B")).toBe(false);
+    expect(isRecordCommand("我总记不住错题怎么办")).toBe(false);
+    expect(isRecordCommand("讲讲表见代理，然后记进错题本")).toBe(false);
+    expect(isRecordCommand("帮我解释一下这个错题的考点")).toBe(false);
+    expect(isRecordCommand("间接故意和过于自信的过失有什么区别")).toBe(false);
+    expect(isRecordCommand("记进错题本吗")).toBe(false);
+  });
+
+  it("超长消息（>40字）即使含记录词也走完整管线", () => {
+    expect(isRecordCommand("这道题我错在把撤销权除斥期间当成了诉讼时效，一年从知道撤销事由起算，帮我把这个点记进错题本")).toBe(false);
+  });
+});
+
+describe("parseRecordExtract（记录提取器输出解析）", () => {
+  it("正常 JSON → 提取 subject/errors/xinde（≥4字、每类封顶3）", () => {
+    const out = parseRecordExtract('{"subject":"刑法","errors":["正当防卫限度","罪","间接故意与过于自信过失的区分"],"xinde":[]}');
+    expect(out.subject).toBe("刑法");
+    expect(out.errors).toEqual(["正当防卫限度", "间接故意与过于自信过失的区分"]);
+    expect(out.xinde).toEqual([]);
+  });
+
+  it("```json 包裹/前后杂文容错；坏 JSON → 全空（调用方提示云说具体点）", () => {
+    expect(parseRecordExtract('好的\n```json\n{"subject":"民法","errors":["表见代理构成要件"],"xinde":[]}\n```').errors).toEqual(["表见代理构成要件"]);
+    expect(parseRecordExtract("{坏的json").errors).toEqual([]);
+    expect(parseRecordExtract("没有对象").subject).toBeNull();
   });
 });

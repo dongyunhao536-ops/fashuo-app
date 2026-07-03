@@ -1,4 +1,4 @@
-import { runPlanThenAnswer, extractText, fmtCost } from "@/lib/anthropic";
+import { runPlanThenAnswer, runSingleTurn, extractText, fmtCost } from "@/lib/anthropic";
 import { MODELS } from "@/lib/models";
 import { supabaseAdmin } from "@/lib/supabase";
 import { bjDateStr, bjDayStart } from "@/lib/dates";
@@ -11,6 +11,9 @@ import {
   splitMeta,
   screenCandidates,
   isNoiseConfusion,
+  isRecordCommand,
+  buildRecordExtractSystem,
+  parseRecordExtract,
   type AskMeta,
 } from "@/lib/ask-prompt";
 import { normalizeSubject, SUBJECT_CANON } from "@/lib/events";
@@ -91,6 +94,57 @@ export async function POST(req: Request) {
       .map((h) => ({ question: h.question.slice(0, 2000), answer: h.answer }));
 
     try {
+      // —— 纯记录指令快路径（2026-07-03 降本）——
+      // "记进错题本/记录进心得"这类记账指令不走完整答疑管线（规划+检索+Opus 长答 ≈¥1+），
+      // 短路到 Sonnet 小调用从上文提取要记的条目直接入库（≈¥0.04）。判据保守（isRecordCommand），
+      // 混合意图（"讲讲X然后记一下"）仍走完整管线。提取不出来时不静默回退 Opus（防成本惊吓），
+      // 直接提示云说具体点（"记进错题本：考点名"带冒号形式必中）。
+      if (isRecordCommand(question)) {
+        const { message, costUsd } = await runSingleTurn({
+          system: buildRecordExtractSystem(),
+          user: buildQuestionWithHistory(question, history),
+          model: MODELS.PLAN,
+          maxTokens: 400,
+          route: "ask:record",
+          signal: req.signal,
+        });
+        const ext = parseRecordExtract(extractText(message));
+        const meta: AskMeta = {
+          subject: ext.subject,
+          error_notes: ext.errors.map((knowledge) => ({ knowledge })),
+          xinde_candidates: ext.xinde.map((rule) => ({ rule })),
+        };
+        if (ext.errors.length || ext.xinde.length) {
+          await sinkProposals({
+            subject: ext.subject ?? subject ?? null,
+            kpId: body.kpId ?? null,
+            meta,
+            question,
+            hasHistory: history.length > 0,
+          });
+        }
+        const done = [
+          ext.errors.length ? `已记进错题本：${ext.errors.join("、")}` : "",
+          ext.xinde.length ? `已记进心得「手动登记」区：${ext.xinde.join("、")}` : "",
+        ].filter(Boolean);
+        const answer = done.length
+          ? `✅ ${done.join("\n")}\n\n（纯记录轮，未走答疑检索——有疑问随时问）`
+          : "没看出要记哪一条——换成「记进错题本：考点名」这样带上考点再说一次，我就能记。";
+        return {
+          status: 200,
+          body: {
+            answer,
+            grepHits: [],
+            meta,
+            confidence: null,
+            starred: false,
+            costUsd,
+            costText: fmtCost(costUsd),
+            stopReason: message.stop_reason,
+          },
+        };
+      }
+
       const { message, grepHits, costUsd, plannedSubject } = await runPlanThenAnswer({
         planSystem: buildPlanSystem(),
         answerSystemStable: buildAskSystemStable(),
