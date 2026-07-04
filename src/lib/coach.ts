@@ -143,6 +143,70 @@ const cleanList = (arr: unknown): string[] =>
         .filter((s) => s.length > 0 && !PLACEHOLDER_RE.test(s))
     : [];
 
+/** 错题本聚合的输入行（study_error open+absorbed 全生命周期） */
+export interface ErrorBookRow {
+  subject: string | null;
+  kp_id: string | null;
+  knowledge: string | null;
+  log_date: string | null;
+  status: string;
+  absorbed_at: string | null;
+}
+
+/** 吸收复检窗口：销账满 5 天才值得抽查（太快没意义），60 天后交给真题滚动覆盖 */
+const RECHECK_MIN_DAYS = 5;
+const RECHECK_MAX_DAYS = 60;
+const RECHECK_MAX_ITEMS = 4;
+
+/**
+ * 错题本聚合（纯函数，2026-07-04 复发感知）：
+ * - lines：仍在挂账（有 open 行）的弱项，按【累计】错次（open+absorbed，销账不清零）×新近排序；
+ *   吸收过又错的挂 🔁（云的病根=重复犯老错，这个信号必须点破）；🔺转专题按累计错次触发。
+ * - recheck：已全部吸收、销账 5-60 天的旧错题（最老优先，≤4 条）——周日复盘时给教练做突袭抽查，
+ *   防"销账后又忘了没人管"。答不上云说"记进错题本"就重新挂账，下轮自动带 🔁。
+ */
+export function aggregateErrorBook(
+  rows: ErrorBookRow[],
+  escalateAt: number,
+  nowMs: number,
+): { lines: string[]; recheck: string[] } {
+  const agg = new Map<string, { label: string; nOpen: number; nAbs: number; last: string; oldestAbs: number }>();
+  for (const r of rows) {
+    const subj = r.subject ?? "未分类";
+    const key = r.kp_id ?? `${subj}::${r.knowledge}`;
+    const cur =
+      agg.get(key) ?? { label: `${subj}·${r.knowledge}`, nOpen: 0, nAbs: 0, last: "", oldestAbs: Infinity };
+    if (r.status === "absorbed") {
+      cur.nAbs++;
+      const at = r.absorbed_at ? new Date(r.absorbed_at).getTime() : NaN;
+      if (!Number.isNaN(at) && at < cur.oldestAbs) cur.oldestAbs = at;
+    } else {
+      cur.nOpen++;
+      const d = String(r.log_date ?? "");
+      if (d > cur.last) cur.last = d;
+    }
+    agg.set(key, cur);
+  }
+  const lines = [...agg.values()]
+    .filter((e) => e.nOpen > 0)
+    .sort((a, b) => b.nOpen + b.nAbs - (a.nOpen + a.nAbs) || (a.last < b.last ? 1 : -1))
+    .slice(0, 8)
+    .map((e) => {
+      const n = e.nOpen + e.nAbs;
+      return `${e.label}${n > 1 ? " ×" + n : ""}${e.nAbs > 0 ? " 🔁曾吸收又错" : ""}${n >= escalateAt ? " 🔺转专题" : ""}（最近${e.last || "?"}）`;
+    });
+  const recheck = [...agg.values()]
+    .filter((e) => e.nOpen === 0 && Number.isFinite(e.oldestAbs))
+    .filter((e) => {
+      const age = nowMs - e.oldestAbs;
+      return age >= RECHECK_MIN_DAYS * DAY && age <= RECHECK_MAX_DAYS * DAY;
+    })
+    .sort((a, b) => a.oldestAbs - b.oldestAbs)
+    .slice(0, RECHECK_MAX_ITEMS)
+    .map((e) => `${e.label}（${bjDateStr(new Date(e.oldestAbs))} 吸收）`);
+  return { lines, recheck };
+}
+
 /**
  * 读账本：阶段/死线/近N周投入/已学章节/最近流水/错题本(=弱项，study_error)
  *   + 答疑最近卡点(ask_summary，互通只读) + 近 N 轮对话(coach_message) + 长期记忆(coach_memory)。
@@ -167,11 +231,14 @@ async function loadLedger(today: Date) {
         .select("log_date, subject, chapter, activity, raw_input")
         .order("id", { ascending: false })
         .limit(3),
-      // 错题本 = 弱项（云主动记录的，status=open 未吸收）
+      // 错题本 = 弱项（云主动记录的）。拉全生命周期 open+absorbed（2026-07-04 复发感知）：
+      // 销账只是退出挂账名单、历史不删——云的病根是"重复犯老错"，吸收过又错的点必须
+      // 被点破（🔁标记），转专题阈值也按【累计】错次算（销账不清零）；absorbed 行还供周日复检抽查。
       supabaseAdmin
         .from("study_error")
-        .select("id, subject, kp_id, knowledge, log_date")
-        .eq("status", "open"),
+        .select("id, subject, kp_id, knowledge, log_date, status, absorbed_at")
+        .in("status", ["open", "absorbed"])
+        .limit(500),
       // 答疑最近卡点（互通只读：云在答疑里确实卡过的点，ask_summary 指令制严控后噪音低）
       supabaseAdmin
         .from("ask_summary")
@@ -214,23 +281,12 @@ async function loadLedger(today: Date) {
     return `${head}${quote}`;
   });
 
-  // 错题本 = 弱项（唯一事实源 study_error）：按 (考点/科目+短语) 聚合，频次×新近排序
-  const openErrs = selfErrRes.data ?? [];
-  const escT = coachCfg.红线.同弱项错次转专题;
-  const errMap = new Map<string, { label: string; n: number; last: string }>();
-  for (const r of openErrs) {
-    const subj = (r.subject as string | null) ?? "未分类";
-    const key = (r.kp_id as string | null) ?? `${subj}::${r.knowledge}`;
-    const cur = errMap.get(key) ?? { label: `${subj}·${r.knowledge}`, n: 0, last: "" };
-    cur.n++;
-    const d = String(r.log_date ?? "");
-    if (d > cur.last) cur.last = d;
-    errMap.set(key, cur);
-  }
-  const selfErrorLines = [...errMap.values()]
-    .sort((a, b) => b.n - a.n || (a.last < b.last ? 1 : -1))
-    .slice(0, 8)
-    .map((e) => `${e.label}${e.n > 1 ? " ×" + e.n : ""}${e.n >= escT ? " 🔺转专题" : ""}（最近${e.last || "?"}）`);
+  // 错题本 = 弱项（唯一事实源 study_error）：全生命周期聚合（复发感知 + 周日复检名单）
+  const { lines: selfErrorLines, recheck: recheckLines } = aggregateErrorBook(
+    (selfErrRes.data ?? []) as ErrorBookRow[],
+    coachCfg.红线.同弱项错次转专题,
+    today.getTime(),
+  );
 
   // 答疑最近卡点（互通只读）：云在答疑里确实卡过的点，聊到相关时可顺手帮他打通
   const askStuckLines = (askStuckRes.data ?? []).map((r) => {
@@ -256,7 +312,7 @@ async function loadLedger(today: Date) {
 
   return {
     stage, daysToExam, daysToBase,
-    progressLines, recentLines, selfErrorLines, askStuckLines, conversationLines, memoryFacts,
+    progressLines, recentLines, selfErrorLines, recheckLines, askStuckLines, conversationLines, memoryFacts,
   };
 }
 
@@ -369,9 +425,16 @@ ${ledger.memoryFacts.length ? ledger.memoryFacts.join("\n") : "- （暂无，留
 【已学进度·学习流水（云在教练页汇报的学习进度记在这——你要【持续关注、主动对照引用】，让云觉得每次汇报都被记住、被跟进；每科最多6章、最近在前）】
 ${ledger.progressLines.length ? ledger.progressLines.map((l) => "- " + l).join("\n") : "- （暂无章节流水——刚起步，按「尚未铺开」判断）"}
 
-【错题本（=弱项·唯一事实源，云主动说"记进错题本"才进来；按频次×新近；🔺=反复错建议转专题；吸收前一直挂着）
+【错题本（=弱项·唯一事实源，云主动说"记进错题本"才进来；按【累计】错次×新近，销账不清零；🔁=吸收过又错的复发点（云的病根，点破它、加倍盯）；🔺=累计错次到阈值建议转专题；吸收前一直挂着）
 ${backlogDirective}】
 ${ledger.selfErrorLines.length ? ledger.selfErrorLines.map((l) => "- " + l).join("\n") : "- （错题本是空的）"}
+${
+  isSunday && ledger.recheckLines.length
+    ? `
+【吸收复检名单（周日抽查·防"销账后又忘"：这些是销账 5-60 天的旧错题，本次复盘顺手挑 1-2 条用理解层突袭考一下——答上来就过、不用记录；答不上让云说"记进错题本"重新挂账，系统会自动标 🔁）】
+${ledger.recheckLines.map((l) => "- " + l).join("\n")}`
+    : ""
+}
 
 【答疑最近卡点（互通·只读参考：云在答疑页确实卡过的点——聊到相关时顺手用【理解层】考他、帮他打通；他讲清了就引导他自己去答疑页或跟你说"记进错题本/我会了"）】
 ${ledger.askStuckLines.length ? ledger.askStuckLines.map((l) => "- " + l).join("\n") : "- （无）"}`;
