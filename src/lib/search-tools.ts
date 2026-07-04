@@ -8,6 +8,12 @@ import { supabaseAdmin } from "./supabase";
  *
  * 2026-06-11 重写：
  * - 命中带 ±2 行上下文（重叠块合并），证据卡引用不再被腰斩成单行。
+ *
+ * 2026-07-04 检索质量修（答疑把"中止自动性"答反的事故复盘）：
+ * - 块边界句子补全：±2 窗口停在半句中间时向外扩到句读边界（OCR 硬换行文本一句跨多行，
+ *   两块夹缝恰好丢掉结论行会造成拼读反转）。
+ * - 目录点线行不算命中；关键词检索按块内命中数排序取前 MAX_BLOCKS（原纯文档序，
+ *   大词的前排全被目录/概述占掉，规则正文反被丢弃）。
  * - per-request MirrorCache：同一次答疑 12 条检索只把每个 kind 从 Supabase 拉一次
  *   （原先每个关键词全量下载五本教材，串行重复 10+ 次，是答疑延迟的大头之一）。
  * - search_zhenti 修复：year 与 question_no 分别在同一行匹配（原先 join(" ") 成
@@ -82,6 +88,10 @@ const KIND_BY_TOOL: Record<string, string> = {
 
 /** 命中行前后各带几行上下文（±2 保证证据卡引用不被腰斩，别降） */
 const CONTEXT_LINES = 2;
+/** 块边界停在半句中间时，向外找句读边界最多再扩几行（35 字/行的 OCR 硬换行文本 3 行≈100 字）。
+ *  2026-07-04 教训：考试分析"犯罪中止(3)注意"段跨 6 行，±2 窗口恰好把结论行"可以成立犯罪中止"
+ *  夹在两块缝隙里丢掉，剩下两个半句拼读=句意反转，答疑据此答错中止成立要件。 */
+const SENTENCE_EXTEND = 3;
 /** 每次检索最多返回几个上下文块。2026-07-02 降本：8→5——强制两库全覆盖后检索条数上去了，
  *  每条给 8 块会把作答 input 撑到 2-3 万 token（Opus 计费+拖慢首字）；5 块 × 10 来条查询覆盖已足。 */
 const MAX_BLOCKS = 5;
@@ -123,7 +133,16 @@ interface MatchBlock {
   text: string;
 }
 
-/** 在若干镜像行里按谓词逐行匹配，命中行连同 ±CONTEXT_LINES 行合并成上下文块 */
+/** 行是否停在句读边界（空行/表格行也算）。OCR 硬换行文本一行≈35 字，句子常跨行。 */
+function endsSentence(ln: string): boolean {
+  const t = ln.trim();
+  if (t === "") return true;
+  return /[。．！？!?…；;：:”」』）)】\]|]$/.test(t);
+}
+
+/** 在若干镜像行里按谓词逐行匹配，命中行连同 ±CONTEXT_LINES 行合并成上下文块；
+ *  块首尾停在半句中间时向外扩到句读边界（SENTENCE_EXTEND 封顶），扩展后重叠的块二次合并——
+ *  两个残句块各自截半句，中间恰好丢结论行的拼读反转，比少几行上下文危险得多。 */
 function grepRows(
   rows: MirrorRow[],
   predicate: (line: string) => boolean,
@@ -140,8 +159,46 @@ function grepRows(
     });
     totalHits += hitIdx.length;
 
-    let cur: { from: number; to: number; hits: number[] } | null = null;
-    const flush = (span: { from: number; to: number; hits: number[] }) => {
+    // ① 命中行 ±CONTEXT_LINES 聚成初始块（相邻/相接则合并）
+    const spans: { from: number; to: number; hits: number[] }[] = [];
+    for (const i of hitIdx) {
+      const from = Math.max(0, i - CONTEXT_LINES);
+      const to = Math.min(lines.length - 1, i + CONTEXT_LINES);
+      const cur = spans[spans.length - 1];
+      if (cur && from <= cur.to + 1) {
+        cur.to = to;
+        cur.hits.push(i);
+      } else {
+        spans.push({ from, to, hits: [i] });
+      }
+    }
+
+    // ② 句子补全：块首接在半句后/块尾停在半句中 → 向外扩到句读边界
+    for (const s of spans) {
+      let ext = SENTENCE_EXTEND;
+      while (s.from > 0 && ext > 0 && !endsSentence(lines[s.from - 1])) {
+        s.from--;
+        ext--;
+      }
+      ext = SENTENCE_EXTEND;
+      while (s.to < lines.length - 1 && ext > 0 && !endsSentence(lines[s.to])) {
+        s.to++;
+        ext--;
+      }
+    }
+
+    // ③ 扩展可能使相邻块重叠 → 二次合并后输出
+    const merged: typeof spans = [];
+    for (const s of spans) {
+      const last = merged[merged.length - 1];
+      if (last && s.from <= last.to + 1) {
+        last.to = Math.max(last.to, s.to);
+        last.hits.push(...s.hits);
+      } else {
+        merged.push(s);
+      }
+    }
+    for (const span of merged) {
       const hitSet = new Set(span.hits);
       const text = [];
       for (let i = span.from; i <= span.to; i++) {
@@ -153,19 +210,7 @@ function grepRows(
         hitLines: span.hits.map((i) => base + i),
         text: text.join("\n"),
       });
-    };
-    for (const i of hitIdx) {
-      const from = Math.max(0, i - CONTEXT_LINES);
-      const to = Math.min(lines.length - 1, i + CONTEXT_LINES);
-      if (cur && from <= cur.to + 1) {
-        cur.to = to;
-        cur.hits.push(i);
-      } else {
-        if (cur) flush(cur);
-        cur = { from, to, hits: [i] };
-      }
     }
-    if (cur) flush(cur);
   }
   return { blocks, totalHits };
 }
@@ -208,7 +253,8 @@ export async function executeSearchTool(
     if (!query) {
       return { result: `${name} 缺少 keyword 参数。`, hit: { tool: name, query, path: "", lines: [] } };
     }
-    ({ blocks, totalHits } = grepRows(rows, (ln) => ln.includes(query), query));
+    // 目录点线行（"犯罪中止....54"式）不算命中——大词检索时它们抢占文档序前排，全是噪音
+    ({ blocks, totalHits } = grepRows(rows, (ln) => ln.includes(query) && !/\.{6,}/.test(ln), query));
   }
 
   if (blocks.length === 0) {
@@ -218,7 +264,12 @@ export async function executeSearchTool(
     };
   }
 
-  const top = blocks.slice(0, MAX_BLOCKS);
+  // 命中密集的块优先（规则正文通常一段多次点题；纯文档序会让目录/概述把它挤出前 MAX_BLOCKS——
+  // 2026-07-04"犯罪中止"133 处命中、前 5 块全是概述噪音的实录）。sort 稳定，同命中数保持文档序；
+  // 真题检索仍按文档序（年份分区本身就是位置信息）。
+  const ranked =
+    name === "search_zhenti" ? blocks : [...blocks].sort((a, b) => b.hitLines.length - a.hitLines.length);
+  const top = ranked.slice(0, MAX_BLOCKS);
   const body = top.map((b) => `· ${b.path}（►=命中行）\n${b.text}`).join("\n");
   return {
     result: `命中 ${totalHits} 行 / ${blocks.length} 个片段（显示前 ${top.length}）：\n${note}${body}`,
