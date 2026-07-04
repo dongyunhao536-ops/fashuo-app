@@ -59,7 +59,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={state === "busy" || !password}
-        className="rounded-[14px] bg-blue px-4 py-3.5 text-[17px] font-semibold text-white disabled:opacity-40"
+        className="btn-blue-grad rounded-[14px] px-4 py-3.5 text-[17px] font-semibold text-white transition active:scale-[0.98] disabled:opacity-40"
       >
         {state === "busy" ? "登录中…" : "进入"}
       </button>

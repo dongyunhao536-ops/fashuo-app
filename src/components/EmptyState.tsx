@@ -25,7 +25,7 @@ export function EmptyState({
 }) {
   return (
     <div className="glass-card flex flex-col items-center rounded-[18px] px-6 py-10 text-center">
-      <span className={`grid h-14 w-14 place-items-center rounded-[18px] ${TONE[tone]}`}>
+      <span className={`tile-material grid h-14 w-14 place-items-center rounded-[18px] ${TONE[tone]}`}>
         <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth={1.7}>
           {icon}
         </svg>

@@ -47,14 +47,14 @@ export function EventActions({ id }: { id: number }) {
       <button
         onClick={() => act("confirm")}
         disabled={state === "busy"}
-        className="rounded-[14px] bg-fill px-4 py-1.5 text-[13px] font-medium text-label disabled:opacity-50"
+        className="rounded-[14px] bg-fill px-4 py-1.5 text-[13px] font-medium text-label transition active:scale-95 disabled:opacity-50"
       >
         收下
       </button>
       <button
         onClick={() => act("dismiss")}
         disabled={state === "busy"}
-        className="px-2 py-1.5 text-[13px] text-blue disabled:opacity-50"
+        className="px-2 py-1.5 text-[13px] text-blue transition active:scale-95 disabled:opacity-50"
       >
         忽略
       </button>

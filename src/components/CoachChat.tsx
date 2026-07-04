@@ -137,7 +137,7 @@ export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) 
         ) : (
           turns.map((t, i) => (
             <div key={i} className="flex flex-col gap-2.5">
-              <div className="max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-[7px] bg-blue px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+              <div className="btn-blue-grad max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
                 {t.input}
               </div>
 

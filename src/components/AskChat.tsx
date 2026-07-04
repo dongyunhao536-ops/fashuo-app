@@ -170,7 +170,7 @@ export function AskChat() {
               onClick={() => setSubject(s)}
               className={`shrink-0 rounded-full px-4 py-2 text-[14px] font-medium transition active:scale-95 ${
                 on
-                  ? "bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
+                  ? "btn-blue-grad text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
                   : "border border-hairline bg-card2 text-label2"
               }`}
             >
@@ -192,7 +192,7 @@ export function AskChat() {
         {turns.map((t, i) => (
           <div key={i} className="flex flex-col gap-2.5">
             {/* 用户问题 */}
-            <div className="max-w-[85%] self-end rounded-[22px] rounded-br-[7px] bg-blue px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+            <div className="btn-blue-grad max-w-[85%] self-end rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
               {t.subject && (
                 <span className="mr-1.5 rounded-[6px] bg-white/20 px-1.5 py-0.5 text-[11px] font-medium">
                   {t.subject}

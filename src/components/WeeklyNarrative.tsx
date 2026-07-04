@@ -66,7 +66,7 @@ export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText, 
         <button
           onClick={generate}
           disabled={loading}
-          className="rounded-[12px] bg-blue px-3.5 py-1.5 text-[12.5px] font-medium text-white disabled:opacity-50"
+          className="btn-blue-grad rounded-[12px] px-3.5 py-1.5 text-[12.5px] font-medium text-white transition active:scale-95 disabled:opacity-50"
         >
           {loading ? "生成中…" : content ? "刷新" : "生成"}
         </button>

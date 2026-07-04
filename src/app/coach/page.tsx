@@ -116,7 +116,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
                   key={s}
                   href={s === "全部" ? "/coach?view=weak" : `/coach?view=weak&subject=${encodeURIComponent(s)}`}
                   className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
-                    active ? "bg-blue text-white" : "bg-card text-label2"
+                    active ? "btn-blue-grad text-white" : "bg-card text-label2"
                   }`}
                 >
                   {s}

@@ -59,8 +59,8 @@ export default async function DashboardPage() {
 
       {/* 核心入口：答疑 / 教练 / 待办筐 */}
       <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
-      <section className="glass-card mx-4 divide-y divide-hairline rounded-[18px]">
-        <Link href="/ask" className="flex min-h-11 items-center px-4 py-3">
+      <section className="glass-card mx-4 divide-y divide-hairline overflow-hidden rounded-[18px]">
+        <Link href="/ask" className="pressable flex min-h-11 items-center px-4 py-3">
           <IconTile tone="green">
             <path
               d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z"
@@ -76,7 +76,7 @@ export default async function DashboardPage() {
           <span className="text-[17px] font-medium text-label2">{d.ask.openCount}</span>
           <Chevron />
         </Link>
-        <Link href="/coach" className="flex min-h-11 items-center px-4 py-3">
+        <Link href="/coach" className="pressable flex min-h-11 items-center px-4 py-3">
           <IconTile tone="blue">
             <rect x="3" y="4" width="18" height="16" rx="2" />
             <path d="M8 4v4M16 4v4M3 11h18" strokeLinecap="round" />
@@ -91,7 +91,7 @@ export default async function DashboardPage() {
           </div>
           <Chevron />
         </Link>
-        <Link href="/inbox" className="flex min-h-11 items-center px-4 py-3">
+        <Link href="/inbox" className="pressable flex min-h-11 items-center px-4 py-3">
           <IconTile tone="orange">
             <path d="M3 13h4l2 3h6l2-3h4M5 5h14l2 8v4a1 1 0 01-1 1H4a1 1 0 01-1-1v-4z" strokeLinejoin="round" strokeLinecap="round" />
           </IconTile>
@@ -113,7 +113,7 @@ export default async function DashboardPage() {
         <h2 className="text-[13px] text-label2">最需要攻克</h2>
         <Link href="/errors" className="text-[12px] text-blue">错题本 ›</Link>
       </div>
-      <section className="glass-card mx-4 mb-2 rounded-[16px]">
+      <section className="glass-card mx-4 mb-2 overflow-hidden rounded-[16px]">
         {d.top5.length === 0 ? (
           <div className="px-4 py-6 text-center text-[13px] text-label3">
             错题本是空的——在教练/答疑里说「记进错题本」才会进来
@@ -124,7 +124,7 @@ export default async function DashboardPage() {
               <Link
                 key={i}
                 href="/coach?view=weak"
-                className="flex min-h-11 items-center px-4 py-3"
+                className="pressable flex min-h-11 items-center px-4 py-3"
               >
                 <div className="flex-1">
                   <div className="line-clamp-1 text-[15px]">{w.knowledge}</div>
@@ -135,7 +135,7 @@ export default async function DashboardPage() {
                 <span className="ml-2 text-[14px] text-label3">›</span>
               </Link>
             ))}
-            <Link href="/coach?view=weak" className="block px-4 py-2.5 text-[13px] text-blue">
+            <Link href="/coach?view=weak" className="pressable block px-4 py-2.5 text-[13px] text-blue">
               全部错题 ›
             </Link>
           </div>
@@ -143,8 +143,8 @@ export default async function DashboardPage() {
       </section>
 
       {/* 周复盘入口（删背诵重做时曾丢失，2026-07-02 加回） */}
-      <section className="glass-card mx-4 mt-4 mb-2 rounded-[16px]">
-        <Link href="/weekly" className="flex min-h-11 items-center px-4 py-3">
+      <section className="glass-card mx-4 mt-4 mb-2 overflow-hidden rounded-[16px]">
+        <Link href="/weekly" className="pressable flex min-h-11 items-center px-4 py-3">
           <IconTile tone="neutral">
             <path d="M4 19V5M4 17l5-5 4 3 7-8" strokeLinecap="round" strokeLinejoin="round" />
           </IconTile>
@@ -176,7 +176,7 @@ function IconTile({
     neutral: "bg-fill text-label2",
   }[tone];
   return (
-    <span className={`mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] ${cls}`}>
+    <span className={`tile-material mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] ${cls}`}>
       <svg viewBox="0 0 24 24" className="h-[19px] w-[19px]" fill="none" stroke="currentColor" strokeWidth={1.8}>
         {children}
       </svg>

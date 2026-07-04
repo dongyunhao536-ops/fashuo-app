@@ -83,7 +83,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
               if (state === "error") setState("idle");
             }}
             className={`rounded-full px-3 py-1 text-[12px] font-medium ${
-              subject === s ? "bg-blue text-white" : "bg-card2 text-label2"
+              subject === s ? "btn-blue-grad text-white" : "bg-card2 text-label2"
             }`}
           >
             {s}
@@ -112,7 +112,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
         <button
           onClick={save}
           disabled={state === "busy"}
-          className="rounded-[12px] bg-blue px-4 py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
+          className="btn-blue-grad rounded-[12px] px-4 py-1.5 text-[13px] font-medium text-white transition active:scale-95 disabled:opacity-50"
         >
           {state === "busy" ? "存…" : "存进心得正文"}
         </button>

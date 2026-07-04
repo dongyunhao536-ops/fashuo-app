@@ -35,14 +35,14 @@ export function ErrorActions({ subject, knowledge }: { subject: string | null; k
       <button
         onClick={() => act("absorb")}
         disabled={state === "busy"}
-        className="rounded-[12px] bg-green/15 px-3.5 py-1.5 text-[12.5px] font-medium text-green disabled:opacity-50"
+        className="rounded-[12px] bg-green/15 px-3.5 py-1.5 text-[12.5px] font-medium text-green transition active:scale-95 disabled:opacity-50"
       >
         我会了
       </button>
       <button
         onClick={() => act("dismiss")}
         disabled={state === "busy"}
-        className="px-2 py-1.5 text-[12.5px] text-label3 disabled:opacity-50"
+        className="px-2 py-1.5 text-[12.5px] text-label3 transition active:scale-95 disabled:opacity-50"
       >
         不是错题
       </button>

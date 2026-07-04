@@ -61,7 +61,7 @@ export function ChatComposer({ value, onChange, onSend, disabled, placeholder }:
           onClick={onSend}
           disabled={!canSend}
           aria-label="发送"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-blue text-white shadow-[0_2px_10px_rgba(10,132,255,0.5)] transition active:scale-90 disabled:bg-fill disabled:text-label3 disabled:shadow-none"
+          className="btn-blue-grad grid h-10 w-10 shrink-0 place-items-center rounded-full text-white shadow-[0_2px_10px_rgba(10,132,255,0.5)] transition active:scale-90 disabled:bg-fill disabled:bg-none disabled:text-label3 disabled:shadow-none"
         >
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.5}>
             <path d="M12 19V5M6 11l6-6 6 6" strokeLinecap="round" strokeLinejoin="round" />

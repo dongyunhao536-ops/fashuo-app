@@ -44,7 +44,7 @@ export function TabBar({ active }: TabBarProps) {
             <Link
               key={t.key}
               href={t.href}
-              className={`flex flex-1 flex-col items-center gap-1 pb-1.5 pt-2 text-[10px] tracking-wide ${
+              className={`flex flex-1 flex-col items-center gap-1 pb-1.5 pt-2 text-[10px] tracking-wide transition-colors duration-150 active:opacity-60 ${
                 on ? "text-blue" : "text-label2"
               }`}
             >
@@ -53,7 +53,7 @@ export function TabBar({ active }: TabBarProps) {
                 className="h-6 w-6"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth={1.8}
+                strokeWidth={on ? 2 : 1.8}
               >
                 {ICONS[t.key]}
               </svg>
