@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { MODELS } from "./models";
 import {
-  SEARCH_TOOLS,
   executeSearchTool,
   createMirrorCache,
   type GrepHit,
@@ -46,7 +45,8 @@ export const anthropic = new Anthropic({
   baseURL: process.env.LLM_BASE_URL || undefined,
 });
 
-const ENABLE_THINKING = process.env.ENABLE_THINKING === "1";
+// （原 ENABLE_THINKING 旋钮随带 tools 的手动 loop 一起删除——thinking 在七牛云的真实形态见上方探针注释，
+//   若将来要开，在 runSingleTurn/runPlanThenAnswer 的 params 上加 thinking:{type:"adaptive"} 即可。）
 
 /** 七牛云限速分类：RPM 可退避重试；TPD/403 是硬顶/鉴权，快速失败 */
 function classifyError(err: unknown): "retry" | "daily_cap" | "auth" | "other" {
@@ -100,117 +100,17 @@ async function callWithRetry(
   throw lastErr;
 }
 
-/**
- * 手动 agentic loop：注入 grep 工具链，强制"回答前先检索"（v2.3 机制①⑨）。
- * 用手动 loop 而非 tool runner，以便收集 grep 命中行号写入审计（detection_log.grep_lines）。
- *
- * 成本栅栏（系统设计/10 §8）：
- * - 进入前 assertBudget()：今日估算花费撞 DAILY_BUDGET_USD 则抛 BudgetExceededError。
- * - 每次 messages.create 后 recordUsage() 记账 + 累计本次成本；循环中再查一次防工具死循环烧钱。
- *
- * Prompt caching：system 前缀加 cache_control（CLAUDE.md+skill+心得稳定段缓存，命中后输入成本降 ~90%）。
- *   稳定内容必须放前缀、易变内容放最后（前缀匹配，任一字节变动使后续失效）。实测七牛云透传缓存有效。
+/*
+ * ⚠️⚠️ 七牛云 prompt caching 在【带 tools 时不可用】——实测结论（2026-06-07，两次真实付费验证）：
+ *   · 无 tools（烟测）：system 缓存断点正常，cache_read 命中 ✓
+ *   · 带 tools + system 断点：七牛云直接忽略，cache_write=0 cache_read=0（退化为纯 input 计费）
+ *   · 带 tools + 末工具断点：cache_write 每轮重写 但 cache_read 永远 0 → "只写不读"
+ *     而 cache_write($6.25/M) > input($5/M)，比不缓存【还贵 ~8%】，是净亏损。
+ *   根因：七牛云经 AWS Bedrock，带 tools 时缓存跨调用读取失效，客户端无法修复。
+ *   故【任何要检索的调用】都走两段式（规划 → 本地 grep → 结果进 user 消息），绝不给模型挂 tools。
+ *   （原带 tools 的手动 agentic loop runWithSearchTools 已随背诵评分模块删除，2026-07-04——
+ *    这条教训是它留下的唯一遗产，谁想再给答疑/教练挂工具，先读这段。）
  */
-export async function runWithSearchTools(opts: {
-  /** 稳定系统前缀（CLAUDE.md + 答疑 skill + 心得稳定段）——会被缓存 */
-  systemStable: string;
-  /** 易变系统尾部（当前弱项 Top5、注入的卡点等）——不缓存，放前缀之后 */
-  systemVolatile?: string;
-  messages: Anthropic.MessageParam[];
-  model?: string;
-  maxTokens?: number;
-  /** 记账归类：ask / grade / draft / smoketest */
-  route?: string;
-}): Promise<{
-  message: Anthropic.Message;
-  grepHits: GrepHit[];
-  costUsd: number;
-}> {
-  const {
-    systemStable,
-    systemVolatile,
-    model = MODELS.ASK,
-    maxTokens = 16000,
-    route = "ask",
-  } = opts;
-
-  // 栅栏①：进入前预检今日预算
-  await assertBudget();
-
-  const messages = [...opts.messages];
-  const grepHits: GrepHit[] = [];
-  const mirrorCache = createMirrorCache();
-  let costUsd = 0;
-
-  // ⚠️⚠️ 七牛云 prompt caching 在【带 tools 时不可用】——实测结论（2026-06-07，两次真实付费验证）：
-  //   · 无 tools（烟测）：system 缓存断点正常，cache_read 命中 ✓
-  //   · 带 tools + system 断点：七牛云直接忽略，cache_write=0 cache_read=0（退化为纯 input 计费）
-  //   · 带 tools + 末工具断点：cache_write 每轮重写(如3090) 但 cache_read 永远 0 → "只写不读"
-  //     而 cache_write($6.25/M) > input($5/M)，比不缓存【还贵 ~8%】，是净亏损。
-  //   根因：七牛云经 AWS Bedrock，带 tools 时缓存跨调用读取失效，客户端无法修复。
-  //   故答疑/评分这类【必带 grep 工具】的调用一律【不设缓存断点】，走纯 input 最省。
-  //   （若将来某调用不带 tools，可单独给 system 加 cache_control 复用烟测验证过的缓存。）
-  const system: Anthropic.TextBlockParam[] = [{ type: "text", text: systemStable }];
-  if (systemVolatile) {
-    system.push({ type: "text", text: systemVolatile });
-  }
-
-  // 防御性上限，避免工具调用死循环
-  for (let i = 0; i < 12; i++) {
-    const params: Anthropic.MessageCreateParamsNonStreaming = {
-      model,
-      max_tokens: maxTokens,
-      system,
-      tools: SEARCH_TOOLS,
-      messages,
-    };
-    // 思考参数默认关（七牛云 Bedrock 兼容性未知）；仅显式开启时加
-    if (ENABLE_THINKING) {
-      (params as Anthropic.MessageCreateParamsNonStreaming & {
-        thinking?: { type: string };
-      }).thinking = { type: "adaptive" };
-    }
-
-    const response = await callWithRetry(params);
-
-    // 栅栏②：每次调用后立即记账 + 累计
-    costUsd += await recordUsage({
-      route,
-      model,
-      usage: usageFromMessage(response),
-      meta: { loop: i, stop_reason: response.stop_reason },
-    });
-
-    if (response.stop_reason !== "tool_use") {
-      return { message: response, grepHits, costUsd };
-    }
-
-    // 栅栏③：工具循环中也守预算（防多轮 grep 把钱烧穿）
-    await assertBudget();
-
-    messages.push({ role: "assistant", content: response.content });
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const block of response.content) {
-      if (block.type === "tool_use") {
-        const { result, hit } = await executeSearchTool(
-          block.name,
-          block.input as Record<string, unknown>,
-          mirrorCache,
-        );
-        if (hit) grepHits.push(hit);
-        toolResults.push({
-          type: "tool_result",
-          tool_use_id: block.id,
-          content: result,
-        });
-      }
-    }
-    messages.push({ role: "user", content: toolResults });
-  }
-
-  // 超过上限仍未收口：返回最后一次（调用方应标★）
-  throw new Error("runWithSearchTools: 工具调用超过上限未收口");
-}
 
 export interface PlannedSearch {
   tool: string;
@@ -471,7 +371,7 @@ export async function runPlanThenAnswer(opts: {
 export async function runSingleTurn(opts: {
   /**
    * 纯字符串=单块不缓存；{stable, volatile}=稳定前缀加 cache_control、易变块在后。
-   * 缓存只给【不带 tools】的调用用——带 tools 经七牛云/Bedrock 是"只写不读"净亏损（见 ↑runWithSearchTools 备注）；
+   * 缓存只给【不带 tools】的调用用——带 tools 经七牛云/Bedrock 是"只写不读"净亏损（见 ↑模块级缓存实测注释）；
    * 本函数无 tools，走的是烟测验证过的透传缓存路径。
    */
   system: string | { stable: string; volatile: string };

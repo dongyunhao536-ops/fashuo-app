@@ -9,7 +9,7 @@ export default function manifest(): MetadataRoute.Manifest {
   return {
     name: "法硕备考",
     short_name: "法硕",
-    description: "云的定制法硕备考 APP（背诵+答疑+教练）",
+    description: "云的定制法硕备考 APP（答疑+教练）",
     start_url: "/",
     display: "standalone",
     // iPad 横竖屏自由旋转（2026-06-17）：原锁 portrait，iPad 配键盘横屏用会被卡。

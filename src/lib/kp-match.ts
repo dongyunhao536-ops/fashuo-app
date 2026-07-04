@@ -7,8 +7,8 @@ import { supabaseAdmin, fetchAllRows } from "./supabase";
  * 纯内存匹配（考点总量有界），按 subject 收窄。**宁缺毋滥**：0 个或多歧义一律返回 null，
  * 交给教练侧"兜底保留"（按科目记 + 投待办筐人工指认），绝不错钉考点。
  *
- * 注：normalize/coreOf 是 detection.ts 同名纯函数的轻量副本——刻意不 import detection，
- *     避免把它的重模块图（anthropic SDK / search-tools / supabase 写库）拉进本工具。
+ * 注：normalize/coreOf 原是背诵检测 detection.ts 同名纯函数的轻量副本；detection 已随
+ *     背诵模块删除（2026-06-29），这里是这两个函数的唯一存活版本。
  */
 
 export interface KpLite {
