@@ -95,6 +95,13 @@ const SENTENCE_EXTEND = 3;
 /** 每次检索最多返回几个上下文块。2026-07-02 降本：8→5——强制两库全覆盖后检索条数上去了，
  *  每条给 8 块会把作答 input 撑到 2-3 万 token（Opus 计费+拖慢首字）；5 块 × 10 来条查询覆盖已足。 */
 const MAX_BLOCKS = 5;
+/** xinde 是条目库（一行=一条完整心得，自带页码/真题锚点），邻行是不相干的其他条目——
+ *  上下文预算换成覆盖条数：0 行上下文 × 10 块，token 不升反降、覆盖翻倍。
+ *  2026-07-04 实录：「犯罪中止」在 xinde 命中 10 块，讲义 P157 马工程因果结论排第 9，
+ *  5 块窗口永远轮不到它，答疑因此从未引用过这条已入库的关键心得。 */
+const KIND_PARAMS: Record<string, { context: number; maxBlocks: number }> = {
+  xinde: { context: 0, maxBlocks: 10 },
+};
 /** 单行超过这个长度就裁剪（教材 txt 一段一行，可能几千字） */
 const LINE_CLIP = 160;
 
@@ -147,6 +154,7 @@ function grepRows(
   rows: MirrorRow[],
   predicate: (line: string) => boolean,
   keyword?: string,
+  context: number = CONTEXT_LINES,
 ): { blocks: MatchBlock[]; totalHits: number } {
   const blocks: MatchBlock[] = [];
   let totalHits = 0;
@@ -159,11 +167,11 @@ function grepRows(
     });
     totalHits += hitIdx.length;
 
-    // ① 命中行 ±CONTEXT_LINES 聚成初始块（相邻/相接则合并）
+    // ① 命中行 ±context 聚成初始块（相邻/相接则合并）
     const spans: { from: number; to: number; hits: number[] }[] = [];
     for (const i of hitIdx) {
-      const from = Math.max(0, i - CONTEXT_LINES);
-      const to = Math.min(lines.length - 1, i + CONTEXT_LINES);
+      const from = Math.max(0, i - context);
+      const to = Math.min(lines.length - 1, i + context);
       const cur = spans[spans.length - 1];
       if (cur && from <= cur.to + 1) {
         cur.to = to;
@@ -174,16 +182,19 @@ function grepRows(
     }
 
     // ② 句子补全：块首接在半句后/块尾停在半句中 → 向外扩到句读边界
-    for (const s of spans) {
-      let ext = SENTENCE_EXTEND;
-      while (s.from > 0 && ext > 0 && !endsSentence(lines[s.from - 1])) {
-        s.from--;
-        ext--;
-      }
-      ext = SENTENCE_EXTEND;
-      while (s.to < lines.length - 1 && ext > 0 && !endsSentence(lines[s.to])) {
-        s.to++;
-        ext--;
+    //    （仅连续文本库；context=0 的条目库一行自成一条，不扩邻行）
+    if (context > 0) {
+      for (const s of spans) {
+        let ext = SENTENCE_EXTEND;
+        while (s.from > 0 && ext > 0 && !endsSentence(lines[s.from - 1])) {
+          s.from--;
+          ext--;
+        }
+        ext = SENTENCE_EXTEND;
+        while (s.to < lines.length - 1 && ext > 0 && !endsSentence(lines[s.to])) {
+          s.to++;
+          ext--;
+        }
       }
     }
 
@@ -254,7 +265,12 @@ export async function executeSearchTool(
       return { result: `${name} 缺少 keyword 参数。`, hit: { tool: name, query, path: "", lines: [] } };
     }
     // 目录点线行（"犯罪中止....54"式）不算命中——大词检索时它们抢占文档序前排，全是噪音
-    ({ blocks, totalHits } = grepRows(rows, (ln) => ln.includes(query) && !/\.{6,}/.test(ln), query));
+    ({ blocks, totalHits } = grepRows(
+      rows,
+      (ln) => ln.includes(query) && !/\.{6,}/.test(ln),
+      query,
+      (KIND_PARAMS[kind] ?? { context: CONTEXT_LINES }).context,
+    ));
   }
 
   if (blocks.length === 0) {
@@ -269,7 +285,7 @@ export async function executeSearchTool(
   // 真题检索仍按文档序（年份分区本身就是位置信息）。
   const ranked =
     name === "search_zhenti" ? blocks : [...blocks].sort((a, b) => b.hitLines.length - a.hitLines.length);
-  const top = ranked.slice(0, MAX_BLOCKS);
+  const top = ranked.slice(0, KIND_PARAMS[kind]?.maxBlocks ?? MAX_BLOCKS);
   const body = top.map((b) => `· ${b.path}（►=命中行）\n${b.text}`).join("\n");
   return {
     result: `命中 ${totalHits} 行 / ${blocks.length} 个片段（显示前 ${top.length}）：\n${note}${body}`,
