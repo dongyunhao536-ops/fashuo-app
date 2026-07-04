@@ -38,6 +38,38 @@ describe("splitMeta（答疑 META 抽取）", () => {
     const { meta } = splitMeta('正文\n<<<ASK_META\n{"subject":"宪法"}');
     expect(meta?.subject).toBe("宪法");
   });
+
+  // —— 2026-07-04 线上 bug 复现锚：模型把 META 块提前吐（复述题干→吐块→再写正文），
+  //    旧实现 clean=块前文本、块后正文整段静默吞掉 → 用户只看到一句题干复读。——
+  it("META 块提前吐在中间 → 两侧正文都保住、meta 照常解析（线上 2026-07-04 实锤）", () => {
+    const { clean, meta } = splitMeta(
+      '题干复述：保险箱案与白糖案。\n<<<ASK_META\n{"subject":"刑法","confidence":75}\nASK_META>>>\n真正的答案正文在这里：中止与未遂的区分……',
+    );
+    expect(clean).toContain("题干复述");
+    expect(clean).toContain("真正的答案正文在这里");
+    expect(clean).not.toContain("ASK_META");
+    expect(meta?.confidence).toBe(75);
+  });
+
+  it("META 提前 + 缺闭合标记 + 后续正文 → 花括号配平抠 JSON，正文不丢", () => {
+    const { clean, meta } = splitMeta(
+      '复述一句。\n<<<ASK_META\n{"subject":"刑法","confidence":60}\n后面的答案正文……',
+    );
+    expect(meta?.confidence).toBe(60);
+    expect(clean).toContain("复述一句");
+    expect(clean).toContain("后面的答案正文");
+  });
+
+  it("双 META 块 → 全部剥离、以最后一块解析成功的为准", () => {
+    const { clean, meta } = splitMeta(
+      '开头。\n<<<ASK_META\n{"subject":"民法","confidence":50}\nASK_META>>>\n中段正文。\n<<<ASK_META\n{"subject":"刑法","confidence":90}\nASK_META>>>',
+    );
+    expect(meta?.subject).toBe("刑法");
+    expect(meta?.confidence).toBe(90);
+    expect(clean).toContain("开头");
+    expect(clean).toContain("中段正文");
+    expect(clean).not.toContain("ASK_META");
+  });
 });
 
 describe("screenCandidates（待办筐防灌筐：封顶+去短+批内去重）", () => {

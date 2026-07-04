@@ -1,4 +1,5 @@
 import { runSingleTurn, extractText, parsePlan, dedupeSearches } from "./anthropic";
+import { stripMetaBlocks } from "./ask-prompt";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
 import { currentStage } from "./scheduler";
@@ -114,25 +115,25 @@ export interface CoachResult {
 const PLACEHOLDER_RE = /^[（(\[【]?\s*(无|没有|留空|暂无|不适用|待定|null|n\/?a|none|-|—)\s*[）)\]】]?$/i;
 
 /**
- * 从回复中抽 <<<COACH_META{json}>>> 块，返回 { clean(剥离后展示文本), meta }。纯函数（仿 splitMeta），便于单测。
+ * 从回复中抽 <<<COACH_META{json}>>> 块，返回 { clean(剥离后展示文本), meta }。纯函数（与 splitMeta 共用底座），便于单测。
  * 解析失败 → meta=null + 打日志（本轮结构化沉淀丢弃，但对话正文照常展示，不阻塞）。
+ * 2026-07-04 同答疑 splitMeta 一并修复：META 块提前吐时块后正文不再被静默吞掉（stripMetaBlocks 两侧都保）。
  */
 export function splitCoachMeta(full: string): { clean: string; meta: CoachMeta | null } {
-  const start = full.indexOf(COACH_META_OPEN);
-  if (start === -1) return { clean: full.trim(), meta: null };
-  const end = full.indexOf(COACH_META_CLOSE, start);
-  const jsonRaw =
-    end === -1
-      ? full.slice(start + COACH_META_OPEN.length)
-      : full.slice(start + COACH_META_OPEN.length, end);
-  const clean = full.slice(0, start).trim();
-  try {
-    const cleaned = jsonRaw.replace(/```json|```/g, "").trim();
-    return { clean, meta: JSON.parse(cleaned) as CoachMeta };
-  } catch {
-    console.error("[coach] META 块 JSON 解析失败，本轮结构化沉淀丢弃。片段：", jsonRaw.slice(0, 300));
-    return { clean, meta: null };
+  const { clean, raws } = stripMetaBlocks(full, COACH_META_OPEN, COACH_META_CLOSE);
+  let meta: CoachMeta | null = null;
+  let failedRaw: string | null = null;
+  for (const raw of raws) {
+    try {
+      meta = JSON.parse(raw.replace(/```json|```/g, "").trim()) as CoachMeta; // 多块时以最后一块解析成功的为准
+    } catch {
+      failedRaw = raw;
+    }
   }
+  if (meta === null && failedRaw !== null) {
+    console.error("[coach] META 块 JSON 解析失败，本轮结构化沉淀丢弃。片段：", failedRaw.slice(0, 300));
+  }
+  return { clean, meta };
 }
 
 /** 行列表清洗：剥行首符号/序号、去占位词（wrongs/absorbed 容错） */

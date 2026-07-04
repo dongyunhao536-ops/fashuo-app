@@ -28,6 +28,15 @@ describe("splitCoachMeta 正文+META 分离", () => {
     const full = `回复。\n${COACH_META_OPEN}\n\`\`\`json\n{"subject":"民法"}\n\`\`\`\n${COACH_META_CLOSE}`;
     expect(splitCoachMeta(full).meta?.subject).toBe("民法");
   });
+
+  it("META 块提前吐在中间 → 块后正文不被吞（与答疑 splitMeta 2026-07-04 同修）", () => {
+    const full = `先回一句。\n${COACH_META_OPEN}\n{"subject":"刑法"}\n${COACH_META_CLOSE}\n后半段辅导正文。`;
+    const { clean, meta } = splitCoachMeta(full);
+    expect(meta?.subject).toBe("刑法");
+    expect(clean).toContain("先回一句");
+    expect(clean).toContain("后半段辅导正文");
+    expect(clean).not.toContain("COACH_META");
+  });
 });
 
 describe("aggregateErrorBook（复发感知：销账不清零 + 周日复检名单）", () => {

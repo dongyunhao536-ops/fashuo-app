@@ -40,27 +40,87 @@ export interface AskMeta {
  * 从答案文本中抽取 META 块并返回 { clean(剥离后展示文本), meta }。
  * 纯函数（无 IO），便于单测锁定——模型偶尔用 ```json 包裹/中文引号破坏 JSON 时不静默丢候选。
  * META 解析失败时返回 meta=null 并打日志（本轮候选弱项/心得/复验全部沉不下去，留痕排查漂移）。
+ *
+ * ⚠️ 2026-07-04 线上 bug 修复：旧实现 clean=META 之前的文本，块之后的内容【静默丢弃】。
+ * 模型偶尔把 META 块提前吐（先复述题干→吐块→再写正文，同题+缓存热会稳定复现），
+ * 整个答案正文被吞，用户只看到一句题干复读、且 META 因粘着正文解析失败连信心度都丢。
+ * 现语义：META 块出现在【任意位置】都剥干净，两侧正文都保住；多个块全剥、取最后解析成功的；
+ * 缺闭合标记时按花括号配平抠 JSON，其后正文照样保留。
  */
 export function splitMeta(full: string): { clean: string; meta: AskMeta | null } {
-  const start = full.indexOf(META_OPEN);
-  if (start === -1) return { clean: full.trim(), meta: null };
-  const end = full.indexOf(META_CLOSE, start);
-  const jsonRaw =
-    end === -1
-      ? full.slice(start + META_OPEN.length)
-      : full.slice(start + META_OPEN.length, end);
-  const clean = full.slice(0, start).trim();
-  try {
-    // 容错：模型偶尔会用 ```json 包裹
-    const cleaned = jsonRaw.replace(/```json|```/g, "").trim();
-    return { clean, meta: JSON.parse(cleaned) as AskMeta };
-  } catch {
+  const { clean, raws } = stripMetaBlocks(full, META_OPEN, META_CLOSE);
+  let meta: AskMeta | null = null;
+  let failedRaw: string | null = null;
+  for (const raw of raws) {
+    try {
+      // 容错：模型偶尔会用 ```json 包裹
+      meta = JSON.parse(raw.replace(/```json|```/g, "").trim()) as AskMeta; // 多块时以最后一块解析成功的为准
+    } catch {
+      failedRaw = raw;
+    }
+  }
+  if (meta === null && failedRaw !== null) {
     console.error(
       "[ask] META 块 JSON 解析失败，本轮候选沉淀丢弃。原文片段：",
-      jsonRaw.slice(0, 400),
+      failedRaw.slice(0, 400),
     );
-    return { clean, meta: null };
   }
+  return { clean, meta };
+}
+
+/**
+ * 通用 META 块剥离（答疑 splitMeta / 教练 splitCoachMeta 共用底座）：
+ * 把 open…close 标记块从全文剥掉，返回 { clean(两侧正文都保住), raws(各块原始 JSON 文本) }。
+ * 缺闭合标记时按花括号配平抠 JSON 对象、其后文本回归正文；配不平则吞到结尾（同旧行为）。
+ */
+export function stripMetaBlocks(
+  full: string,
+  open: string,
+  close: string,
+): { clean: string; raws: string[] } {
+  const parts: string[] = [];
+  const raws: string[] = [];
+  let cursor = 0;
+  for (;;) {
+    const start = full.indexOf(open, cursor);
+    if (start === -1) {
+      parts.push(full.slice(cursor));
+      break;
+    }
+    parts.push(full.slice(cursor, start));
+    const bodyStart = start + open.length;
+    const closeAt = full.indexOf(close, bodyStart);
+    if (closeAt !== -1) {
+      raws.push(full.slice(bodyStart, closeAt));
+      cursor = closeAt + close.length;
+    } else {
+      const rest = full.slice(bodyStart);
+      const jStart = rest.indexOf("{");
+      let jEnd = -1;
+      if (jStart !== -1) {
+        let depth = 0;
+        for (let i = jStart; i < rest.length; i++) {
+          if (rest[i] === "{") depth++;
+          else if (rest[i] === "}" && --depth === 0) {
+            jEnd = i;
+            break;
+          }
+        }
+      }
+      if (jEnd === -1) {
+        raws.push(rest);
+        cursor = full.length;
+      } else {
+        raws.push(rest.slice(jStart, jEnd + 1));
+        cursor = bodyStart + jEnd + 1;
+      }
+    }
+  }
+  const clean = parts
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return { clean, raws };
 }
 
 /**

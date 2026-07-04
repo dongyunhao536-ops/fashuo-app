@@ -80,8 +80,12 @@ function parseEvidenceFields(content: string): EvidenceField[] {
 
 /** 把答案切成有序段：散文(md) / 预检清单 / 证据卡。识别不到块时整体回退为一段 md。 */
 export function parseAskAnswer(raw0: string): AnswerSegment[] {
-  const metaAt = raw0.indexOf(META_OPEN);
-  const raw = (metaAt === -1 ? raw0 : raw0.slice(0, metaAt)).replace(/\r/g, "").trim();
+  // META 兜底剥离（服务端 splitMeta 已剥，这里防漏网）：闭合块无论出现在哪都整块剥掉、
+  // 两侧正文保留；仅剩未闭合的开标记时才截断到标记前（2026-07-04 与 splitMeta 同修：
+  // 旧逻辑从首个开标记一刀切，META 提前吐会把正文全吞）。
+  const noMeta = raw0.replace(/<<<ASK_META[\s\S]*?ASK_META>>>/g, "\n");
+  const metaAt = noMeta.indexOf(META_OPEN);
+  const raw = (metaAt === -1 ? noMeta : noMeta.slice(0, metaAt)).replace(/\r/g, "").trim();
   if (!raw) return [];
 
   // —— 预检清单区间：表头行 … 判权规则行（含）——
