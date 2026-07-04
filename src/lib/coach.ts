@@ -92,6 +92,8 @@ interface CoachMeta {
   /** 云明确说"记录进心得"时才有值（指令制）→ 直通心得「手动登记」正文 */
   xinde_notes?: string[];
   absorbed?: string[];
+  /** 云明确要求修正过往进度时才有值（指令制）→ 改该科最近一条章节含 from 的 study_log */
+  log_fix?: { subject?: string | null; from?: string | null; to?: string | null };
   memory_updates?: { fact: string; category?: string | null }[];
 }
 
@@ -103,6 +105,7 @@ export interface CoachResult {
   memorized: string[]; // 本轮新记住的长期事实（UI 轻提示）
   logId: number | null; // study_log 行 id（仅状态展示用）
   logSkipped: boolean; // true=非汇报轮（提问/讨论），不入学习日志
+  logFixed: string | null; // 云指令"修正进度"→ 实际改动描述（null=本轮无修正）
   costUsd: number;
   metaParsed: boolean; // META 是否解析成功（debug）
 }
@@ -338,11 +341,12 @@ ${EXAM_OUTLINE}
 
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"is_report":true/false（云本轮是否在【汇报自己学了什么】——他主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"is_report":true/false（【只看"本轮云说"那一条消息】是否在汇报自己学了什么——他这条消息主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false。⚠️此前对话里的汇报你已经记过账了，据它填 true 会造成重复记账）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"log_fix":{"subject":"刑法","from":"原记录里的章节关键词（如'第四章'）","to":"修正后的章节全名"}（【默认省略·仅主动指令】只有云本轮明确要求修正/改正之前记错的进度时才填）,"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
 规则（记录=云主动指令制，2026-06-30）：
 - **学习日志只认汇报**：is_report=true（云明确在汇报学习进度）时才填 subject/chapter/activity/accuracy；云提问/讨论/被考时这些全省略、is_report=false——系统只在 is_report=true 时写学习日志。
 - **错题本/心得只认指令**：wrongs 只在云说"记进错题本"时填；xinde_notes 只在云说"记录进心得"时填。你觉得某个错误/规律很值得记时，【可以在正文里问一句】"要不要我记进错题本/心得？"——云答应了，下一轮再填；【绝不允许不问自记】。
+- **修正过往进度只有 log_fix 一条路**：云要求改之前记错的章节时填 log_fix，系统会把该科最近一条章节含 from 的学习日志改成 to。没填 log_fix 就【什么都没被修改】——不许口头宣称"我给你改过来了"（2026-07-04 事故：口头答应但库里没改）。
 - confusion 仅供你追问、不入库。memory_updates 只发【新的/变化的】耐久事实，已在长期记忆里的别重复发。这个块外不要再写任何东西。`;
 }
 
@@ -379,12 +383,15 @@ function buildUserMessage(conversationLines: string[], input: string, extraBlock
   const convo =
     conversationLines.length === 0
       ? ""
-      : `【此前对话（最近几轮，供你理解上文/指代；引用证据仍以账本为准）】
+      : `【此前对话（旧→新。这些轮次你【都已经回复过、该记的账也都记过了】——只用于理解上文和指代：
+- 不要把旧问题重新回答一遍，不要复述你自己说过的内容（2026-07-04 事故：把前一天的回复整段重播）；
+- 不要把云在此前轮次说的话当成他本轮说的；
+- 此前有云没接的问题，想追就简短一句带过，别重写答案。引用证据仍以账本为准）】
 ${conversationLines.join("\n")}
 
 `;
   if (!convo && !extraBlock) return input;
-  return `${convo}【本轮云说】
+  return `${convo}【本轮云说（你只回应这一条）】
 ${input}${extraBlock ? `\n\n${extraBlock}` : ""}`;
 }
 
@@ -506,22 +513,71 @@ export async function runCoach(
 
   let logId: number | null = null;
   if (isStudyRecord) {
-    const { data: logRow, error: logErr } = await supabaseAdmin
-      .from("study_log")
-      .insert({
-        log_date: todayStr,
-        subject: parsed.subject ?? "未识别",
-        chapter: parsed.chapter,
-        activity: parsed.activity ?? "其他",
-        accuracy: parsed.accuracy,
-        feeling: parsed.feeling,
-        source: "manual",
-        raw_input: input,
-      })
-      .select("id")
-      .single();
-    if (logErr) console.error("[coach] study_log 写入失败：", logErr.message);
-    logId = (logRow?.id as number | undefined) ?? null;
+    // 同日同科同章防重（2026-07-04 事故：模型把历史里已入账的汇报当本轮又报一遍 → 第九章记了两条）。
+    // 章节名一含一（"第九章" vs "第九章 故意犯罪的停止形态"）也算重——模型复述时经常补全/缩短章名。
+    let dup = false;
+    if (parsed.chapter) {
+      const { data: sameDay } = await supabaseAdmin
+        .from("study_log")
+        .select("id, chapter")
+        .eq("log_date", todayStr)
+        .eq("subject", parsed.subject ?? "未识别");
+      dup = (sameDay ?? []).some((r) => {
+        const a = String(r.chapter ?? "");
+        return a && (a.includes(parsed.chapter!) || parsed.chapter!.includes(a));
+      });
+    }
+    if (dup) {
+      console.log("[coach] 同日同章已入账，跳过重复学习日志：", parsed.subject, parsed.chapter);
+    } else {
+      const { data: logRow, error: logErr } = await supabaseAdmin
+        .from("study_log")
+        .insert({
+          log_date: todayStr,
+          subject: parsed.subject ?? "未识别",
+          chapter: parsed.chapter,
+          activity: parsed.activity ?? "其他",
+          accuracy: parsed.accuracy,
+          feeling: parsed.feeling,
+          source: "manual",
+          raw_input: input,
+        })
+        .select("id")
+        .single();
+      if (logErr) console.error("[coach] study_log 写入失败：", logErr.message);
+      logId = (logRow?.id as number | undefined) ?? null;
+    }
+  }
+
+  // 进度修正（指令制，2026-07-04）：云明确要求修正时 META.log_fix 才有值 →
+  // 把该科【最近 14 天内最新一条】章节含 from 的学习日志改成 to（只动一行，防误伤）。
+  let logFixed: string | null = null;
+  const fix = meta?.log_fix;
+  if (fix?.subject && fix?.from && fix?.to) {
+    const fixSubj = String(fix.subject);
+    const fixFrom = String(fix.from).trim();
+    const fixTo = String(fix.to).trim().slice(0, 80);
+    if (SUBJECTS.includes(fixSubj) && fixFrom && fixTo) {
+      const since = bjDateStr(new Date(today.getTime() - 14 * DAY));
+      const { data: hit } = await supabaseAdmin
+        .from("study_log")
+        .select("id, chapter, log_date")
+        .eq("subject", fixSubj)
+        .ilike("chapter", `%${fixFrom}%`)
+        .gte("log_date", since)
+        .order("id", { ascending: false })
+        .limit(1);
+      if (hit && hit.length) {
+        const { error: fixErr } = await supabaseAdmin
+          .from("study_log")
+          .update({ chapter: fixTo })
+          .eq("id", hit[0].id);
+        if (fixErr) console.error("[coach] 进度修正失败：", fixErr.message);
+        else logFixed = `${hit[0].log_date} ${fixSubj}「${hit[0].chapter}」→「${fixTo}」`;
+      } else {
+        console.log("[coach] 进度修正未命中（近14天无匹配行）：", fixSubj, fixFrom);
+      }
+    }
   }
 
   // 错题本：只有云本轮【明确说"记进错题本"】时 META.wrongs 才有值（见 prompt 严控）；否则 wrongs 恒空、不写。
@@ -628,6 +684,7 @@ export async function runCoach(
     memorized,
     logId,
     logSkipped: !isStudyRecord,
+    logFixed,
     costUsd,
     metaParsed: meta != null,
   };
