@@ -2,6 +2,7 @@ import { runCoach } from "@/lib/coach";
 import { BudgetExceededError } from "@/lib/cost";
 import { DailyCapError, fmtCost } from "@/lib/anthropic";
 import { streamJson } from "@/lib/stream-response";
+import { sanitizeChatImage } from "@/lib/chat-image";
 
 /**
  * POST /api/coach —— 教练 T1（对话式家教，系统设计/13）。
@@ -19,21 +20,27 @@ export const maxDuration = 120;
 export async function POST(req: Request) {
   // 心跳流包裹：单次 Opus 也可能跨过手机蜂窝网的静默超时，保活到底。
   return streamJson(async () => {
-    let body: { input?: string };
+    let body: { input?: string; image?: unknown };
     try {
       body = await req.json();
     } catch {
       return { status: 400, body: { error: "请求体不是合法 JSON" } };
     }
-    const input = (body.input ?? "").trim();
-    if (!input) return { status: 400, body: { error: "input 不能为空" } };
+    // 拍照上传（错题页/笔记照片）：前端已压缩；不合法直接 400，不静默丢图
+    const image = body.image != null ? sanitizeChatImage(body.image) : null;
+    if (body.image != null && !image) {
+      return { status: 400, body: { error: "图片格式不对或过大（仅收 jpeg/png/webp、≤2MB）" } };
+    }
+    let input = (body.input ?? "").trim();
+    if (!input && !image) return { status: 400, body: { error: "input 不能为空" } };
+    if (!input) input = "（内容在图片里，先看图再回应）";
     if (input.length > 2000) {
       return { status: 400, body: { error: "一次别超 2000 字（对话/背给我听都够用了）" } };
     }
 
     try {
       // req.signal 在客户端「停止」断开连接时触发 → 透传中止上游 Opus 调用
-      const r = await runCoach(input, new Date(), req.signal);
+      const r = await runCoach(input, new Date(), req.signal, image);
       return { status: 200, body: { ...r, costText: fmtCost(r.costUsd) } };
     } catch (err) {
       if (err instanceof BudgetExceededError) {

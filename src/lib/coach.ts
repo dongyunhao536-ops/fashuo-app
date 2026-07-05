@@ -1,4 +1,5 @@
 import { runSingleTurn, extractText, parsePlan, dedupeSearches } from "./anthropic";
+import type { ChatImage } from "./chat-image";
 import { stripMetaBlocks } from "./ask-prompt";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
@@ -469,7 +470,7 @@ const COACH_GREP_CLIP = 12000;
  * 闲聊/汇报进度等与具体知识点无关的轮次规划器给空数组 → 零注入零额外 Opus input。
  * 任何一步失败都吞掉返回空串（教练退回纯账本+架构作答，不阻塞）。
  */
-async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal): Promise<{ block: string; costUsd: number; subject: string | null }> {
+async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal, image?: ChatImage | null): Promise<{ block: string; costUsd: number; subject: string | null }> {
   const planSystem = `你是法硕教练的检索规划器。教练回答前可先查库：search_textbook（《考试分析》教材+刑法讲义原文）/ search_xinde（做题心得）/ search_zhenti（真题，参数 year、question_no）。
 两件事：
 ① 判科目：云本轮主要涉及哪科（刑法|民法|法理|宪法|法制史）——汇报进度/提问/被考都算；跨科或无科目给 null。
@@ -488,6 +489,7 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
       maxTokens: 500,
       route: "coach:plan",
       signal,
+      image, // 拍照轮：考点/章节多半在图里，规划器不看图判不了科目和检索词
     });
     const plan = parsePlan(extractText(message));
     const subject = plan.subject && SUBJECTS.includes(plan.subject) ? plan.subject : null;
@@ -523,6 +525,9 @@ export async function runCoach(
   input: string,
   today = new Date(),
   signal?: AbortSignal,
+  /** 拍照上传（错题页/笔记）：只随本轮进规划+作答两次调用；不写 coach_message 账本
+   *  （账本只存文字并标〔附图〕——图片 base64 进账本会把后续每轮的对话回喂撑爆，复利成本红线） */
+  image?: ChatImage | null,
 ): Promise<CoachResult> {
   const todayStr = bjDateStr(today);
   // 北京星期（+8h 后取 UTC 星期）：周日做"本周积压未吸收错题"复盘，非周日不主动翻账。
@@ -534,6 +539,7 @@ export async function runCoach(
     input,
     ledger.conversationLines.slice(-4),
     signal,
+    image,
   );
   const gaopinBlock = await loadGaopinFor(planSubject);
   const extraBlocks = [gaopinBlock, grepBlock].filter(Boolean).join("\n\n");
@@ -548,6 +554,7 @@ export async function runCoach(
     signal,
     route: "coach",
     maxTokens: 4000, // 对话式回复可能较长 + 尾部 META
+    image,
   });
   const costUsd = planCost + answerCost;
 
@@ -733,9 +740,10 @@ export async function runCoach(
     memorized.push(fact);
   }
 
-  // 存本轮对话（连续性）：云消息 + 教练回复
+  // 存本轮对话（连续性）：云消息 + 教练回复。附图轮只存文字+标记——
+  // 教练回复已复述图中要点，后续轮靠文字回喂足够，图不进账本（复利成本红线）
   const { error: msgErr } = await supabaseAdmin.from("coach_message").insert([
-    { role: "user", content: input },
+    { role: "user", content: image ? `${input}〔附图片〕` : input },
     { role: "assistant", content: reply },
   ]);
   if (msgErr) console.error("[coach] coach_message 写入失败：", msgErr.message);

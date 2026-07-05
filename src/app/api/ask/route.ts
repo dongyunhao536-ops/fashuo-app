@@ -18,6 +18,7 @@ import {
 } from "@/lib/ask-prompt";
 import { normalizeSubject, SUBJECT_CANON } from "@/lib/events";
 import { streamJson } from "@/lib/stream-response";
+import { sanitizeChatImage } from "@/lib/chat-image";
 
 /**
  * POST /api/ask —— 答疑直答版（build order ②）。
@@ -74,16 +75,24 @@ export async function POST(req: Request) {
       subject?: string;
       kpId?: string;
       history?: { question?: unknown; answer?: unknown }[];
+      image?: unknown;
     };
     try {
       body = await req.json();
     } catch {
       return { status: 400, body: { error: "请求体不是合法 JSON" } };
     }
-    const question = (body.question ?? "").trim();
-    if (!question) {
+    // 拍照上传：前端已压到 ≤115 万像素（≈1500 token）；不合法的 image 直接 400 而非静默丢弃
+    //（静默丢弃会让模型"没看到图"却装作在答题，比报错更坑）。图只随当轮，不进 history。
+    const image = body.image != null ? sanitizeChatImage(body.image) : null;
+    if (body.image != null && !image) {
+      return { status: 400, body: { error: "图片格式不对或过大（仅收 jpeg/png/webp、≤2MB）" } };
+    }
+    let question = (body.question ?? "").trim();
+    if (!question && !image) {
       return { status: 400, body: { error: "question 不能为空" } };
     }
+    if (!question) question = "（题目在图片里：先完整识别图中题干/选项，再按流程作答）";
     const subject = body.subject?.trim() || undefined;
     const history = (Array.isArray(body.history) ? body.history : [])
       .filter(
@@ -107,6 +116,7 @@ export async function POST(req: Request) {
           maxTokens: 400,
           route: "ask:record",
           signal: req.signal,
+          image, // "把这页错题记进错题本"配图的场景：Sonnet 小调用看图提取，成本忽略不计
         });
         const ext = parseRecordExtract(extractText(message));
         const meta: AskMeta = {
@@ -156,6 +166,7 @@ export async function POST(req: Request) {
         enableCache: true, // 两段均无 tools，教义/规划 system 跨请求稳定 → 缓存安全
         route: "ask",
         signal: req.signal, // 「停止思考」：客户端断开 → 中止规划/作答两次 Opus 调用
+        image, // 拍照题：规划+作答两段都看图（题干在图里，规划器不看图列不出检索词）
       });
 
       const full = extractText(message);

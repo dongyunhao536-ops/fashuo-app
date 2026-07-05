@@ -6,6 +6,7 @@ import {
   type GrepHit,
 } from "./search-tools";
 import { assertBudget, recordUsage, usageFromMessage, RMB_PER_USD } from "./cost";
+import type { ChatImage } from "./chat-image";
 
 /**
  * Claude 客户端。
@@ -111,6 +112,25 @@ async function callWithRetry(
  *   （原带 tools 的手动 agentic loop runWithSearchTools 已随背诵评分模块删除，2026-07-04——
  *    这条教训是它留下的唯一遗产，谁想再给答疑/教练挂工具，先读这段。）
  */
+
+/**
+ * 拼 user 消息内容：无图 = 纯字符串（与历史行为字节级一致，不惊动缓存/计费）；
+ * 有图 = [image, text] 块数组（七牛云 Anthropic 协议原生支持，2026-06 OCR 探针实证）。
+ * 图放 text 前——Anthropic 官方建议图在前问在后，OCR/读题效果更稳。
+ */
+function buildUserContent(
+  text: string,
+  image?: ChatImage | null,
+): string | Anthropic.ContentBlockParam[] {
+  if (!image) return text;
+  return [
+    {
+      type: "image",
+      source: { type: "base64", media_type: image.media_type, data: image.data },
+    },
+    { type: "text", text },
+  ];
+}
 
 export interface PlannedSearch {
   tool: string;
@@ -240,6 +260,9 @@ export async function runPlanThenAnswer(opts: {
   enableCache?: boolean;
   /** 「停止思考」：透传到 SDK 中止规划/作答两次调用 */
   signal?: AbortSignal;
+  /** 拍照上传（题目照片）：随规划+作答两段一起进 user 消息。规划器必须也看图——
+   *  题干往往全在图里，不看图列不出检索词。成本增量见 chat-image.ts 头注（≈¥0.08/张）。 */
+  image?: ChatImage | null;
 }): Promise<{
   message: Anthropic.Message;
   grepHits: GrepHit[];
@@ -260,6 +283,7 @@ export async function runPlanThenAnswer(opts: {
     route = "ask",
     enableCache = false,
     signal,
+    image,
   } = opts;
 
   await assertBudget();
@@ -279,7 +303,7 @@ export async function runPlanThenAnswer(opts: {
         model: m,
         max_tokens: 1500,
         system: [{ type: "text", text: planSystem, ...cacheCtl }],
-        messages: [{ role: "user", content: question }],
+        messages: [{ role: "user", content: buildUserContent(question, image) }],
       },
       5,
       signal,
@@ -342,7 +366,10 @@ export async function runPlanThenAnswer(opts: {
       max_tokens: maxAnswerTokens,
       system: sys,
       messages: [
-        { role: "user", content: `${question}\n\n${formatExecuted(executed)}` },
+        {
+          role: "user",
+          content: buildUserContent(`${question}\n\n${formatExecuted(executed)}`, image),
+        },
       ],
     },
     5,
@@ -381,8 +408,10 @@ export async function runSingleTurn(opts: {
   route?: string;
   /** 「停止思考」：透传到 SDK 中止上游调用 */
   signal?: AbortSignal;
+  /** 拍照上传：图 block 放 user 文本前（不碰 system 缓存前缀，缓存路径不受影响） */
+  image?: ChatImage | null;
 }): Promise<{ message: Anthropic.Message; costUsd: number }> {
-  const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach", signal } = opts;
+  const { system, user, model = MODELS.ASK, maxTokens = 2000, route = "coach", signal, image } = opts;
   await assertBudget();
   const systemBlocks: Anthropic.TextBlockParam[] =
     typeof system === "string"
@@ -396,7 +425,7 @@ export async function runSingleTurn(opts: {
       model,
       max_tokens: maxTokens,
       system: systemBlocks,
-      messages: [{ role: "user", content: user }],
+      messages: [{ role: "user", content: buildUserContent(user, image) }],
     },
     5,
     signal,

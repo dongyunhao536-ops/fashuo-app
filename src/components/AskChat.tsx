@@ -5,6 +5,7 @@ import { postStreamedJson } from "@/lib/stream-client";
 import { AskAnswer } from "@/components/AskAnswer";
 import { XindeQuickAdd } from "@/components/XindeQuickAdd";
 import { ChatComposer } from "@/components/ChatComposer";
+import { chatImageDataUrl, type ChatImage } from "@/lib/chat-image";
 
 /**
  * 答疑对话（v2.3 直答版，极简暗色版方案 ⑥ 屏——引导式留第二迭代）。
@@ -46,11 +47,16 @@ interface Turn {
   loading: boolean;
   /** 用户点了「停止」中止本轮 */
   stopped?: boolean;
+  /** 本轮随发的题目照片（仅存内存，供气泡预览和重试；持久化时剥掉 base64 防爆 sessionStorage 配额） */
+  image?: ChatImage;
+  /** 从 sessionStorage 恢复的轮次：图已剥离，只留"曾附图"标记 */
+  hadImage?: boolean;
 }
 
 export function AskChat() {
   const [subject, setSubject] = useState<string>("");
   const [input, setInput] = useState("");
+  const [image, setImage] = useState<ChatImage | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -75,31 +81,37 @@ export function AskChat() {
     try {
       sessionStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify(turns.filter((t) => !t.loading).slice(-MAX_TURNS)),
+        JSON.stringify(
+          turns
+            .filter((t) => !t.loading)
+            .slice(-MAX_TURNS)
+            // base64 图剥掉只留标记：12 轮 ×~300KB 会顶穿 sessionStorage 5MB 配额
+            .map(({ image: img, ...rest }) => ({ ...rest, hadImage: rest.hadImage || !!img })),
+        ),
       );
     } catch {
       /* 超配额等，忽略 */
     }
   }, [turns]);
 
-  /** 实际发请求：idx 指向 turns 里要写结果的那一轮（新问或重试） */
-  async function run(q: string, subj: string | undefined, idx: number) {
+  /** 实际发请求：idx 指向 turns 里要写结果的那一轮（新问或重试）。img 只随本轮上送不进 history */
+  async function run(q: string, subj: string | undefined, idx: number, img?: ChatImage) {
     setBusy(true);
     const ac = new AbortController();
     abortRef.current = ac;
     setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
 
-    // 最近几轮成功 Q/A 作为追问上下文（不含当前轮）
+    // 最近几轮成功 Q/A 作为追问上下文（不含当前轮；图片题的答案已复述题干，历史带文字够用）
     const history = turns
       .slice(0, idx)
       .filter((t) => t.result)
       .slice(-HISTORY_TURNS)
-      .map((t) => ({ question: t.question, answer: t.result!.answer }));
+      .map((t) => ({ question: t.question || "（图片题，题干见答案复述）", answer: t.result!.answer }));
 
     try {
       const { status, data } = await postStreamedJson<
         AskResult & { error?: string; kind?: string }
-      >("/api/ask", { question: q, subject: subj, history }, ac.signal);
+      >("/api/ask", { question: q, subject: subj, history, image: img }, ac.signal);
       if (status >= 400) {
         const msg =
           data.kind === "budget"
@@ -141,21 +153,34 @@ export function AskChat() {
 
   function send() {
     const q = input.trim();
-    if (!q || busy) return;
+    if ((!q && !image) || busy) return;
+    const img = image ?? undefined;
     setInput("");
+    setImage(null);
     const idx = turns.length;
-    setTurns((t) => [...t, { question: q, subject: subject || undefined, loading: true }]);
-    void run(q, subject || undefined, idx);
+    setTurns((t) => [...t, { question: q, subject: subject || undefined, image: img, loading: true }]);
+    void run(q, subject || undefined, idx, img);
   }
 
   function retry(idx: number) {
     if (busy) return;
     const turn = turns[idx];
     if (!turn) return;
+    // 恢复轮的图已剥离：纯图片题没了图就没了题干，重试只会被服务端 400
+    if (!turn.question && !turn.image) {
+      setTurns((t) =>
+        t.map((x, i) =>
+          i === idx
+            ? { ...x, stopped: false, error: "这轮的图片没有跨页面保留，重新拍一张再问吧" }
+            : x,
+        ),
+      );
+      return;
+    }
     setTurns((t) =>
       t.map((x, i) => (i === idx ? { ...x, loading: true, error: undefined, stopped: false } : x)),
     );
-    void run(turn.question, turn.subject, idx);
+    void run(turn.question, turn.subject, idx, turn.image);
   }
 
   return (
@@ -191,8 +216,21 @@ export function AskChat() {
         {/* 对话流 */}
         {turns.map((t, i) => (
           <div key={i} className="flex flex-col gap-2.5">
-            {/* 用户问题 */}
+            {/* 用户问题（可带题目照片；恢复的历史轮图已剥离只留标记） */}
             <div className="btn-blue-grad max-w-[85%] self-end rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+              {t.image && (
+                // eslint-disable-next-line @next/next/no-img-element -- base64 预览，无优化收益
+                <img
+                  src={chatImageDataUrl(t.image)}
+                  alt="题目照片"
+                  className={`max-h-52 w-full rounded-[14px] object-cover ${t.question || t.subject ? "mb-2" : ""}`}
+                />
+              )}
+              {!t.image && t.hadImage && (
+                <span className="mr-1.5 rounded-[6px] bg-white/20 px-1.5 py-0.5 text-[11px] font-medium">
+                  📷 图片题
+                </span>
+              )}
               {t.subject && (
                 <span className="mr-1.5 rounded-[6px] bg-white/20 px-1.5 py-0.5 text-[11px] font-medium">
                   {t.subject}
@@ -256,6 +294,8 @@ export function AskChat() {
         onSend={send}
         disabled={busy}
         placeholder="问一道题或一个概念…"
+        image={image}
+        onImageChange={setImage}
       />
     </div>
   );

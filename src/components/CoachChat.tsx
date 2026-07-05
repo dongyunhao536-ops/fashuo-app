@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
 import { ChatComposer } from "@/components/ChatComposer";
+import { chatImageDataUrl, type ChatImage } from "@/lib/chat-image";
 
 /**
  * 教练 T1 交互（2026-06-21 重做为对话式家教）。
@@ -30,6 +31,8 @@ interface Turn {
   loading: boolean;
   /** 用户点了「停止」中止本轮 */
   stopped?: boolean;
+  /** 本轮随发的照片（错题页/笔记；仅内存，教练对话本就不跨页面保留） */
+  image?: ChatImage;
 }
 
 type ExampleKind = "report" | "quiz" | "plan";
@@ -74,23 +77,26 @@ const TONE_TEXT: Record<"blue" | "green" | "orange", string> = {
 
 export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) {
   const [input, setInput] = useState("");
+  const [image, setImage] = useState<ChatImage | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   async function send(text?: string) {
     const v = (text ?? input).trim();
-    if (!v || busy) return;
+    const img = text ? undefined : (image ?? undefined); // 引导卡点选不带图
+    if ((!v && !img) || busy) return;
     setInput("");
+    setImage(null);
     setBusy(true);
     const idx = turns.length;
     const ac = new AbortController();
     abortRef.current = ac;
-    setTurns((t) => [...t, { input: v, loading: true }]);
+    setTurns((t) => [...t, { input: v, image: img, loading: true }]);
     try {
       const { status, data } = await postStreamedJson<CoachResult & { error?: string; kind?: string }>(
         "/api/coach",
-        { input: v },
+        { input: v, image: img },
         ac.signal,
       );
       if (status >= 400) {
@@ -138,6 +144,14 @@ export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) 
           turns.map((t, i) => (
             <div key={i} className="flex flex-col gap-2.5">
               <div className="btn-blue-grad max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+                {t.image && (
+                  // eslint-disable-next-line @next/next/no-img-element -- base64 预览，无优化收益
+                  <img
+                    src={chatImageDataUrl(t.image)}
+                    alt="发送的照片"
+                    className={`max-h-52 w-full rounded-[14px] object-cover ${t.input ? "mb-2" : ""}`}
+                  />
+                )}
                 {t.input}
               </div>
 
@@ -172,6 +186,8 @@ export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) 
         onSend={() => send()}
         disabled={busy}
         placeholder="跟教练说点啥…（汇报 / 考我 / 问策略）"
+        image={image}
+        onImageChange={setImage}
       />
     </div>
   );
