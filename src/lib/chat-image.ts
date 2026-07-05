@@ -92,3 +92,14 @@ export async function compressImageFile(file: File): Promise<ChatImage> {
 export function chatImageDataUrl(img: ChatImage): string {
   return `data:${img.media_type};base64,${img.data}`;
 }
+
+/**
+ * 附图时注入模型消息的锚定提示（只进模型侧，绝不进对话账本/存储）。
+ * 治「打了字又附图时，模型被对话历史带偏、把旧题当成本轮要处理的题」——
+ * 2026-07-05 教练拍照记错题事故复盘：图确实读到了，模型却续了昨天的老错题、
+ * 嘴上"记进去了"实则一条没入库，真正拍的那道题被塞到末尾一句带过。
+ * 钉死三件事：① 内容以照片为准 ② 先完整逐字识别照片再处理 ③ 此前对话只是旧上下文别套用。
+ */
+export function imageAnchorHint(): string {
+  return "【📷 本轮云附了一张照片——本轮要处理的题目/错题内容以这张照片为准。请先完整、逐字识别照片里的题干、选项，以及照片上手写或圈划的作答/批注，再据此作答或记录。此前对话里出现过的其它题目都已经处理完毕，绝不要把它们当成本轮要记录或要回答的题；照片里是什么题，本轮就处理什么题。】";
+}

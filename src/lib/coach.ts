@@ -1,5 +1,5 @@
 import { runSingleTurn, extractText, parsePlan, dedupeSearches } from "./anthropic";
-import type { ChatImage } from "./chat-image";
+import { imageAnchorHint, type ChatImage } from "./chat-image";
 import { stripMetaBlocks } from "./ask-prompt";
 import { MODELS } from "./models";
 import { supabaseAdmin } from "./supabase";
@@ -535,8 +535,13 @@ export async function runCoach(
   const ledger = await loadLedger(today);
   // 两段式段①：按本轮话题按需查《考试分析》原文/心得/真题 + 顺带判科目（结果都进 user 消息，
   // system 缓存前缀不动）；再按科目取该科真题高频。前缀常驻大块已删，成本账见文件头注释。
+  // 附图时把锚定提示贴在本轮云说前（只进模型消息，raw input 仍留作学习日志/coach_message/META）。
+  // 2026-07-05 事故根因：打了字（"记录错题"）又附图 → 模型被昨天的对话线带偏、续了旧错题、
+  // 还谎称"记进去了"实则没入库；这句钉住"以照片为准、先识别照片、别套用历史里的旧题"。
+  const modelInput = image ? `${imageAnchorHint()}\n${input}` : input;
+
   const { block: grepBlock, costUsd: planCost, subject: planSubject } = await planAndSearch(
-    input,
+    modelInput,
     ledger.conversationLines.slice(-4),
     signal,
     image,
@@ -549,7 +554,7 @@ export async function runCoach(
       stable: buildSystemStable(),
       volatile: buildSystemVolatile(ledger, todayStr, isSunday),
     },
-    user: buildUserMessage(ledger.conversationLines, input, extraBlocks),
+    user: buildUserMessage(ledger.conversationLines, modelInput, extraBlocks),
     model: MODELS.COACH,
     signal,
     route: "coach",

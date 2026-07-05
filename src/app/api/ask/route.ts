@@ -18,7 +18,7 @@ import {
 } from "@/lib/ask-prompt";
 import { normalizeSubject, SUBJECT_CANON } from "@/lib/events";
 import { streamJson } from "@/lib/stream-response";
-import { sanitizeChatImage } from "@/lib/chat-image";
+import { sanitizeChatImage, imageAnchorHint } from "@/lib/chat-image";
 
 /**
  * POST /api/ask —— 答疑直答版（build order ②）。
@@ -92,7 +92,7 @@ export async function POST(req: Request) {
     if (!question && !image) {
       return { status: 400, body: { error: "question 不能为空" } };
     }
-    if (!question) question = "（题目在图片里：先完整识别图中题干/选项，再按流程作答）";
+    if (!question) question = "（题目见照片）";
     const subject = body.subject?.trim() || undefined;
     const history = (Array.isArray(body.history) ? body.history : [])
       .filter(
@@ -101,6 +101,11 @@ export async function POST(req: Request) {
       )
       .slice(-HISTORY_TURNS)
       .map((h) => ({ question: h.question.slice(0, 2000), answer: h.answer }));
+
+    // 附图时把锚定提示贴在【本轮新问题】上（只进模型消息，raw question 仍留作 raw_input/去重）。
+    // 2026-07-05 事故根因：打了字又附图 → 模型被历史带偏答成旧题；这句钉住"以照片为准"。
+    const qForModel = image ? `${imageAnchorHint()}\n${question}` : question;
+    const modelQuestion = buildQuestionWithHistory(qForModel, history);
 
     try {
       // —— 纯记录指令快路径（2026-07-03 降本）——
@@ -111,7 +116,7 @@ export async function POST(req: Request) {
       if (isRecordCommand(question)) {
         const { message, costUsd } = await runSingleTurn({
           system: buildRecordExtractSystem(),
-          user: buildQuestionWithHistory(question, history),
+          user: modelQuestion, // 附图时含锚定：从照片提取要记的错题，不套用历史里的旧题
           model: MODELS.PLAN,
           maxTokens: 400,
           route: "ask:record",
@@ -160,7 +165,7 @@ export async function POST(req: Request) {
         answerSystemStable: buildAskSystemStable(),
         // 用户没选科目时用规划器顺带判的科目取跨会话记忆（"不限"不再丢记忆）
         getVolatile: (planned) => buildAskSystemVolatile(subject ?? planned),
-        question: buildQuestionWithHistory(question, history),
+        question: modelQuestion, // 附图时含锚定提示（见上方 qForModel）
         model: MODELS.ASK,
         planModel: MODELS.PLAN,
         enableCache: true, // 两段均无 tools，教义/规划 system 跨请求稳定 → 缓存安全
