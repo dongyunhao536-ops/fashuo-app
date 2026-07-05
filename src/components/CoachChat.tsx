@@ -20,6 +20,7 @@ interface CoachResult {
   memorized: string[];
   logId: number | null;
   logSkipped: boolean; // 非汇报轮（提问/讨论）不记学习日志
+  critiqueNote?: string | null; // 判题自检复核（双保险）揪出的硬伤纠正 → 高亮"须纠正"卡
   costText?: string;
   metaParsed?: boolean;
 }
@@ -287,6 +288,19 @@ function CoachReply({ r }: { r: CoachResult }) {
 
   return (
     <div className="flex w-full flex-col gap-2.5 self-start">
+      {/* 判题自检复核（双保险）揪出硬伤：高亮在正文上方，一眼看见"这里以复核为准" */}
+      {r.critiqueNote && (
+        <div className="flex items-start gap-2.5 rounded-[16px] border border-orange/40 bg-orange/10 px-4 py-3">
+          <svg viewBox="0 0 24 24" className="mt-0.5 h-5 w-5 shrink-0 text-orange" fill="none" stroke="currentColor" strokeWidth={2}>
+            <path d="M12 9v4M12 17h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-semibold text-orange">自检复核·须纠正一处（以这里为准）</div>
+            <div className="mt-1 text-[14px] leading-relaxed text-label">{r.critiqueNote}</div>
+          </div>
+        </div>
+      )}
+
       {/* 自然对话正文 */}
       <div className="glass-card max-w-full rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5">
         <Markdown>{r.reply}</Markdown>

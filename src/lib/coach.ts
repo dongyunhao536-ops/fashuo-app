@@ -84,6 +84,8 @@ export const SUBJECT_METHODS = `【科目级方法参考·浓缩自科目学习�
 interface CoachMeta {
   /** 云本轮是否在【汇报学习进度】——只有 true 才写学习日志（提问/讨论/被考=false） */
   is_report?: boolean;
+  /** 本轮是否在【判对错/判选项/给行为定性/辨析教义争点】——true 才触发判题自检复核（双保险） */
+  is_judging?: boolean;
   subject?: string | null;
   chapter?: string | null;
   activity?: string | null;
@@ -108,6 +110,8 @@ export interface CoachResult {
   logId: number | null; // study_log 行 id（仅状态展示用）
   logSkipped: boolean; // true=非汇报轮（提问/讨论），不入学习日志
   logFixed: string | null; // 云指令"修正进度"→ 实际改动描述（null=本轮无修正）
+  /** 判题自检复核（双保险）揪出的硬伤纠正（null=无判题或复核无硬伤）→ UI 高亮"须纠正"卡片 */
+  critiqueNote: string | null;
   costUsd: number;
   metaParsed: boolean; // META 是否解析成功（debug）
 }
@@ -406,7 +410,7 @@ ${EXAM_OUTLINE}
 
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"is_report":true/false（【只看"本轮云说"那一条消息】是否在汇报自己学了什么——他这条消息主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false。⚠️此前对话里的汇报你已经记过账了，据它填 true 会造成重复记账）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"log_fix":{"subject":"刑法","from":"原记录里的章节关键词（如'第四章'）","to":"修正后的章节全名"}（【默认省略·仅主动指令】只有云本轮明确要求修正/改正之前记错的进度时才填）,"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"is_report":true/false（【只看"本轮云说"那一条消息】是否在汇报自己学了什么——他这条消息主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false。⚠️此前对话里的汇报你已经记过账了，据它填 true 会造成重复记账）,"is_judging":true/false（本轮你的回复里是否做了【对错判断/选项判断/给行为定性/教义争点辨析】——判了某道题/某个说法对错、判了选项、给某行为定性就是 true；纯论策略/规划/情绪/闲聊/汇报=false。系统据此触发独立复核，据实填）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"log_fix":{"subject":"刑法","from":"原记录里的章节关键词（如'第四章'）","to":"修正后的章节全名"}（【默认省略·仅主动指令】只有云本轮明确要求修正/改正之前记错的进度时才填）,"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
 规则（记录=云主动指令制，2026-06-30）：
 - **学习日志只认汇报**：is_report=true（云明确在汇报学习进度）时才填 subject/chapter/activity/accuracy；云提问/讨论/被考时这些全省略、is_report=false——系统只在 is_report=true 时写学习日志。
@@ -528,6 +532,58 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
   }
 }
 
+/**
+ * 判题自检复核（双保险·2026-07-05）：判对错/判选项/定性轮，草稿答完后用 Opus 开一个
+ * 【全新的"挑错"调用】再审一遍——独立新调用 + 对抗式提示，打断原作答的惯性锚定
+ * （这正是共犯多选自打脸的成因：模型顺着自己的推理往下滑、不回头核对）。
+ * 只在 is_judging 轮跑；精简上下文（题目/检索材料/草稿，不带账本/人设/长期记忆）压成本 ≈¥0.3，
+ * 判题轮总价仍 <¥1.5 预算红线。只挑硬伤（与教材冲突/自相矛盾/无据硬编），发现返回一句纠正。
+ * 任何失败/异常都吞掉返回 null（本轮跳过双保险，绝不阻塞正常对话）。
+ */
+async function runJudgingCritique(opts: {
+  question: string;
+  material: string;
+  draft: string;
+  image?: ChatImage | null;
+  signal?: AbortSignal;
+}): Promise<{ note: string | null; costUsd: number }> {
+  const system = `你是法硕（法律硕士·非法学）教义复核员，唯一任务是挑硬伤。给你一道题、系统检索到的《考试分析》教材/做题心得/真题、以及教练的草稿回复。逐条核对草稿里每一个【对错判断 / 选项判断 / 行为定性 / 教义结论】：
+① 是否与所给教材/心得冲突（冲突一律以教材为准；标「手动登记」的心得优先级最高）；
+② 是否内部自相矛盾——【对一个选项/情形用的规则，在另一个同类选项/情形上却违反了】（典型：对一个"不成立共同犯罪"的情形说"不是主犯"，却对另一个同样不成立共犯的情形说"是主犯"）；
+③ 是否在教材没有支持的情况下下了确定结论。
+铁律：只挑上述硬伤，绝不挑风格、详略、语气、追问方式。给你的材料没覆盖到的点，【不要凭自己的印象臆断为错】——拿不准就当它对。
+输出且仅输出 JSON（无其它文字）：无硬伤 → {"ok":true}；确有硬伤 → {"ok":false,"纠正":"一两句讲清草稿里哪个结论错了、正解是什么、依据哪条教材/心得，写成能直接读给学生听的话"}。`;
+  const user = `【题目 / 云本轮说】\n${opts.question}\n\n【系统检索到的教材/心得/真题】\n${opts.material || "（本轮无检索材料——只能查内部自相矛盾，教材冲突无从核对时按②③从宽）"}\n\n【教练草稿回复（待复核）】\n${opts.draft}`;
+  try {
+    const { message, costUsd } = await runSingleTurn({
+      system,
+      user,
+      model: MODELS.COACH,
+      maxTokens: 600,
+      route: "coach:critique",
+      signal: opts.signal,
+      image: opts.image, // 拍照判题轮：复核也看原图，核对草稿有没有读错题
+    });
+    const text = extractText(message);
+    const s = text.indexOf("{");
+    const e = text.lastIndexOf("}");
+    if (s === -1 || e <= s) return { note: null, costUsd };
+    const obj = JSON.parse(text.slice(s, e + 1)) as { ok?: boolean; 纠正?: unknown };
+    const note =
+      obj.ok === false && typeof obj.纠正 === "string" && obj.纠正.trim()
+        ? obj.纠正.trim()
+        : null;
+    return { note, costUsd };
+  } catch (err) {
+    if ((err as { name?: string })?.name === "AbortError") throw err;
+    console.error(
+      "[coach] 判题复核失败（本轮跳过双保险，不阻塞对话）：",
+      err instanceof Error ? err.message : String(err),
+    );
+    return { note: null, costUsd: 0 };
+  }
+}
+
 export async function runCoach(
   input: string,
   today = new Date(),
@@ -568,10 +624,26 @@ export async function runCoach(
     maxTokens: 4000, // 对话式回复可能较长 + 尾部 META
     image,
   });
-  const costUsd = planCost + answerCost;
+  let costUsd = planCost + answerCost;
 
   const { clean, meta } = splitCoachMeta(extractText(message));
   const reply = clean || "（这轮我没接住，换种说法再说一次？）";
+
+  // 双保险：判题轮（is_judging）草稿答完后独立复核，揪出与教材冲突/自相矛盾的硬伤。
+  // 只喂题目+检索材料+草稿的精简上下文（不带账本/人设），判题轮 +≈¥0.3、总价仍 <¥1.5。
+  // clean 为空（模型没吐正文）时无可复核，跳过。
+  let critiqueNote: string | null = null;
+  if (meta?.is_judging === true && clean) {
+    const critique = await runJudgingCritique({
+      question: modelInput,
+      material: extraBlocks,
+      draft: clean,
+      image,
+      signal,
+    });
+    costUsd += critique.costUsd;
+    critiqueNote = critique.note;
+  }
 
   // 从 META 还原结构化字段（白名单/范围净化，同旧逻辑）
   const rawAct = meta?.activity ? String(meta.activity) : null;
@@ -769,6 +841,7 @@ export async function runCoach(
     logId,
     logSkipped: !isStudyRecord,
     logFixed,
+    critiqueNote,
     costUsd,
     metaParsed: meta != null,
   };
