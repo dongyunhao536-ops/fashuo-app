@@ -69,6 +69,22 @@ export default async function WeeklyPage() {
         </Section>
       )}
 
+      {/* 本周已吸收的错题（2026-07-06 加回——展示要全，让销账/吸收可见） */}
+      {r.solved.absorbedErrors.length > 0 && (
+        <Section title={`本周已吸收 ${r.solved.absorbedErrors.length} 条错题`}>
+          <ul className="flex flex-col gap-2 text-[13px] text-label2">
+            {r.solved.absorbedErrors.map((e, i) => (
+              <li key={i} className="flex gap-1.5 leading-snug">
+                <span className="mt-0.5 shrink-0 rounded-[5px] bg-green/15 px-1.5 py-0.5 text-[11px] text-green">
+                  {e.subject ? (SUB_SHORT[e.subject] ?? e.subject) : "未分类"}
+                </span>
+                <span className="line-clamp-2">{e.knowledge}</span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       {/* 需关注：弱项 + 答疑卡点（合并） */}
       {(r.weak.top.length > 0 || r.askPoints.length > 0) && (
         <Section title="需关注">

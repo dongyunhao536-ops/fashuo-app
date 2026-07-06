@@ -1,60 +1,24 @@
-"use client";
-
-import { useState } from "react";
-import { postStreamedJson } from "@/lib/stream-client";
 import { Markdown } from "@/components/Markdown";
 
 /**
- * 周报核心层：本周复盘 + 下周指导（Opus 生成，按周缓存）。
- * 页面 SSR 传入已缓存的 content；点「生成/刷新」→ POST /api/weekly/generate 重算并覆盖。
- * 真实数据证据由页面其余部分展示，这里只放权威叙事。
+ * 周报核心层：本周复盘 + 下周指导。
+ * 2026-07-06 起【周报只在电脑端(PC·Opus 火力全开)生产，APP 端只展示】——本组件改为纯展示，
+ * 去掉「生成/刷新」按钮（避免手机端触发 APP 侧重算盖掉 PC 的高质量报告）。写库由 scripts/weekly.mjs。
  */
 
 interface Props {
   initialContent: string | null;
   initialGeneratedAt: string | null;
   costText?: string | null;
-  /** 这份报告覆盖的自然周（MM-DD~MM-DD）；周一早看到的是上一整周的复盘 */
+  /** 这份报告覆盖的自然周（MM-DD~MM-DD） */
   weekLabel?: string | null;
 }
 
 export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText, weekLabel }: Props) {
-  const [content, setContent] = useState<string | null>(initialContent);
-  const [generatedAt, setGeneratedAt] = useState<string | null>(initialGeneratedAt);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function generate() {
-    if (loading) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const { status, data } = await postStreamedJson<{
-        content?: string;
-        generatedAt?: string;
-        error?: string;
-        kind?: string;
-      }>("/api/weekly/generate", {});
-      if (status >= 400) {
-        setError(
-          data.kind === "budget"
-            ? "今日预算已用尽（$3 日熔断），明天再生成～"
-            : data.kind === "daily_cap"
-              ? "七牛云今日额度已满，明天再用。"
-              : data.error ?? "生成失败",
-        );
-      } else {
-        setContent(data.content ?? null);
-        setGeneratedAt(data.generatedAt ?? null);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  const ts = generatedAt ? new Date(generatedAt).toLocaleString("zh-CN", { hour12: false }).slice(5, 16) : null;
+  const content = initialContent;
+  const ts = initialGeneratedAt
+    ? new Date(initialGeneratedAt).toLocaleString("zh-CN", { hour12: false }).slice(5, 16)
+    : null;
 
   return (
     <section className="glass-card mx-4 mt-3 rounded-[18px] border border-blue/20 p-4">
@@ -63,41 +27,20 @@ export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText, 
           复盘 · 下周指导
           {weekLabel && <span className="ml-1.5 text-[11px] font-normal text-label3">{weekLabel} 周</span>}
         </h2>
-        <button
-          onClick={generate}
-          disabled={loading}
-          className="btn-blue-grad rounded-[12px] px-3.5 py-1.5 text-[12.5px] font-medium text-white transition active:scale-95 disabled:opacity-50"
-        >
-          {loading ? "生成中…" : content ? "刷新" : "生成"}
-        </button>
+        <span className="rounded-[8px] bg-blue/12 px-2 py-0.5 text-[10.5px] font-medium text-blue-soft">电脑端生成</span>
       </div>
 
-      {loading && (
-        <div className="flex items-center gap-2 py-6 text-[12.5px] text-label2">
-          <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
-          教练在读你这周的真实数据，复盘 + 排下周…（约 30 秒–1 分钟）
-        </div>
-      )}
-
-      {error && !loading && (
-        <div className="my-2 rounded-[10px] bg-red/15 px-3 py-2 text-[12.5px] text-red">{error}</div>
-      )}
-
-      {!loading && content && (
+      {content ? (
         <>
           <Markdown>{content}</Markdown>
           <div className="mt-3 border-t border-hairline pt-2 text-[11px] text-label3">
             {ts ? `生成于 ${ts}` : ""}
-            {costText ? ` · ${costText}` : ""} · 基于本周真实使用数据，点「刷新」按最新数据重算
+            {costText ? ` · ${costText}` : ""} · 电脑端（Opus 火力全开）生产
           </div>
         </>
-      )}
-
-      {!loading && !content && !error && (
+      ) : (
         <div className="py-6 text-center text-[13px] leading-relaxed text-label3">
-          还没生成本周复盘。
-          <br />
-          点「生成」——教练会扣着你这周的真实学习/背诵/错题数据，给一份复盘 + 下周指导。
+          本周报告将由电脑端生成后在此展示。
         </div>
       )}
     </section>

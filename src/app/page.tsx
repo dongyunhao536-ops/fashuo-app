@@ -41,6 +41,9 @@ export default async function DashboardPage() {
           </span>
           <span className="ml-2 text-[16px] text-label2">天</span>
         </div>
+        <div className="mt-1 text-[11px] text-label3">
+          距基础结业死线 {d.hero.daysToBase > 0 ? `${d.hero.daysToBase} 天` : `已过 ${-d.hero.daysToBase} 天`}
+        </div>
         <div className="mt-3.5 flex flex-wrap gap-1.5">
           <Link
             href="/ask/points"
@@ -57,8 +60,32 @@ export default async function DashboardPage() {
         </div>
       </section>
 
+      {/* 今日动态：今天学了什么 + 今天吸收（每日实时进度，云 2026-07-06 要） */}
+      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日动态 · {todayLabel}</h2>
+      <section className="glass-card mx-4 rounded-[16px] p-4">
+        {d.today.studied.length === 0 && d.today.absorbed === 0 ? (
+          <div className="text-[13px] text-label3">今天还没有学习记录——去教练页汇报，或电脑端复盘错题</div>
+        ) : (
+          <div className="flex flex-col gap-2">
+            {d.today.studied.map((s, i) => (
+              <div key={i} className="text-[13px] leading-snug text-label">
+                <span className="mr-1 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{SUB_SHORT[s.subject] ?? s.subject}</span>
+                {s.chapter ?? "（未记章节）"}
+                <span className="ml-1 text-label3">· {s.activity}</span>
+              </div>
+            ))}
+            {d.today.absorbed > 0 && (
+              <div className="text-[13px] font-medium text-green">✓ 今天吸收错题 {d.today.absorbed} 条</div>
+            )}
+          </div>
+        )}
+        <div className="mt-2.5 border-t border-hairline pt-2 text-[11.5px] text-label3">
+          本周至今：吸收错题 {d.week.absorbed} 条 · 打卡 {d.week.logs} 次
+        </div>
+      </section>
+
       {/* 核心入口：答疑 / 教练 / 待办筐 */}
-      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">今日 · {todayLabel}</h2>
+      <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">快捷入口</h2>
       <section className="glass-card mx-4 divide-y divide-hairline overflow-hidden rounded-[18px]">
         <Link href="/ask" className="pressable flex min-h-11 items-center px-4 py-3">
           <IconTile tone="green">
@@ -141,6 +168,23 @@ export default async function DashboardPage() {
           </div>
         )}
       </section>
+
+      {/* 各科进度：已铺开章节（每日实时进度的一部分） */}
+      {d.progress.length > 0 && (
+        <>
+          <h2 className="mt-6 px-8 pb-2 text-[13px] text-label2">各科进度</h2>
+          <section className="glass-card mx-4 overflow-hidden rounded-[16px] p-4">
+            <ul className="flex flex-col gap-1.5 text-[13px] text-label">
+              {d.progress.map((p) => (
+                <li key={p.subject} className="leading-snug">
+                  <span className="mr-1 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{p.subject}</span>
+                  {p.chapters.join("、")}
+                </li>
+              ))}
+            </ul>
+          </section>
+        </>
+      )}
 
       {/* 周复盘入口（删背诵重做时曾丢失，2026-07-02 加回） */}
       <section className="glass-card mx-4 mt-4 mb-2 overflow-hidden rounded-[16px]">
