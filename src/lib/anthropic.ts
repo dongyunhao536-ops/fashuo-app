@@ -135,6 +135,8 @@ function buildUserContent(
 export interface PlannedSearch {
   tool: string;
   keyword?: string;
+  /** 争点特征词（AND-boost）：同时命中 keyword+refine 的条目排序置顶，见 search-tools.rankBlocks */
+  refine?: string;
   year?: string;
   question_no?: string;
 }
@@ -152,6 +154,7 @@ function normalizeSearches(arr: unknown): PlannedSearch[] {
     .map((x) => ({
       tool: x.tool,
       keyword: typeof x.keyword === "string" ? x.keyword.trim().slice(0, 40) : undefined,
+      refine: typeof x.refine === "string" && x.refine.trim() ? x.refine.trim().slice(0, 40) : undefined,
       year: x.year != null ? String(x.year) : undefined,
       question_no: x.question_no != null ? String(x.question_no) : undefined,
     }));
@@ -195,7 +198,7 @@ export function parsePlan(text: string): ParsedPlan {
 export function dedupeSearches(searches: PlannedSearch[]): PlannedSearch[] {
   const seen = new Set<string>();
   return searches.filter((s) => {
-    const key = `${s.tool}|${s.keyword ?? ""}|${s.year ?? ""}|${s.question_no ?? ""}`;
+    const key = `${s.tool}|${s.keyword ?? ""}|${s.refine ?? ""}|${s.year ?? ""}|${s.question_no ?? ""}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
@@ -340,7 +343,7 @@ export async function runPlanThenAnswer(opts: {
     const input: Record<string, unknown> =
       s.tool === "search_zhenti"
         ? { year: s.year, question_no: s.question_no }
-        : { keyword: s.keyword };
+        : { keyword: s.keyword, refine: s.refine };
     const { result, hit } = await executeSearchTool(s.tool, input, mirrorCache);
     if (hit) grepHits.push(hit);
     executed.push({

@@ -401,6 +401,7 @@ ${EXAM_OUTLINE}
 
 【按需参考（系统按当轮话题注入 user 消息，不在这里常驻）】
 - 聊到具体考点时，系统会预检索《考试分析》原文/做题心得/真题命中给你——引用时钉到原文和章节。
+- 心得命中里含【讲义P__·提示/马工程/易错/辨析】的条目 =《刑法精讲一本通》作者亲手划的重点、易错与权威观点，和做题心得同属①档：判题/讲考点时优先据它作答，引用时带上讲义页码（如"讲义P157·马工程"）。
 - 心得命中里标「手动登记」的条目（云亲自录入）优先级最高：与其它心得或教材冲突时一律以它为准。
 - 云聊某科时，该科真题高频考点会随消息给你——排优先级、考他、复盘优先从高频点下手。
 
@@ -482,13 +483,14 @@ const COACH_GREP_CLIP = 12000;
  * 任何一步失败都吞掉返回空串（教练退回纯账本+架构作答，不阻塞）。
  */
 async function planAndSearch(input: string, conversationTail: string[], signal?: AbortSignal, image?: ChatImage | null): Promise<{ block: string; costUsd: number; subject: string | null }> {
-  const planSystem = `你是法硕教练的检索规划器。教练回答前可先查库：search_textbook（《考试分析》教材+刑法讲义原文）/ search_xinde（做题心得）/ search_zhenti（真题，参数 year、question_no）。
+  const planSystem = `你是法硕教练的检索规划器。教练回答前可先查库：search_textbook（《考试分析》教材+刑法讲义原文）/ search_xinde（做题心得 + 刑法讲义心得：作者标注的提示/马工程/易错/辨析框，逐字提取，是作者划的重点与权威观点）/ search_zhenti（真题，参数 year、question_no）。
 两件事：
 ① 判科目：云本轮主要涉及哪科（刑法|民法|法理|宪法|法制史）——汇报进度/提问/被考都算；跨科或无科目给 null。
 ② 判断需不需要查库：
 - 需要：聊到具体科目/章节/考点的学习安排或疑问、问某章重点/怎么学、让教练考他、涉及具体法律概念——列出检索词。
 - 不需要：纯闲聊、汇报进度、谈时间/情绪/节奏、与具体知识点无关 → "searches" 给空数组。
-输出且仅输出 JSON（无其他文字）：{"subject":"刑法或null","searches":[{"tool":"search_textbook","keyword":"教材原词≤8字"}]}
+【争点必带 refine】问某概念下的具体争点/细节（如"中止要不要因果关系""正当防卫的时间条件"）时，keyword 填概念（如"犯罪中止"）、另加 refine 填只有该争点才用的特征词（如"因果"，单个连续词）——检索会把同时命中 keyword+refine 的条目置顶。不加 refine 的宽词检索，深页争点条目会被浅页同词条目挤出返回窗口（实录：讲义"因果"命中 18 条、中止因果那条排第 14 被截）。
+输出且仅输出 JSON（无其他文字）：{"subject":"刑法或null","searches":[{"tool":"search_xinde","keyword":"犯罪中止","refine":"因果"},{"tool":"search_textbook","keyword":"想象竞合"}]}
 最多 6 条；涉及具体考点时同一概念尽量 search_textbook + search_xinde 各一条（原文+考法都拿到）；keyword 用教材里会出现的短词（如"想象竞合""表见代理"），别整句。`;
   try {
     const { message, costUsd } = await runSingleTurn({
@@ -513,9 +515,12 @@ async function planAndSearch(input: string, conversationTail: string[], signal?:
     let used = 0;
     for (const s of searches) {
       const inputArgs: Record<string, unknown> =
-        s.tool === "search_zhenti" ? { year: s.year, question_no: s.question_no } : { keyword: s.keyword };
+        s.tool === "search_zhenti"
+          ? { year: s.year, question_no: s.question_no }
+          : { keyword: s.keyword, refine: s.refine };
       const { result } = await executeSearchTool(s.tool, inputArgs, cache);
-      const seg = `■ ${s.tool}「${s.keyword ?? s.year ?? ""}」\n${result}`;
+      const label = [s.keyword, s.refine].filter(Boolean).join("+") || s.year || "";
+      const seg = `■ ${s.tool}「${label}」\n${result}`;
       if (used + seg.length > COACH_GREP_CLIP && parts.length > 0) continue;
       parts.push(seg);
       used += seg.length;

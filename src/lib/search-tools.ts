@@ -49,7 +49,12 @@ export const SEARCH_TOOLS: Anthropic.Tool[] = [
     input_schema: {
       type: "object",
       properties: {
-        keyword: { type: "string", description: "要在教材中检索的关键词" },
+        keyword: { type: "string", description: "要在教材中检索的关键词（概念名/罪名，单个连续词不含空格）" },
+        refine: {
+          type: "string",
+          description:
+            "可选·争点特征词（如'因果''正在进行'）。填了则同时命中 keyword+refine 的条目排序置顶——治宽词检索把深页争点条目挤出返回窗口。",
+        },
       },
       required: ["keyword"],
     },
@@ -57,11 +62,16 @@ export const SEARCH_TOOLS: Anthropic.Tool[] = [
   {
     name: "search_xinde",
     description:
-      "在刑法/民法做题心得 + 刑法讲义心得（《刑法精讲一本通》作者标注的提示/易错/辨析框，逐字提取）中检索规则。答疑优先级第一档：心得/讲义心得已有规则则优先据此作答。",
+      "在刑法/民法做题心得 + 刑法讲义心得（《刑法精讲一本通》作者标注的提示/马工程/易错/辨析框，逐字提取，是作者划的重点/权威观点）中检索规则。答疑优先级第一档：心得/讲义心得已有规则则优先据此作答，引用讲义心得带上讲义页码。",
     input_schema: {
       type: "object",
       properties: {
-        keyword: { type: "string", description: "要在心得文件中检索的关键词" },
+        keyword: { type: "string", description: "要在心得文件中检索的关键词（概念名，单个连续词不含空格）" },
+        refine: {
+          type: "string",
+          description:
+            "可选·争点特征词（如'因果'）。填了则同时命中 keyword+refine 的条目排序置顶——把'某概念下讲某争点'那一条从深处拉回前排。",
+        },
       },
       required: ["keyword"],
     },
@@ -133,11 +143,13 @@ function clipLine(ln: string, keyword?: string): string {
   return `${t.slice(0, LINE_CLIP)}…`;
 }
 
-interface MatchBlock {
+export interface MatchBlock {
   path: string;
   /** 真实行号（start_line 校准） */
   hitLines: number[];
   text: string;
+  /** 争点特征词(refine)是否也在本块【原文】内命中——AND-boost 排序用（见 rankBlocks / executeSearchTool） */
+  refineHit: boolean;
 }
 
 /** 行是否停在句读边界（空行/表格行也算）。OCR 硬换行文本一行≈35 字，句子常跨行。 */
@@ -150,11 +162,13 @@ function endsSentence(ln: string): boolean {
 /** 在若干镜像行里按谓词逐行匹配，命中行连同 ±CONTEXT_LINES 行合并成上下文块；
  *  块首尾停在半句中间时向外扩到句读边界（SENTENCE_EXTEND 封顶），扩展后重叠的块二次合并——
  *  两个残句块各自截半句，中间恰好丢结论行的拼读反转，比少几行上下文危险得多。 */
-function grepRows(
+export function grepRows(
   rows: MirrorRow[],
   predicate: (line: string) => boolean,
   keyword?: string,
   context: number = CONTEXT_LINES,
+  /** 争点特征词：命中主词的块里，原文若也含 refine 则标 refineHit（AND-boost 排序用） */
+  refine?: string,
 ): { blocks: MatchBlock[]; totalHits: number } {
   const blocks: MatchBlock[] = [];
   let totalHits = 0;
@@ -212,18 +226,46 @@ function grepRows(
     for (const span of merged) {
       const hitSet = new Set(span.hits);
       const text = [];
+      let refineHit = false;
       for (let i = span.from; i <= span.to; i++) {
         const isHit = hitSet.has(i);
+        // refineHit 用【原始整行】判定，不看裁剪后的显示文本——clipLine 会以主词为心开窗，
+        // 特征词可能被切出显示区，但排序必须认它到底在不在这条原文里（这是把"X争点下讲Y"那条捞到前排的关键）。
+        if (refine && lines[i].includes(refine)) refineHit = true;
         text.push(`${base + i}${isHit ? "►" : " "} ${clipLine(lines[i], isHit ? keyword : undefined)}`);
       }
       blocks.push({
         path: row.path,
         hitLines: span.hits.map((i) => base + i),
         text: text.join("\n"),
+        refineHit,
       });
     }
   }
   return { blocks, totalHits };
+}
+
+/**
+ * 命中块排序（AND-boost·2026-07-05）——根治"讲义提示/马工程被引不到"：
+ * - 有争点特征词(refine)时，原文同时含 keyword+refine 的块【无条件置顶】。单关键词子串检索
+ *   表达不了"某概念(中止)下讲某特征(因果)那一条"，深页争点条目会被浅页同词条目按文档序挤出返回窗口
+ *   （实录：讲义心得"因果"命中18条、中止因果那条P157排第14，maxBlocks截前10必丢）。refine 把它拉回前排。
+ * - 其次按命中密度（规则正文常一段多次点题），最后 sort 稳定→保持文档序。
+ * - docOrder=true（真题）时不加权：年份分区本身即位置信息。
+ * 纯函数，便于单测锁死这条修复。
+ */
+export function rankBlocks(
+  blocks: MatchBlock[],
+  opts: { refine?: string; docOrder?: boolean },
+): MatchBlock[] {
+  if (opts.docOrder) return blocks;
+  return [...blocks].sort((a, b) => {
+    if (opts.refine) {
+      const co = (b.refineHit ? 1 : 0) - (a.refineHit ? 1 : 0);
+      if (co !== 0) return co;
+    }
+    return b.hitLines.length - a.hitLines.length;
+  });
 }
 
 export async function executeSearchTool(
@@ -240,6 +282,7 @@ export async function executeSearchTool(
   let blocks: MatchBlock[];
   let totalHits: number;
   let note = "";
+  let refine: string | undefined;
 
   if (name === "search_zhenti") {
     const year = String(input["year"] ?? "").trim();
@@ -264,12 +307,15 @@ export async function executeSearchTool(
     if (!query) {
       return { result: `${name} 缺少 keyword 参数。`, hit: { tool: name, query, path: "", lines: [] } };
     }
+    // 争点特征词（可选）：命中主词的条目里，原文也含 refine 的排序置顶（AND-boost，见 rankBlocks）。
+    refine = String(input["refine"] ?? "").trim() || undefined;
     // 目录点线行（"犯罪中止....54"式）不算命中——大词检索时它们抢占文档序前排，全是噪音
     ({ blocks, totalHits } = grepRows(
       rows,
       (ln) => ln.includes(query) && !/\.{6,}/.test(ln),
       query,
       (KIND_PARAMS[kind] ?? { context: CONTEXT_LINES }).context,
+      refine,
     ));
   }
 
@@ -280,18 +326,23 @@ export async function executeSearchTool(
     };
   }
 
-  // 命中密集的块优先（规则正文通常一段多次点题；纯文档序会让目录/概述把它挤出前 MAX_BLOCKS——
-  // 2026-07-04"犯罪中止"133 处命中、前 5 块全是概述噪音的实录）。sort 稳定，同命中数保持文档序；
-  // 真题检索仍按文档序（年份分区本身就是位置信息）。
-  const ranked =
-    name === "search_zhenti" ? blocks : [...blocks].sort((a, b) => b.hitLines.length - a.hitLines.length);
+  // 排序：争点特征词(refine)同时命中的块置顶 → 命中密度 → 稳定文档序（规则正文常一段多次点题；
+  // 纯文档序会让目录/概述把它挤出前 MAX_BLOCKS——2026-07-04"犯罪中止"133 处命中、前 5 块全是概述噪音的实录）。
+  // 真题检索仍按文档序（年份分区本身就是位置信息）。详见 rankBlocks。
+  const ranked = rankBlocks(blocks, { refine, docOrder: name === "search_zhenti" });
   const top = ranked.slice(0, KIND_PARAMS[kind]?.maxBlocks ?? MAX_BLOCKS);
+  const coHit = refine ? top.filter((b) => b.refineHit).length : 0;
+  const refineNote = refine
+    ? coHit > 0
+      ? `（争点特征词「${refine}」：${coHit} 个同时命中的条目已置顶，优先看它们）\n`
+      : `（争点特征词「${refine}」：本轮无条目同时命中主词+特征词，以下仅按主词命中排序，据此需谨慎）\n`
+    : "";
   const body = top.map((b) => `· ${b.path}（►=命中行）\n${b.text}`).join("\n");
   return {
-    result: `命中 ${totalHits} 行 / ${blocks.length} 个片段（显示前 ${top.length}）：\n${note}${body}`,
+    result: `命中 ${totalHits} 行 / ${blocks.length} 个片段（显示前 ${top.length}）：\n${note}${refineNote}${body}`,
     hit: {
       tool: name,
-      query,
+      query: refine ? `${query}+${refine}` : query,
       path: top[0].path,
       lines: top.flatMap((b) => b.hitLines).slice(0, 30),
     },
