@@ -10,7 +10,7 @@ import { dirname } from "node:path";
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵"]); // "学了什么"只认实打实学习动作
+const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵", "带背"]); // "学了什么"只认实打实学习动作(含带背·云2026-07-07要求计入)
 
 function bjWeekMonday(d = new Date()) {
   const bj = new Date(d.getTime() + 8 * 3600 * 1000);
@@ -26,14 +26,15 @@ function parseFlags(args) { const o = {}; for (let i = 0; i < args.length; i++) 
 async function buildReview(weekStart) {
   const weekEnd = weekEndOf(weekStart);
   const sinceTs = bjDayStartTs(weekStart);
-  const [study, ask, evC, evP, usage, absorbed, openErr] = await Promise.all([
-    db.from("study_log").select("subject, chapter, activity").gte("log_date", weekStart),
+  const [study, ask, evC, evP, usage, absorbed, openErr, prior] = await Promise.all([
+    db.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart),
     db.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs),
     db.from("events").select("type").gte("created_at", sinceTs),
     db.from("events").select("type").eq("status", "pending"),
     db.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs),
     db.from("study_error").select("subject, knowledge, absorbed_at").eq("status", "absorbed").gte("absorbed_at", sinceTs),
     db.from("study_error").select("subject, knowledge, log_date").eq("status", "open"),
+    db.from("weekly_report").select("week_start, content").lt("week_start", weekStart).order("week_start", { ascending: false }).limit(1),
   ]);
 
   const studyRows = study.data ?? [];
@@ -44,6 +45,13 @@ async function buildReview(weekStart) {
     row.chapters.add(String(s.chapter)); row.activities.add(s.activity); studyMap.set(s.subject, row);
   }
   const studied = [...studyMap.entries()].map(([subject, v]) => ({ subject, chapters: [...v.chapters], activities: [...v.activities] }));
+
+  // 带背/背诵学习效果（feeling·掌握轨迹）：喂复盘层定"下周精度重点"；不卡章节（小结行 chapter=null 也收）
+  const effects = studyRows
+    .filter((s) => SUBJECTS.includes(s.subject) && s.feeling)
+    .map((s) => ({ subject: s.subject, chapter: s.chapter ?? null, activity: s.activity ?? "", feeling: String(s.feeling) }));
+  const pr = prior.data?.[0];
+  const priorReport = pr ? { weekStart: String(pr.week_start), content: String(pr.content ?? "").slice(0, 1500) } : null;
 
   const absorbedErrors = (absorbed.data ?? []).filter((r) => r.knowledge).map((r) => ({ subject: r.subject ?? "未分类", knowledge: String(r.knowledge) }));
 
@@ -69,7 +77,7 @@ async function buildReview(weekStart) {
   return {
     weekStart, weekEnd,
     activity: { asks: (ask.data ?? []).length, coachLogs: studyRows.length },
-    studied, solved: { absorbedErrors }, weak: { top: weakTop }, askPoints,
+    studied, effects, priorReport, solved: { absorbedErrors }, weak: { top: weakTop }, askPoints,
     inbox: { createdByType, pendingBacklog: (evP.data ?? []).length },
     cost: { totalUsd, byRoute: [...routeUsd.entries()].map(([route, usd]) => ({ route, usd })).sort((a, b) => b.usd - a.usd) },
   };
@@ -80,11 +88,13 @@ function formatData(r) {
     `· 活动量：答疑 ${r.activity.asks} 次 / 教练打卡 ${r.activity.coachLogs} 条`, `· 学了什么：`];
   if (r.studied.length) for (const s of r.studied) L.push(`  - ${s.subject}：${s.chapters.join("、") || "（未记章节）"}${s.activities.length ? "　[" + s.activities.join("/") + "]" : ""}`);
   else L.push(`  - （本周无学习流水记录）`);
+  if (r.effects?.length) { L.push(`· 带背/学习效果（掌握轨迹，据此定下周精度重点）：`); for (const e of r.effects) L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`); }
   L.push(`· 解决了什么：本周吸收错题 ${r.solved.absorbedErrors.length} 个${r.solved.absorbedErrors.length ? "：" + r.solved.absorbedErrors.map((e) => `${e.subject}·${e.knowledge}`).join("、") : ""}`);
   L.push(`· 需关注：`);
   L.push(`  - 错题本（=弱项，未吸收）：${r.weak.top.map((w) => `${w.subject ?? "未分类"}·${w.knowledge}${w.n > 1 ? `(×${w.n})` : ""}`).join("、") || "（暂无）"}`);
   L.push(`  - 答疑未收口卡点：${r.askPoints.map((a) => `${a.subject}${a.type ? "·" + a.type : ""} ${a.confusion}`).join("；") || "（无）"}`);
   L.push(`· 待办筐：本周新增 ${Object.entries(r.inbox.createdByType).map(([t, n]) => `${t}${n}`).join("/") || "无"}；待处理积压 ${r.inbox.pendingBacklog} 条`);
+  if (r.priorReport?.content) { L.push(`\n【上一份周报（${r.priorReport.weekStart} 那周）——衔接用：对照上周"下周指导"看本周落实/欠账】`); L.push(r.priorReport.content); }
   return L.join("\n");
 }
 

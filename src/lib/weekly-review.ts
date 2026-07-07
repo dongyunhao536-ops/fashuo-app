@@ -23,11 +23,15 @@ export interface WeeklyReview {
   askPoints: { subject: string; confusion: string; type: string | null }[];
   inbox: { createdByType: Record<string, number>; pendingBacklog: number };
   cost: { totalUsd: number; byRoute: { route: string; usd: number }[] };
+  /** 带"学习效果"(feeling)的流水——带背/背诵掌握轨迹，喂给复盘层（可选：老数据/单测可无） */
+  effects?: { subject: string; chapter: string | null; activity: string; feeling: string }[];
+  /** 上一份周报（用于周与周叙事衔接；可选） */
+  priorReport?: { weekStart: string; content: string } | null;
 }
 
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-// "学了什么" 只认这三类【实打实学习动作】——把闲聊/被考(复盘)/策略讨论(其他)/未识别排除。
-const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵"]);
+// "学了什么" 只认这几类【实打实学习动作】——含带背(PC辅导带背，云 2026-07-07 要求计入)；把闲聊/被考(复盘)/策略讨论(其他)/未识别排除。
+const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵", "带背"]);
 
 export async function buildWeeklyReview(today = new Date()): Promise<WeeklyReview> {
   // 自然周窗口（云 2026-07-01）：北京时间本周一 ~ 周日，不再滚动最近 7 天。
@@ -39,9 +43,9 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     .slice(0, 10);
   const sinceTs = bjDayStart(weekStart);
 
-  const [studyRes, askRes, evCreatedRes, evPendingRes, usageRes, absorbedRes, errorBook] =
+  const [studyRes, askRes, evCreatedRes, evPendingRes, usageRes, absorbedRes, errorBook, priorReportRes] =
     await Promise.all([
-      supabaseAdmin.from("study_log").select("subject, chapter, activity").gte("log_date", weekStart),
+      supabaseAdmin.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart),
       supabaseAdmin.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs),
       supabaseAdmin.from("events").select("type").gte("created_at", sinceTs),
       supabaseAdmin.from("events").select("type").eq("status", "pending"),
@@ -54,6 +58,8 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
         .gte("absorbed_at", sinceTs),
       // 错题本（=弱项）当前未吸收，聚合与错题页/教练/仪表盘同源
       getErrorBook(),
+      // 上一份周报（周与周衔接：读上周复盘/指导，本周对照落实/欠账）
+      supabaseAdmin.from("weekly_report").select("week_start, content").lt("week_start", weekStart).order("week_start", { ascending: false }).limit(1),
     ]);
 
   const study = studyRes.data ?? [];
@@ -75,6 +81,19 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     chapters: [...v.chapters],
     activities: [...v.activities],
   }));
+
+  // —— 带背/背诵学习效果（feeling·掌握轨迹）：喂复盘层定"下周精度重点"；不卡章节（小结行 chapter=null 也收）——
+  const effects = study
+    .filter((s) => SUBJECTS.includes((s.subject as string) ?? "") && s.feeling)
+    .map((s) => ({
+      subject: s.subject as string,
+      chapter: (s.chapter as string | null) ?? null,
+      activity: (s.activity as string | null) ?? "",
+      feeling: String(s.feeling),
+    }));
+
+  const pr = priorReportRes.data?.[0];
+  const priorReport = pr ? { weekStart: String(pr.week_start), content: String(pr.content ?? "").slice(0, 1500) } : null;
 
   // —— 解决了什么 ——
   const absorbedErrors = (absorbedRes.data ?? [])
@@ -105,6 +124,8 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     weekEnd,
     activity: { asks: asks.length, coachLogs: study.length },
     studied,
+    effects,
+    priorReport,
     solved: { absorbedErrors },
     weak: { top: errorBook.slice(0, 8) },
     askPoints,
@@ -136,6 +157,13 @@ export function formatWeeklyDataText(r: WeeklyReview): string {
     L.push(`  - （本周无学习流水记录）`);
   }
 
+  if (r.effects?.length) {
+    L.push(`· 带背/学习效果（掌握轨迹，据此定下周精度重点）：`);
+    for (const e of r.effects) {
+      L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`);
+    }
+  }
+
   L.push(
     `· 解决了什么：本周吸收错题 ${r.solved.absorbedErrors.length} 个${
       r.solved.absorbedErrors.length
@@ -149,5 +177,10 @@ export function formatWeeklyDataText(r: WeeklyReview): string {
   L.push(`  - 答疑未收口卡点：${r.askPoints.map((a) => `${a.subject}${a.type ? "·" + a.type : ""} ${a.confusion}`).join("；") || "（无）"}`);
 
   L.push(`· 待办筐：本周新增 ${Object.entries(r.inbox.createdByType).map(([t, n]) => `${t}${n}`).join("/") || "无"}；待处理积压 ${r.inbox.pendingBacklog} 条`);
+
+  if (r.priorReport?.content) {
+    L.push(`\n【上一份周报（${r.priorReport.weekStart} 那周）——衔接用：对照上周"下周指导"看本周落实/欠账，别孤立地只讲本周】`);
+    L.push(r.priorReport.content);
+  }
   return L.join("\n");
 }

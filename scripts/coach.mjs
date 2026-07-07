@@ -10,7 +10,7 @@ import { dirname } from "node:path";
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const ACTIVITIES = ["听课", "做题", "背诵", "复盘", "其他"];
+const ACTIVITIES = ["听课", "做题", "背诵", "带背", "复盘", "其他"]; // 带背=PC辅导带背(理解层，非云自背)；今日页逐字渲染 activity 即可与"背诵"区分
 const DAY = 86400000;
 
 // 写回共享账本走同一个 stage→sync 缓冲（cuoti.mjs sync 统一落库）

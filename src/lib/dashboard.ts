@@ -139,7 +139,7 @@ export async function getDashboard(): Promise<DashboardData> {
     const ch = r.chapter as string | null;
     const act = (r.activity as string | null) ?? "";
     if (!SUBJECTS.includes(subj) || !ch) continue;
-    const target = act === "背诵" ? recitedBy : act === "听课" || act === "做题" ? learnedBy : null;
+    const target = act === "背诵" || act === "带背" ? recitedBy : act === "听课" || act === "做题" ? learnedBy : null; // 带背(PC辅导带背)计入"背诵"维度·云2026-07-07
     if (!target) continue;
     const set = target.get(subj) ?? new Set<number>();
     for (const n of detectChapters(subj, ch)) set.add(n);
