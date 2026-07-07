@@ -1,28 +1,36 @@
 import { supabaseAdmin } from "./supabase";
 import type { ErrorItem } from "./errorbook";
 import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
+import { EXAM_OUTLINE } from "./exam-outline.gen";
 
 /**
- * 今日页（仪表盘）数据聚合（RSC 直接调）。2026-07-06 重做：清爽 + 量化个人综合能力/各科能力与进度。
- * 量化全部落在【真实数据】上、透明标注依据，不编分：
- *   - 综合备考指数 = 0.7×加权章节进度(按分值权重) + 0.3×错题闭环率(有错题才计入)
- *   - 各科：进度%(已学章/总章·学习流水解析第X章) + 错题(挂账/已吸收) + 掌握度(闭环率，无数据=null)
+ * 今日页数据聚合（RSC 直接调）。2026-07-06 量化重做（更严谨）：
+ * 量化全部落真实数据、透明标注依据，不编分：
+ *   - 章节识别：优先按《考试分析》官方【章节标题】匹配官方章号（治"云的章号≠官方章号"，如云"第八章正当化"官方是第四章），
+ *     退回解析"第X章"数字（云自己的编号，封顶总章数）——比纯数字更真实。
+ *   - 分维度：铺开(听课/做题) / 背诵(背诵) 分开算；错题闭环(absorbed/(open+absorbed))。
+ *   - 各科能力 = 0.45×铺开率 + 0.30×背诵率 + 0.25×闭环率（无错题则前两项重归一化）。
+ *   - 综合备考指数 = 各科能力按【分值权重】加权平均。
  */
 
 export interface SubjectStat {
   subject: string;
   weight: number;
   total: number;
-  covered: number;
-  progress: number; // 0-100
+  learned: number; // 听课/做题铺开章数
+  recited: number; // 背诵章数
+  covered: number; // 铺开∪背诵 去重章数
+  progress: number; // 铺开率 covered/total ×100
+  recitePct: number; // 背诵率 ×100
   open: number;
   absorbed: number;
-  mastery: number | null; // 错题闭环率 0-100；无错题数据=null
+  closure: number | null; // 错题闭环率 ×100
+  ability: number; // 综合能力分 0-100
 }
 
 export interface DashboardData {
   hero: { examDate: string; daysLeft: number; daysToBase: number };
-  overall: { index: number; weightedProgress: number; closure: number | null }; // 综合备考指数
+  overall: { index: number };
   subjects: SubjectStat[];
   ask: { openCount: number; lastConfusion: string | null };
   coach: { openErrors: number };
@@ -36,24 +44,60 @@ const EXAM_DATE = "2026-12-21";
 const BASE_DEADLINE = "2026-09-30";
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const STUDY_ACT = new Set(["听课", "做题", "背诵"]); // "进度"只认实打实学习动作
-// 各科《考试分析》总章数（exam-outline.gen.ts）
 const TOTAL_CH: Record<string, number> = { 刑法: 21, 民法: 21, 法理: 13, 宪法: 5, 法制史: 7 };
-// 科目分值权重（专业基础 刑+民=150；专业综合 法理≈60/宪法≈50/法制史≈40）
 const WEIGHT: Record<string, number> = { 刑法: 75, 民法: 75, 法理: 60, 宪法: 50, 法制史: 40 };
 
-const CN = "一二三四五六七八九十";
-/** 从学习流水的自由文本章节名解析出「第X章」的章号（中文/阿拉伯数字都认；绪论=第一章）。解析不出=null。 */
-function chapterNum(s: string): number | null {
-  const m = s.match(/第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/);
-  if (!m) return /绪论/.test(s) ? 1 : null;
-  const t = m[1];
-  if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
-  if (t === "十") return 10;
-  if (t.startsWith("二十")) return t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1;
-  if (t.startsWith("十")) return 10 + CN.indexOf(t[1]) + 1;
-  const i = CN.indexOf(t);
-  return i >= 0 ? i + 1 : null;
+// —— 解析《考试分析》知识架构 → {科目: [{num, keys:[章标题, ...节标题]}]}（供按标题匹配官方章号）——
+const OUTLINE: Record<string, { num: number; keys: string[] }[]> = (() => {
+  const CN = "一二三四五六七八九十";
+  const cn2num = (t: string): number | null => {
+    if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+    if (t === "十") return 10;
+    if (t.startsWith("二十")) return t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1;
+    if (t.startsWith("十")) return 10 + CN.indexOf(t[1]) + 1;
+    const i = CN.indexOf(t);
+    return i >= 0 ? i + 1 : null;
+  };
+  const out: Record<string, { num: number; keys: string[] }[]> = {};
+  for (const block of EXAM_OUTLINE.split("◆").slice(1)) {
+    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
+    const subj = SUBJECTS.find((s) => lines[0]?.startsWith(s));
+    if (!subj) continue;
+    const chapters: { num: number; keys: string[] }[] = [];
+    for (const ln of lines.slice(1)) {
+      const m = ln.match(/^第([0-9一二三四五六七八九十]+)章\s*([^：:]*)(?:[：:](.*))?$/);
+      if (!m) continue;
+      const num = cn2num(m[1]);
+      if (num == null) continue;
+      const title = (m[2] || "").trim();
+      const sections = (m[3] || "").split(/[；;]/).map((s) => s.replace(/^第[0-9一二三四五六七八九十]+节\s*/, "").trim()).filter((s) => s.length >= 2);
+      chapters.push({ num, keys: [title, ...sections].filter((k) => k.length >= 2) });
+    }
+    out[subj] = chapters;
+  }
+  return out;
+})();
+
+/** 从日志章节自由文本识别出覆盖的官方章号集合：优先章/节标题匹配，退回解析"第X章"数字（封顶）。 */
+function detectChapters(subject: string, text: string): Set<number> {
+  const found = new Set<number>();
+  const total = TOTAL_CH[subject] ?? 99;
+  for (const c of OUTLINE[subject] ?? []) {
+    if (c.keys.some((k) => text.includes(k))) found.add(c.num);
+  }
+  if (found.size === 0) {
+    // 无标题命中 → 退回云自己的"第X章"编号（可能与官方错位，仅作计数兜底）
+    const CN = "一二三四五六七八九十";
+    const re = /第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const t = m[1];
+      let n: number | null = /^[0-9]+$/.test(t) ? parseInt(t, 10) : t === "十" ? 10 : t.startsWith("二十") ? (t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1) : t.startsWith("十") ? 10 + CN.indexOf(t[1]) + 1 : CN.indexOf(t) + 1;
+      if (n && n >= 1 && n <= total) found.add(n);
+    }
+    if (found.size === 0 && /绪论/.test(text)) found.add(1);
+  }
+  return found;
 }
 
 export async function getDashboard(): Promise<DashboardData> {
@@ -71,67 +115,63 @@ export async function getDashboard(): Promise<DashboardData> {
 
   const daysLeft = Math.max(0, Math.ceil((new Date(EXAM_DATE).getTime() - now.getTime()) / DAY));
   const daysToBase = Math.ceil((new Date(BASE_DEADLINE).getTime() - now.getTime()) / DAY);
-
   const byType: Record<string, number> = {};
   for (const e of eventsPending.data ?? []) byType[e.type] = (byType[e.type] ?? 0) + 1;
 
   const logs = allLog.data ?? [];
   const errs = allErr.data ?? [];
 
-  // 今日 + 本周
   const studied = logs.filter((r) => r.log_date === todayStr).map((r) => ({
     subject: (r.subject as string | null) ?? "未识别",
     chapter: (r.chapter as string | null) ?? null,
     activity: (r.activity as string | null) ?? "其他",
   }));
   const weekLogs = logs.filter((r) => String(r.log_date) >= weekStart).length;
-  const todayStartTs = bjDayStart(todayStr);
-  const weekStartTs = bjDayStart(weekStart);
-  const todayAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= todayStartTs).length;
-  const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekStartTs).length;
+  const todayTs = bjDayStart(todayStr), weekTs = bjDayStart(weekStart);
+  const todayAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= todayTs).length;
+  const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
-  // 各科：已学章节（第X章解析·去重）
-  const coveredBySubj = new Map<string, Set<number>>();
+  // 各科：铺开(听课/做题) / 背诵 章节集合
+  const learnedBy = new Map<string, Set<number>>();
+  const recitedBy = new Map<string, Set<number>>();
   for (const r of logs) {
     const subj = r.subject as string;
     const ch = r.chapter as string | null;
     const act = (r.activity as string | null) ?? "";
-    if (!SUBJECTS.includes(subj) || !ch || !STUDY_ACT.has(act)) continue;
-    const n = chapterNum(ch);
-    if (n == null) continue;
-    const set = coveredBySubj.get(subj) ?? new Set<number>();
-    set.add(n);
-    coveredBySubj.set(subj, set);
+    if (!SUBJECTS.includes(subj) || !ch) continue;
+    const target = act === "背诵" ? recitedBy : act === "听课" || act === "做题" ? learnedBy : null;
+    if (!target) continue;
+    const set = target.get(subj) ?? new Set<number>();
+    for (const n of detectChapters(subj, ch)) set.add(n);
+    target.set(subj, set);
   }
-  // 各科：错题挂账/已吸收
-  const errBySubj = new Map<string, { open: number; absorbed: number }>();
+  const errBy = new Map<string, { open: number; absorbed: number }>();
   for (const r of errs) {
     const s = (r.subject as string | null) ?? "未分类";
-    const e = errBySubj.get(s) ?? { open: 0, absorbed: 0 };
-    if (r.status === "absorbed") e.absorbed++;
-    else e.open++;
-    errBySubj.set(s, e);
+    const e = errBy.get(s) ?? { open: 0, absorbed: 0 };
+    if (r.status === "absorbed") e.absorbed++; else e.open++;
+    errBy.set(s, e);
   }
 
   const subjects: SubjectStat[] = SUBJECTS.map((s) => {
-    const covered = Math.min(coveredBySubj.get(s)?.size ?? 0, TOTAL_CH[s]);
     const total = TOTAL_CH[s];
-    const progress = Math.round((covered / total) * 100);
-    const e = errBySubj.get(s) ?? { open: 0, absorbed: 0 };
+    const learnedSet = learnedBy.get(s) ?? new Set<number>();
+    const recitedSet = recitedBy.get(s) ?? new Set<number>();
+    const covered = new Set<number>([...learnedSet, ...recitedSet]);
+    const progress = Math.round((covered.size / total) * 100);
+    const recitePct = Math.round((recitedSet.size / total) * 100);
+    const e = errBy.get(s) ?? { open: 0, absorbed: 0 };
     const seen = e.open + e.absorbed;
-    const mastery = seen > 0 ? Math.round((e.absorbed / seen) * 100) : null;
-    return { subject: s, weight: WEIGHT[s], total, covered, progress, open: e.open, absorbed: e.absorbed, mastery };
+    const closure = seen > 0 ? Math.round((e.absorbed / seen) * 100) : null;
+    // 能力 = 0.45铺开 + 0.30背诵 + 0.25闭环（无错题→前两项重归一化到 0.75）
+    const R1 = progress / 100, R2 = recitePct / 100, R3 = closure != null ? closure / 100 : null;
+    const ability = Math.round((R3 != null ? 0.45 * R1 + 0.3 * R2 + 0.25 * R3 : (0.45 * R1 + 0.3 * R2) / 0.75) * 100);
+    return { subject: s, weight: WEIGHT[s], total, learned: learnedSet.size, recited: recitedSet.size, covered: covered.size, progress, recitePct, open: e.open, absorbed: e.absorbed, closure, ability };
   });
 
-  // 综合备考指数
   const wSum = SUBJECTS.reduce((a, s) => a + WEIGHT[s], 0);
-  const weightedProgress = Math.round(subjects.reduce((a, x) => a + x.weight * x.progress, 0) / wSum);
-  const totOpen = subjects.reduce((a, x) => a + x.open, 0);
-  const totAbs = subjects.reduce((a, x) => a + x.absorbed, 0);
-  const closure = totOpen + totAbs > 0 ? Math.round((totAbs / (totOpen + totAbs)) * 100) : null;
-  const index = Math.round(closure != null ? 0.7 * weightedProgress + 0.3 * closure : weightedProgress);
+  const index = Math.round(subjects.reduce((a, x) => a + x.weight * x.ability, 0) / wSum);
 
-  // 错题本 Top（open 聚合，同 errorbook 口径）
   const openAgg = new Map<string, ErrorItem>();
   for (const r of errs) {
     if (r.status !== "open" || !r.knowledge) continue;
@@ -147,7 +187,7 @@ export async function getDashboard(): Promise<DashboardData> {
 
   return {
     hero: { examDate: EXAM_DATE, daysLeft, daysToBase },
-    overall: { index, weightedProgress, closure },
+    overall: { index },
     subjects,
     ask: { openCount: askCount.count ?? 0, lastConfusion: askLatest.data?.[0]?.confusion ?? null },
     coach: { openErrors: openAgg.size },

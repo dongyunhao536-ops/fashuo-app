@@ -3,19 +3,27 @@ import { getDashboard } from "@/lib/dashboard";
 import { TabBar } from "@/components/TabBar";
 
 /**
- * 今日（仪表盘首页，RSC，零 client JS）。2026-07-06 重做为【一目了然 + 量化】：
- * ① 倒计时 + 综合备考指数　② 各科能力·进度（进度条 + 错题 + 掌握度）　③ 今日动态　④ 快捷入口。
- * 量化口径见 dashboard.ts（真实数据、透明依据、非模考实测）。只读账本，不写状态。
+ * 今日（仪表盘，RSC，零 client JS）。2026-07-06 量化重做 v2：紧凑 3 卡片。
+ * ① 综合备考指数 + 各科能力/进度【雷达图】（能力实心 + 进度虚线双多边形）　② 今日动态　③ 快捷入口(错题本/待办/周复盘)。
+ * 量化口径见 dashboard.ts（真实数据·章标题匹配官方章·含背诵·透明依据·非模考实测）。
  */
 
 export const dynamic = "force-dynamic";
 
-const SUB_SHORT: Record<string, string> = { 刑法: "刑法", 民法: "民法", 法理: "法理", 宪法: "宪法", 法制史: "法制史" };
+// 雷达几何：5 轴（刑/民/法理/宪/法史），中心(130,112) 半径78
+const CX = 130, CY = 112, R = 78;
+const ang = (i: number) => ((-90 + i * 72) * Math.PI) / 180;
+const at = (i: number, val: number): [number, number] => {
+  const a = ang(i), r = (R * Math.max(0, Math.min(100, val))) / 100;
+  return [CX + r * Math.cos(a), CY + r * Math.sin(a)];
+};
+const polyPts = (vals: number[]) => vals.map((v, i) => at(i, v).map((n) => n.toFixed(1)).join(",")).join(" ");
 
 export default async function DashboardPage() {
   const d = await getDashboard();
   const today = new Date();
   const todayLabel = `${today.getMonth() + 1} 月 ${today.getDate()} 日`;
+  const subs = d.subjects;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-4 pb-28 pt-5">
@@ -24,70 +32,85 @@ export default async function DashboardPage() {
         <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">{todayLabel} · 375+</span>
       </header>
 
-      {/* ① 倒计时 + 综合备考指数 */}
+      {/* ① 综合备考指数 + 各科能力·进度 雷达 */}
       <section className="glass-card mx-4 rounded-[22px] border border-hairline p-5 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
-        <div className="flex justify-between text-[12px] text-label3">
-          <span>距初试 <b className="text-label font-semibold tabular-nums">{d.hero.daysLeft}</b> 天</span>
-          <span>距基础结业死线 {d.hero.daysToBase > 0 ? <b className="text-label font-semibold tabular-nums">{d.hero.daysToBase}</b> : "已过 " + -d.hero.daysToBase} 天</span>
-        </div>
-
-        <div className="mt-3 flex items-end justify-between">
+        <div className="flex items-start justify-between">
           <div>
-            <div className="text-[12px] text-label3">综合备考指数</div>
+            <div className="text-[11px] text-label3">综合备考指数</div>
             <div className="mt-0.5 flex items-baseline">
-              <span className="text-shine text-[46px] font-extrabold leading-none tracking-tight tabular-nums">{d.overall.index}</span>
-              <span className="ml-1.5 text-[15px] text-label3">/ 100</span>
+              <span className="text-shine text-[40px] font-extrabold leading-none tracking-tight tabular-nums">{d.overall.index}</span>
+              <span className="ml-1.5 text-[14px] text-label3">/ 100</span>
             </div>
           </div>
           <div className="text-right text-[11px] leading-relaxed text-label3">
-            章节进度 <span className="text-label2 tabular-nums">{d.overall.weightedProgress}%</span>
-            <br />
-            错题闭环 <span className="text-label2 tabular-nums">{d.overall.closure != null ? d.overall.closure + "%" : "—"}</span>
+            距初试 <b className="text-label2 tabular-nums">{d.hero.daysLeft}</b> 天<br />
+            距结业死线 <b className="text-label2 tabular-nums">{d.hero.daysToBase > 0 ? d.hero.daysToBase : "过" + -d.hero.daysToBase}</b> 天
           </div>
         </div>
-        <Bar pct={d.overall.index} className="mt-3 h-2" />
-        <div className="mt-1.5 text-[10.5px] text-label3">= 加权章节进度×0.7 + 错题闭环率×0.3（按分值加权·非模考实测）</div>
-      </section>
 
-      {/* ② 各科能力 · 进度 */}
-      <div>
-        <h2 className="px-8 pb-2 text-[13px] text-label2">各科能力 · 进度</h2>
-        <section className="glass-card mx-4 divide-y divide-hairline overflow-hidden rounded-[18px]">
-          {d.subjects.map((s) => (
-            <div key={s.subject} className="px-4 py-3">
-              <div className="flex items-baseline justify-between">
-                <span className="text-[15px] font-medium">{SUB_SHORT[s.subject] ?? s.subject}</span>
-                <span className="text-[12px] tabular-nums text-label3">
-                  {s.covered}/{s.total} 章 · <span className="text-label2">{s.progress}%</span>
-                </span>
-              </div>
-              <Bar pct={s.progress} className="mt-2 h-1.5" tone={s.progress === 0 ? "dim" : "blue"} />
-              <div className="mt-1.5 flex items-center justify-between text-[11.5px] text-label3">
-                <span>
-                  {s.open + s.absorbed > 0 ? (
-                    <>错题 挂账 <b className="text-orange">{s.open}</b> · 已吸收 <b className="text-green">{s.absorbed}</b></>
-                  ) : (
-                    <span className="text-label3">暂无错题记录</span>
-                  )}
-                </span>
-                <span>{s.mastery != null ? <>掌握度 <b className="text-label2 tabular-nums">{s.mastery}%</b></> : <span className="text-label3">未启动</span>}</span>
-              </div>
+        {/* 雷达图 */}
+        <svg viewBox="0 0 260 210" className="mt-1 w-full">
+          {[20, 40, 60, 80, 100].map((lvl) => (
+            <polygon key={lvl} points={polyPts([lvl, lvl, lvl, lvl, lvl])} fill="none" stroke="rgba(130,130,142,0.16)" strokeWidth={1} />
+          ))}
+          {subs.map((_, i) => {
+            const [x, y] = at(i, 100);
+            return <line key={i} x1={CX} y1={CY} x2={x} y2={y} stroke="rgba(130,130,142,0.16)" strokeWidth={1} />;
+          })}
+          {/* 进度(铺开)虚线 */}
+          <polygon points={polyPts(subs.map((s) => s.progress))} fill="none" stroke="rgba(48,209,88,0.85)" strokeWidth={1.3} strokeDasharray="3 2.5" />
+          {/* 能力 实心 */}
+          <polygon points={polyPts(subs.map((s) => s.ability))} fill="rgba(10,132,255,0.22)" stroke="rgba(10,132,255,0.95)" strokeWidth={1.6} strokeLinejoin="round" />
+          {subs.map((s) => at(subs.indexOf(s), s.ability)).map(([x, y], i) => (
+            <circle key={i} cx={x} cy={y} r={2.2} fill="rgb(10,132,255)" />
+          ))}
+          {/* 轴标签 */}
+          {subs.map((s, i) => {
+            const [x, y] = at(i, 128);
+            const c = Math.cos(ang(i));
+            const anchor = c > 0.3 ? "start" : c < -0.3 ? "end" : "middle";
+            return (
+              <text key={s.subject} x={x} y={y + 3} textAnchor={anchor} fill="currentColor" className="text-[10.5px] text-label2">
+                {s.subject}
+              </text>
+            );
+          })}
+        </svg>
+
+        {/* 图例 + 每科拆解 */}
+        <div className="-mt-1 flex items-center justify-center gap-4 text-[10.5px] text-label3">
+          <span className="flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-[2px] bg-blue" />能力</span>
+          <span className="flex items-center gap-1"><i className="inline-block h-0 w-3 border-t border-dashed border-green" />进度(铺开)</span>
+        </div>
+        <div className="mt-2.5 flex flex-col gap-1 border-t border-hairline pt-2.5">
+          {subs.map((s) => (
+            <div key={s.subject} className="flex items-baseline text-[12px]">
+              <span className="w-11 shrink-0 font-medium">{s.subject}</span>
+              <span className="w-14 shrink-0 tabular-nums text-label">能力 <b className="text-blue">{s.ability}</b></span>
+              <span className="flex-1 text-[11px] tabular-nums text-label3">
+                {s.covered + s.recited + s.open + s.absorbed === 0
+                  ? "未启动"
+                  : `进${s.progress}% · 背${s.recitePct}% · 闭环${s.closure != null ? s.closure + "%" : "—"}`}
+              </span>
             </div>
           ))}
-        </section>
-      </div>
+        </div>
+        <div className="mt-2 text-[10px] leading-relaxed text-label3">
+          能力 = 0.45×铺开 + 0.30×背诵 + 0.25×错题闭环；综合 = 各科按分值加权。真实数据·非模考实测。
+        </div>
+      </section>
 
-      {/* ③ 今日动态 */}
+      {/* ② 今日动态 */}
       <div>
         <h2 className="px-8 pb-2 text-[13px] text-label2">今日动态 · {todayLabel}</h2>
         <section className="glass-card mx-4 rounded-[18px] p-4">
           {d.today.studied.length === 0 && d.today.absorbed === 0 ? (
-            <div className="text-[13px] text-label3">今天还没有记录——去教练页汇报进度，或电脑端复盘错题</div>
+            <div className="text-[13px] text-label3">今天还没有记录——去教练页汇报，或电脑端复盘错题</div>
           ) : (
             <div className="flex flex-col gap-2">
               {d.today.studied.map((s, i) => (
                 <div key={i} className="text-[13px] leading-snug text-label">
-                  <span className="mr-1.5 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{SUB_SHORT[s.subject] ?? s.subject}</span>
+                  <span className="mr-1.5 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{s.subject}</span>
                   {s.chapter ?? "（未记章节）"}
                   <span className="ml-1 text-label3">· {s.activity}</span>
                 </div>
@@ -101,18 +124,11 @@ export default async function DashboardPage() {
         </section>
       </div>
 
-      {/* ④ 快捷入口 */}
+      {/* ③ 快捷入口（答疑/教练在底栏，此处不重复） */}
       <div>
         <h2 className="px-8 pb-2 text-[13px] text-label2">快捷入口</h2>
         <section className="glass-card mx-4 divide-y divide-hairline overflow-hidden rounded-[18px]">
-          <Entry href="/ask" tone="green" title="答疑" sub={d.ask.lastConfusion ?? "随时问一道题 / 一个概念"} badge={d.ask.openCount}>
-            <path d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z" strokeLinejoin="round" />
-          </Entry>
-          <Entry href="/coach" tone="blue" title="教练" sub={d.coach.openErrors > 0 ? `${d.coach.openErrors} 个未吸收错题待复盘` : "聊聊今天的进度 / 复盘"}>
-            <rect x="3" y="4" width="18" height="16" rx="2" />
-            <path d="M8 4v4M16 4v4M3 11h18" strokeLinecap="round" />
-          </Entry>
-          <Entry href="/errors" tone="orange" title="错题本" sub={d.top5[0] ? `${d.top5[0].subject ?? ""}·${d.top5[0].knowledge}`.slice(0, 22) : "空——教练/答疑说「记进错题本」才进来"} badge={d.coach.openErrors}>
+          <Entry href="/errors" tone="orange" title="错题本" sub={d.top5[0] ? `${d.top5[0].subject ?? ""}·${d.top5[0].knowledge}`.slice(0, 22) : "空——说「记进错题本」才进来"} badge={d.coach.openErrors}>
             <path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 10h8M8 14h5" strokeLinejoin="round" strokeLinecap="round" />
           </Entry>
           <Entry href="/inbox" tone="neutral" title="待办筐" sub={Object.entries(d.inbox.byType).map(([t, n]) => `${n} ${t}`).join(" · ") || "暂无待登记沉淀"} badge={d.inbox.pendingCount}>
@@ -129,23 +145,12 @@ export default async function DashboardPage() {
   );
 }
 
-/** 进度条 */
-function Bar({ pct, className = "", tone = "blue" }: { pct: number; className?: string; tone?: "blue" | "dim" }) {
-  const fill = tone === "dim" ? "bg-label3/40" : "bg-blue";
-  return (
-    <div className={`overflow-hidden rounded-full bg-fill ${className}`}>
-      <div className={`h-full rounded-full ${fill}`} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-    </div>
-  );
-}
-
-/** 入口列表行 */
 function Entry({
   href, tone, title, sub, badge, children,
 }: {
-  href: string; tone: "blue" | "green" | "orange" | "neutral"; title: string; sub: string; badge?: number; children: React.ReactNode;
+  href: string; tone: "orange" | "neutral"; title: string; sub: string; badge?: number; children: React.ReactNode;
 }) {
-  const cls = { blue: "bg-blue/15 text-blue", green: "bg-green/15 text-green", orange: "bg-orange/15 text-orange", neutral: "bg-fill text-label2" }[tone];
+  const cls = { orange: "bg-orange/15 text-orange", neutral: "bg-fill text-label2" }[tone];
   return (
     <Link href={href} className="pressable flex min-h-11 items-center px-4 py-3">
       <span className={`tile-material mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] ${cls}`}>
