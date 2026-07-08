@@ -41,6 +41,10 @@ export default async function DashboardPage() {
               <span className="text-shine text-[40px] font-extrabold leading-none tracking-tight tabular-nums">{d.overall.index}</span>
               <span className="ml-1.5 text-[14px] text-label3">/ 100</span>
             </div>
+            <div className="mt-1 text-[10.5px] leading-tight text-label3">
+              北大 375+ 严标准
+              {d.overall.balanced > d.overall.index && <> · 均衡可达 <b className="text-label2 tabular-nums">{d.overall.balanced}</b></>}
+            </div>
           </div>
           <div className="text-right text-[11px] leading-relaxed text-label3">
             距初试 <b className="text-label2 tabular-nums">{d.hero.daysLeft}</b> 天<br />
@@ -79,8 +83,8 @@ export default async function DashboardPage() {
 
         {/* 图例 + 每科拆解 */}
         <div className="-mt-1 flex items-center justify-center gap-4 text-[10.5px] text-label3">
-          <span className="flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-[2px] bg-blue" />能力</span>
-          <span className="flex items-center gap-1"><i className="inline-block h-0 w-3 border-t border-dashed border-green" />进度(铺开)</span>
+          <span className="flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-[2px] bg-blue" />能力(吃透)</span>
+          <span className="flex items-center gap-1"><i className="inline-block h-0 w-3 border-t border-dashed border-green" />覆盖率</span>
         </div>
         <div className="mt-2.5 flex flex-col gap-1 border-t border-hairline pt-2.5">
           {subs.map((s) => (
@@ -88,15 +92,20 @@ export default async function DashboardPage() {
               <span className="w-11 shrink-0 font-medium">{s.subject}</span>
               <span className="w-14 shrink-0 tabular-nums text-label">能力 <b className="text-blue">{s.ability}</b></span>
               <span className="flex-1 text-[11px] tabular-nums text-label3">
-                {s.covered + s.recited + s.open + s.absorbed === 0
+                {s.covered + s.open + s.absorbed === 0
                   ? "未启动"
-                  : `进${s.progress}% · 背${s.recitePct}% · 闭环${s.closure != null ? s.closure + "%" : "—"}`}
+                  : `覆${s.progress} 深${s.depth} 背${s.recitePct} 环${s.closure != null ? s.closure : "—"}`}
               </span>
             </div>
           ))}
         </div>
+        {(d.overall.notStarted > 0 || d.overall.weakest.ability < 40) && (
+          <div className="mt-2.5 rounded-[10px] bg-orange/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-orange">
+            北大诊断：{d.overall.notStarted > 0 ? `${d.overall.notStarted} 科尚未启动，` : ""}最弱「{d.overall.weakest.subject}」仅 {d.overall.weakest.ability} 分，按单科线正拖累综合——补齐可达 {d.overall.balanced}。
+          </div>
+        )}
         <div className="mt-2 text-[10px] leading-relaxed text-label3">
-          能力 = 0.45×铺开 + 0.30×背诵 + 0.25×错题闭环；综合 = 各科按分值加权。真实数据·非模考实测。
+          能力 = 广度25 + 深度20 + 背诵25 + 闭环30（深度＝听课→做题/复盘→背诵三台阶吃透，非"听过=会"）；综合 = 分值加权×0.7 + 最弱科×0.3（法硕单科线·反偏科）。真实数据·非模考。
         </div>
       </section>
 
