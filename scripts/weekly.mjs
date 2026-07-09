@@ -26,13 +26,15 @@ function parseFlags(args) { const o = {}; for (let i = 0; i < args.length; i++) 
 async function buildReview(weekStart) {
   const weekEnd = weekEndOf(weekStart);
   const sinceTs = bjDayStartTs(weekStart);
+  // 上界=下周一0点（北京时）：查当前周不影响（未来无数据），查历史周（pinggu-pc 逐周趋势）必须封顶，否则把之后的数据全卷进来
+  const untilTs = bjDayStartTs(new Date(new Date(weekStart + "T00:00:00Z").getTime() + 7 * DAY).toISOString().slice(0, 10));
   const [study, ask, evC, evP, usage, absorbed, openErr, prior] = await Promise.all([
-    db.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart),
-    db.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs),
-    db.from("events").select("type").gte("created_at", sinceTs),
+    db.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart).lte("log_date", weekEnd),
+    db.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs).lt("created_at", untilTs),
+    db.from("events").select("type").gte("created_at", sinceTs).lt("created_at", untilTs),
     db.from("events").select("type").eq("status", "pending"),
-    db.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs),
-    db.from("study_error").select("subject, knowledge, absorbed_at").eq("status", "absorbed").gte("absorbed_at", sinceTs),
+    db.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs).lt("ts", untilTs),
+    db.from("study_error").select("subject, knowledge, absorbed_at").eq("status", "absorbed").gte("absorbed_at", sinceTs).lt("absorbed_at", untilTs),
     db.from("study_error").select("subject, knowledge, log_date").eq("status", "open"),
     db.from("weekly_report").select("week_start, content").lt("week_start", weekStart).order("week_start", { ascending: false }).limit(1),
   ]);
