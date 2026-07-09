@@ -28,7 +28,7 @@ const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const PENDING = ".local/cuoti-pending.jsonl";
 const [cmd, ...args] = process.argv.slice(2);
-const today = new Date().toISOString().slice(0, 10);
+const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
 
 // ---------- 本地待同步缓冲 ----------
 function readPending() {
@@ -227,11 +227,13 @@ async function sync(rest) {
   const absorbIds = [...new Set(ops.filter((o) => o.op === "absorb").flatMap((o) => o.ids ?? []))];
   const newErrs = ops.filter((o) => o.op === "new_error");
   const logs = ops.filter((o) => o.op === "study_log");
+  const mems = ops.filter((o) => o.op === "coach_memory");
 
-  console.log(`${dry ? "【预览·不写库】" : "同步到系统"}：销账 ${absorbIds.length} 条${absorbIds.length ? "（#" + absorbIds.join(" #") + "）" : ""}、新错题 ${newErrs.length} 条、学习日志 ${logs.length} 条`);
+  console.log(`${dry ? "【预览·不写库】" : "同步到系统"}：销账 ${absorbIds.length} 条${absorbIds.length ? "（#" + absorbIds.join(" #") + "）" : ""}、新错题 ${newErrs.length} 条、学习日志 ${logs.length} 条、长期记忆 ${mems.length} 条`);
   if (dry) {
     for (const e of newErrs) console.log(`   + 错题 [${e.subject ?? "未分类"}] ${e.knowledge}`);
     for (const l of logs) console.log(`   + 日志 ${l.date ?? ""} [${l.subject}]${l.chapter ? " " + l.chapter : ""} ${l.activity}${l.accuracy != null ? " " + l.accuracy + "%" : ""}${l.feeling ? "（" + l.feeling + "）" : ""}`);
+    for (const m of mems) console.log(`   + 记忆 [${m.category ?? "画像"}] ${m.fact}`);
     return console.log("（预览完毕，未改动。去掉 --dry 才真正落库。）");
   }
 
@@ -261,8 +263,14 @@ async function sync(rest) {
     if (error) { console.error("✗ 学习日志写入失败：" + error.message); continue; }
     okLog++;
   }
+  let okMem = 0;
+  for (const m of mems) {
+    const { error } = await db.from("coach_memory").insert({ fact: m.fact, category: m.category ?? "画像" });
+    if (error) { console.error("✗ 长期记忆写入失败：" + error.message); continue; }
+    okMem++;
+  }
   clearPending();
-  console.log(`✅ 已同步到系统：销账 ${okAbs} 条、新增错题 ${okNew} 条、学习日志 ${okLog} 条。缓冲已清空。`);
+  console.log(`✅ 已同步到系统：销账 ${okAbs} 条、新增错题 ${okNew} 条、学习日志 ${okLog} 条、长期记忆 ${okMem} 条。缓冲已清空。`);
   console.log(`（错题本是 Supabase 运行态，APP 实时读库即可见，无需重新部署。若日后复盘产出「心得」入内容库才需 archive 提交+部署。）`);
 }
 

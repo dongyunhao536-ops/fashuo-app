@@ -38,8 +38,19 @@ function log(args) {
   console.log(`（未落库，云说"同步"再 sync；用 cuoti.mjs pending 查、sync 落库）`);
 }
 const today = new Date();
-const ymd = today.toISOString().slice(0, 10);
+const ymd = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
 const daysTo = (d) => Math.ceil((new Date(d).getTime() - today.getTime()) / DAY);
+
+// 暂存一条关于云的长期记忆（画像/倾向/里程碑/约定）→ cuoti.mjs sync 落库到 coach_memory
+// PC↔APP 共享：APP 教练的 prompt 读 coach_memory，PC 侧画像更新由此同步过去（2026-07-09 接线，堵"双系统画像不同步"的洞）
+function remember(args) {
+  const f = parseFlags(args);
+  if (!f.fact || f.fact === true) return console.error('remember 需要 --fact "关于云的一条事实"（可选 --category 画像|倾向|里程碑|约定，默认 画像）');
+  const op = { op: "coach_memory", fact: f.fact, category: (f.category && f.category !== true) ? f.category : "画像" };
+  stage(op);
+  console.log(`⏳ 已暂存待同步·长期记忆：[${op.category}] ${op.fact}`);
+  console.log(`（cuoti.mjs sync 落库后 APP 教练即读到）`);
+}
 
 // 当前应在第几轮（按 轮次表 窗口 "2026-07~08" / "2026-12" 粗匹配当月）
 function currentRound() {
@@ -123,9 +134,11 @@ async function ledger() {
 const cmd = process.argv[2];
 if (cmd === "ledger") await ledger();
 else if (cmd === "log") log(process.argv.slice(3));
+else if (cmd === "remember") remember(process.argv.slice(3));
 else {
-  console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log>");
+  console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|remember>");
   console.log("  ledger                                     读完整共享账本");
   console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD]  暂存学习日志（云说"同步"落库）');
+  console.log('  remember --fact "..." [--category 画像|倾向|里程碑|约定]  暂存长期记忆 → coach_memory（APP 教练可读）');
   console.log("（检索用 cuoti.mjs material；错题/销账用 cuoti.mjs add/absorb；统一 cuoti.mjs sync 落库）");
 }
