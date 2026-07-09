@@ -32,4 +32,5 @@ description: PC 端生产法硕周报（APP 只展示·PC 质量更高）。云�
 ## 边界
 - PC 生产**零 API 成本**（`cost_usd=0`、`model=pc-opus-4.8`）；不受 APP 预算约束。
 - 数据实时同步（[[pc-stage-then-sync]]）：save 直接写共享库、APP 立刻可见、无需重新部署。
-- **待办（要动 APP + 部署）**：① 周报页加回"本周吸收/已解决"+"进度/距死线"节让展示更全；② 关掉 APP 侧 cron(`/api/cron/weekly`) 和「刷新」按钮生成，实现"只 PC 生产"——这两步动 `src/` + 部署 ECS，需云点头才做。
+- **"只 PC 生产"已落实（2026-07-06 代码停用 · 07-09 云拍板确认）**：`/api/cron/weekly` 与「刷新」端点均已改"命中即 skip 不生成"、UI 按钮已移除（commit 47ba583）；账本证据：07-06 后再无 `anthropic/*` 生成行。**PC 定时生产已接**：scheduled-task `fashuo-weekly-report` 每周一北京 8 点自动跑本流程（生成上一周、显式传 `--week 上周一`）。一次性哨兵 `verify-app-weekly-cron-dead` 于 07-13 验证线上老 cron 确死；可选残留清理＝ECS crontab 里那条 curl（打了也只会命中 skip、零成本，需 SSH、云自理或另行授权）。
+- **待办（要动 APP + 部署）**：周报页加回"本周吸收/已解决"+"进度/距死线"节让展示更全——动 `src/` + 部署，需云点头才做。
