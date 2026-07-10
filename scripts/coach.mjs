@@ -126,7 +126,7 @@ async function ledger() {
   if (!(msg.data ?? []).length) line("（暂无历史）");
 
   line("\n──── 节奏参考（config/coach.json）────");
-  line("四轮：" + Object.entries(cfg.轮次表).filter(([, r]) => typeof r === "object" && r.窗口).map(([n, r]) => `${n}(${r.窗口})`).join(" / "));
+  line("轮次：" + Object.entries(cfg.轮次表).filter(([, r]) => typeof r === "object" && r.窗口).map(([n, r]) => `${n}(${r.窗口})`).join(" / "));
   line("双轨：" + Object.entries(cfg.双轨节奏).filter(([k, v]) => !k.startsWith("_") && typeof v === "string").map(([k, v]) => `${k} ${v}`).join("；"));
   line(`红线：周投入下限 ${cfg.红线?.周投入下限_小时}h·连续低投入 ${cfg.红线?.连续低投入周阈值_周} 周预警·9月底模拟分下限 ${cfg.红线?.["9月底模拟分下限"]}`);
 }
