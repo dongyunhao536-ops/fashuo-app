@@ -17,13 +17,13 @@ export function PageNav({
 }) {
   return (
     <header className="grid grid-cols-[1fr_auto_1fr] items-center px-4">
-      <Link href={backHref} className="inline-flex w-fit items-center gap-0.5 text-[15px] text-blue active:opacity-60">
+      <Link href={backHref} className="inline-flex w-fit items-center gap-0.5 text-[15px] text-accent-soft active:opacity-60">
         <svg viewBox="0 0 24 24" className="h-[18px] w-[18px]" fill="none" stroke="currentColor" strokeWidth={2.2}>
           <path d="M15 6l-6 6 6 6" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
         {backLabel}
       </Link>
-      <h1 className="text-center text-[18px] font-semibold tracking-tight">{title}</h1>
+      <h1 className="text-center font-serif text-[19px] font-bold tracking-tight">{title}</h1>
       <span className="justify-self-end text-[12.5px] text-label2">{meta}</span>
     </header>
   );

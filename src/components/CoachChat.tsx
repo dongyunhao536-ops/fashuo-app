@@ -66,12 +66,12 @@ const EXAMPLE_ICONS: Record<ExampleKind, React.ReactNode> = {
 };
 
 const TONE_TILE: Record<"blue" | "green" | "orange", string> = {
-  blue: "bg-blue/15 text-blue",
+  blue: "bg-accent/12 text-accent-soft",
   green: "bg-green/15 text-green",
   orange: "bg-orange/15 text-orange",
 };
 const TONE_TEXT: Record<"blue" | "green" | "orange", string> = {
-  blue: "text-blue-soft",
+  blue: "text-accent-soft",
   green: "text-green",
   orange: "text-orange",
 };
@@ -144,7 +144,7 @@ export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) 
         ) : (
           turns.map((t, i) => (
             <div key={i} className="flex flex-col gap-2.5">
-              <div className="btn-blue-grad max-w-[85%] self-end whitespace-pre-wrap rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+              <div className="max-w-[85%] self-end whitespace-pre-wrap rounded-[18px] rounded-br-[6px] bg-accent-ink px-4 py-3 text-[16px] leading-relaxed text-white">
                 {t.image && (
                   // eslint-disable-next-line @next/next/no-img-element -- base64 预览，无优化收益
                   <img
@@ -158,20 +158,20 @@ export function CoachChat({ suggestions }: { suggestions?: CoachSuggestion[] }) 
 
               {t.loading && (
                 <div className="flex items-center gap-2 self-start">
-                  <div className="glass-card flex items-center gap-2.5 rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
-                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                  <div className="card flex items-center gap-2.5 rounded-[18px] rounded-bl-[6px] px-4 py-3.5 text-[14px] text-label2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/25 border-t-accent-soft" />
                     教练思考中…<span className="text-label3">（约 30 秒–1 分钟）</span>
                   </div>
                   <StopButton onClick={stop} />
                 </div>
               )}
               {t.stopped && (
-                <div className="self-start rounded-[22px] rounded-bl-[7px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
+                <div className="self-start rounded-[18px] rounded-bl-[6px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
                   已停止思考
                 </div>
               )}
               {t.error && (
-                <div className="max-w-[92%] self-start rounded-[22px] rounded-bl-[7px] bg-red/15 px-4 py-3 text-[14px] text-red">
+                <div className="max-w-[92%] self-start rounded-[18px] rounded-bl-[6px] bg-red/15 px-4 py-3 text-[14px] text-red">
                   {t.error}
                 </div>
               )}
@@ -199,7 +199,7 @@ function StopButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       onClick={onClick}
-      className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card2 px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
+      className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
     >
       <span className="grid h-4 w-4 place-items-center rounded-full bg-red/15">
         <span className="h-1.5 w-1.5 rounded-[1px] bg-red" />
@@ -209,7 +209,7 @@ function StopButton({ onClick }: { onClick: () => void }) {
   );
 }
 
-/** 空态：渐变徽标 + 一句话定位 + 动态引导卡（按真实弱项/进度生成，类目标签 + 例句两层）。 */
+/** 空态：阴刻印章「教」+ 一句话定位 + 动态引导卡（按真实弱项/进度生成，类目标签 + 例句两层）。 */
 function CoachWelcome({
   onPick,
   items,
@@ -221,29 +221,25 @@ function CoachWelcome({
 }) {
   return (
     <div className="flex flex-col px-1 pt-5">
-      {/* hero 徽标：蓝渐变 + 焰光，立刻立住层级 */}
       <div className="flex flex-col items-center text-center">
-        <div className="grid h-16 w-16 place-items-center rounded-[20px] bg-gradient-to-br from-blue-soft to-blue text-white shadow-[0_10px_28px_rgba(10,132,255,0.45)]">
-          <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth={1.8}>
-            <rect x="3" y="4" width="18" height="16" rx="3" />
-            <path d="M8 4v4M16 4v4M3 11h18" strokeLinecap="round" />
-          </svg>
+        <div className="seal-line grid h-16 w-16 place-items-center rounded-[14px]">
+          <span className="font-serif text-[34px] font-bold leading-none">教</span>
         </div>
-        <h2 className="mt-4 text-[22px] font-bold tracking-tight text-label">你的私人法硕家教</h2>
+        <h2 className="mt-4 font-serif text-[22px] font-bold tracking-tight text-label">你的私人法硕家教</h2>
         <p className="mx-auto mt-2 max-w-[19rem] text-[14.5px] leading-relaxed text-label2">
           我记得住你，扣着真实进度和老毛病辅导。考理解，不逼你逐字背。
         </p>
       </div>
 
-      <div className="mb-2.5 mt-7 px-1 text-[13px] font-semibold text-label2">{heading}</div>
+      <div className="sec-title mb-2.5 mt-7 px-1 text-[13px] font-semibold text-label2">{heading}</div>
       <div className="flex flex-col gap-2.5">
         {items.map((e) => (
           <button
             key={e.text}
             onClick={() => onPick(e.text)}
-            className="glass-card flex items-center gap-3.5 rounded-[16px] border border-hairline px-4 py-3.5 text-left transition active:scale-[0.99]"
+            className="card pressable flex items-center gap-3.5 rounded-[14px] px-4 py-3.5 text-left transition active:scale-[0.99]"
           >
-            <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-[12px] ${TONE_TILE[e.tone]}`}>
+            <span className={`grid h-10 w-10 shrink-0 place-items-center rounded-[10px] ${TONE_TILE[e.tone]}`}>
               <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={1.9}>
                 {EXAMPLE_ICONS[e.kind]}
               </svg>
@@ -302,13 +298,13 @@ function CoachReply({ r }: { r: CoachResult }) {
       )}
 
       {/* 自然对话正文 */}
-      <div className="glass-card max-w-full rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5">
+      <div className="card max-w-full rounded-[18px] rounded-bl-[6px] px-4 py-3.5">
         <Markdown>{r.reply}</Markdown>
       </div>
 
       {/* 后台沉淀回执：合并成一张卡，分色点列出 */}
       {hasReceipt && (
-        <div className="flex flex-col gap-2.5 rounded-[16px] bg-card2/70 px-4 py-3.5">
+        <div className="flex flex-col gap-2.5 rounded-[14px] bg-card2/70 px-4 py-3.5">
           <div className="flex items-center gap-1.5 text-[12px] font-semibold text-label2">
             <svg viewBox="0 0 24 24" className="h-4 w-4 text-green" fill="none" stroke="currentColor" strokeWidth={2.2}>
               <path d="M5 12l4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
@@ -338,7 +334,7 @@ function CoachReply({ r }: { r: CoachResult }) {
             </ReceiptLine>
           )}
           {r.memorized?.length > 0 && (
-            <ReceiptLine tone="label3">🧠 已记住：{r.memorized.join("；")}</ReceiptLine>
+            <ReceiptLine tone="label3">已记住：{r.memorized.join("；")}</ReceiptLine>
           )}
         </div>
       )}

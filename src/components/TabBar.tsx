@@ -2,7 +2,7 @@ import Link from "next/link";
 
 /**
  * 底栏（今日/答疑/教练，首页第一位）。
- * SF 单线风 SVG 图标，激活态 systemBlue。RSC 组件，无客户端 JS。
+ * 单线 SVG 图标，激活态朱砂。RSC 组件，无客户端 JS。
  */
 
 export interface TabBarProps {
@@ -36,7 +36,7 @@ const ICONS: Record<TabBarProps["active"], React.ReactNode> = {
 
 export function TabBar({ active }: TabBarProps) {
   return (
-    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-hairline bg-card/90 backdrop-blur-xl">
+    <nav className="fixed bottom-0 left-0 right-0 z-50 border-t border-hairline bg-bg/90 backdrop-blur-xl">
       <div className="mx-auto flex max-w-md md:max-w-3xl items-stretch justify-around pb-[env(safe-area-inset-bottom)]">
         {TABS.map((t) => {
           const on = t.key === active;
@@ -45,7 +45,7 @@ export function TabBar({ active }: TabBarProps) {
               key={t.key}
               href={t.href}
               className={`flex flex-1 flex-col items-center gap-1 pb-1.5 pt-2 text-[10px] tracking-wide transition-colors duration-150 active:opacity-60 ${
-                on ? "text-blue" : "text-label2"
+                on ? "text-accent-soft" : "text-label2"
               }`}
             >
               <svg

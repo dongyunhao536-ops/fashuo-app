@@ -72,7 +72,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-20 pt-4">
       <header>
         <div className="px-1">
-          <h1 className="text-[32px] font-bold leading-none tracking-tight">教练</h1>
+          <h1 className="font-serif text-[30px] font-bold leading-none tracking-tight">教练</h1>
           <p className="mt-2.5 text-[14px] text-label2">
             {view === "coach"
               ? "私人法硕家教 · 记得住你的进度与老毛病"
@@ -80,8 +80,8 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
           </p>
         </div>
 
-        {/* 分段：教练对话 / 错题本 —— 选中态浮起带阴影 */}
-        <div className="mt-3.5 flex rounded-[11px] bg-fill2 p-[3px]">
+        {/* 分段：教练对话 / 错题本 —— 选中态浮起 */}
+        <div className="mt-3.5 flex rounded-[10px] bg-fill2 p-[3px]">
           {(
             [
               ["coach", "教练"],
@@ -91,9 +91,9 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
             <Link
               key={v}
               href={v === "coach" ? "/coach" : "/coach?view=weak"}
-              className={`flex-1 rounded-[9px] py-2 text-center text-[14px] font-semibold transition ${
+              className={`flex-1 rounded-[8px] py-2 text-center text-[14px] font-semibold transition ${
                 view === v
-                  ? "bg-card2 text-label shadow-[0_1px_3px_rgba(0,0,0,0.4)] ring-1 ring-white/10"
+                  ? "bg-card2 text-label ring-1 ring-hairline"
                   : "text-label2 active:text-label"
               }`}
             >
@@ -116,7 +116,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
                   key={s}
                   href={s === "全部" ? "/coach?view=weak" : `/coach?view=weak&subject=${encodeURIComponent(s)}`}
                   className={`rounded-full px-3 py-1 text-[12px] font-medium transition ${
-                    active ? "btn-blue-grad text-white" : "bg-card text-label2"
+                    active ? "btn-accent text-white" : "border border-hairline bg-card text-label2"
                   }`}
                 >
                   {s}
@@ -137,7 +137,7 @@ export default async function CoachPage({ searchParams }: { searchParams: Search
               }
             />
           ) : (
-            <div className="glass-card divide-y divide-hairline rounded-[16px]">
+            <div className="card divide-y divide-hairline overflow-hidden rounded-[14px]">
               {shownErrors.map((it, i) => (
                 <div key={i} className="px-4 py-3.5">
                   <div className="text-[15px] leading-snug">{it.knowledge}</div>

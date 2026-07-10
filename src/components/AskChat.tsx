@@ -195,8 +195,8 @@ export function AskChat() {
               onClick={() => setSubject(s)}
               className={`shrink-0 rounded-full px-4 py-2 text-[14px] font-medium transition active:scale-95 ${
                 on
-                  ? "btn-blue-grad text-white shadow-[0_2px_10px_rgba(10,132,255,0.4)]"
-                  : "border border-hairline bg-card2 text-label2"
+                  ? "btn-accent text-white"
+                  : "border border-hairline bg-card text-label2"
               }`}
             >
               {s || "不限"}
@@ -217,7 +217,7 @@ export function AskChat() {
         {turns.map((t, i) => (
           <div key={i} className="flex flex-col gap-2.5">
             {/* 用户问题（可带题目照片；恢复的历史轮图已剥离只留标记） */}
-            <div className="btn-blue-grad max-w-[85%] self-end rounded-[22px] rounded-br-[7px] px-4 py-3 text-[16px] leading-relaxed text-white shadow-[0_2px_10px_rgba(10,132,255,0.3)]">
+            <div className="max-w-[85%] self-end rounded-[18px] rounded-br-[6px] bg-accent-ink px-4 py-3 text-[16px] leading-relaxed text-white">
               {t.image && (
                 // eslint-disable-next-line @next/next/no-img-element -- base64 预览，无优化收益
                 <img
@@ -228,7 +228,7 @@ export function AskChat() {
               )}
               {!t.image && t.hadImage && (
                 <span className="mr-1.5 rounded-[6px] bg-white/20 px-1.5 py-0.5 text-[11px] font-medium">
-                  📷 图片题
+                  图片题
                 </span>
               )}
               {t.subject && (
@@ -242,13 +242,13 @@ export function AskChat() {
             {/* AI 答案 / loading / 停止 / 错误 */}
             {t.loading && (
               <div className="flex items-center gap-2 self-start">
-                <div className="glass-card flex items-center gap-2.5 rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-3.5 text-[14px] text-label2">
-                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                <div className="card flex items-center gap-2.5 rounded-[18px] rounded-bl-[6px] px-4 py-3.5 text-[14px] text-label2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/25 border-t-accent-soft" />
                   六步预检 + grep 教材中…<span className="text-label3">（限速，案例题约 1-3 分钟）</span>
                 </div>
                 <button
                   onClick={stop}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card2 px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
+                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-hairline bg-card px-3 py-2 text-[13px] font-medium text-label2 transition active:scale-95"
                 >
                   <span className="grid h-4 w-4 place-items-center rounded-full bg-red/15">
                     <span className="h-1.5 w-1.5 rounded-[1px] bg-red" />
@@ -258,7 +258,7 @@ export function AskChat() {
               </div>
             )}
             {t.stopped && (
-              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[22px] rounded-bl-[7px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
+              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[18px] rounded-bl-[6px] bg-fill2 px-4 py-2.5 text-[13.5px] text-label3">
                 <span className="min-w-0 flex-1">已停止思考</span>
                 <button
                   onClick={() => retry(i)}
@@ -270,7 +270,7 @@ export function AskChat() {
               </div>
             )}
             {t.error && (
-              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[22px] rounded-bl-[7px] bg-red/15 px-4 py-3 text-[14px] text-red">
+              <div className="flex max-w-[92%] items-center gap-2 self-start rounded-[18px] rounded-bl-[6px] bg-red/15 px-4 py-3 text-[14px] text-red">
                 <span className="min-w-0 flex-1">{t.error}</span>
                 <button
                   onClick={() => retry(i)}
@@ -301,7 +301,7 @@ export function AskChat() {
   );
 }
 
-/** 空态：渐变徽标 + 作答流程竖向步骤条（带连线）。把"怎么答的"讲清楚，建立信任。 */
+/** 空态：阴刻印章「问」+ 作答流程竖向步骤条（带连线）。把"怎么答的"讲清楚，建立信任。 */
 function AskWelcome() {
   const steps = [
     { t: "六步预检", d: "锁定考点、识别陷阱" },
@@ -312,27 +312,25 @@ function AskWelcome() {
   return (
     <div className="flex flex-col px-1 pt-5">
       <div className="flex flex-col items-center text-center">
-        <div className="grid h-16 w-16 place-items-center rounded-[20px] bg-gradient-to-br from-[#4ad968] to-green text-white shadow-[0_10px_28px_rgba(48,209,88,0.4)]">
-          <svg viewBox="0 0 24 24" className="h-8 w-8" fill="none" stroke="currentColor" strokeWidth={1.8}>
-            <path d="M21 11c0 4.5-4 8-9 8a9 9 0 01-3-.5L4 20l1-4a8 8 0 01-2-5c0-4.5 4-8 9-8s9 3.5 9 8z" strokeLinejoin="round" />
-          </svg>
+        <div className="seal-line grid h-16 w-16 place-items-center rounded-[14px]">
+          <span className="font-serif text-[34px] font-bold leading-none">问</span>
         </div>
-        <h2 className="mt-4 text-[22px] font-bold tracking-tight text-label">证据链作答</h2>
+        <h2 className="mt-4 font-serif text-[22px] font-bold tracking-tight text-label">证据链作答</h2>
         <p className="mx-auto mt-2 max-w-[19rem] text-[14.5px] leading-relaxed text-label2">
           问一道题或一个概念，每个结论都能追溯到原文出处。
         </p>
       </div>
 
       {/* 作答流程：竖向步骤条 + 连线 */}
-      <div className="glass-card mt-7 rounded-[18px] border border-hairline p-4">
-        <div className="mb-3.5 text-[13px] font-semibold text-label2">作答流程</div>
+      <div className="card mt-7 rounded-[14px] p-4">
+        <div className="sec-title mb-3.5 text-[13px] font-semibold text-label2">作答流程</div>
         <ol className="flex flex-col">
           {steps.map((s, i) => (
             <li key={s.t} className="relative flex gap-3.5 pb-4 last:pb-0">
               {i < steps.length - 1 && (
                 <span className="absolute bottom-1 left-[15px] top-9 w-px bg-hairline" />
               )}
-              <span className="z-10 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-green/15 text-[14px] font-bold text-green">
+              <span className="z-10 grid h-8 w-8 shrink-0 place-items-center rounded-full bg-accent/12 font-serif text-[15px] font-bold text-accent-soft">
                 {i + 1}
               </span>
               <div className="flex-1 pt-0.5">
@@ -365,7 +363,7 @@ function AnswerBubble({ result }: { result: AskResult }) {
           : "text-red";
 
   return (
-    <div className="glass-card w-full self-start rounded-[22px] rounded-bl-[7px] border border-hairline px-4 py-4">
+    <div className="card w-full self-start rounded-[18px] rounded-bl-[6px] px-4 py-4">
       {/* 答案正文：预检清单/证据卡渲染成结构化卡片，其余散文走 markdown */}
       <AskAnswer answer={result.answer} />
 
@@ -389,7 +387,7 @@ function AnswerBubble({ result }: { result: AskResult }) {
 
       {/* 指令记录回执（仅你说"记进错题本/记录进心得"时出现） */}
       {cand > 0 && (
-        <div className="mt-2.5 rounded-[10px] bg-blue/15 px-3 py-2.5 text-[13px] leading-relaxed text-blue-soft">
+        <div className="mt-2.5 rounded-[10px] bg-accent/10 px-3 py-2.5 text-[13px] leading-relaxed text-accent-soft">
           按你的指令记录 {cand} 条（
           {[
             result.meta?.error_notes?.length

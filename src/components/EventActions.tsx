@@ -54,7 +54,7 @@ export function EventActions({ id }: { id: number }) {
       <button
         onClick={() => act("dismiss")}
         disabled={state === "busy"}
-        className="px-2 py-1.5 text-[13px] text-blue transition active:scale-95 disabled:opacity-50"
+        className="px-2 py-1.5 text-[13px] text-label3 transition active:scale-95 disabled:opacity-50"
       >
         忽略
       </button>

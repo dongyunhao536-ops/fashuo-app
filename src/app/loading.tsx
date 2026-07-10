@@ -8,8 +8,8 @@ export default function RootLoading() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-28 pt-4">
       <div className="h-10 w-28 animate-pulse rounded-[10px] bg-card" />
-      <div className="mt-2 h-28 animate-pulse rounded-[18px] bg-card" />
-      <div className="mt-3 rounded-[12px] bg-card">
+      <div className="mt-2 h-28 animate-pulse rounded-[14px] bg-card" />
+      <div className="mt-3 rounded-[14px] bg-card">
         {[0, 1, 2].map((i) => (
           <div
             key={i}
@@ -22,7 +22,7 @@ export default function RootLoading() {
           </div>
         ))}
       </div>
-      <div className="mt-3 rounded-[12px] bg-card">
+      <div className="mt-3 rounded-[14px] bg-card">
         {[0, 1, 2, 3].map((i) => (
           <div
             key={i}
@@ -33,7 +33,7 @@ export default function RootLoading() {
         ))}
       </div>
       {/* tabbar 占位条（避免底部空白） */}
-      <div className="fixed bottom-0 left-0 right-0 h-[68px] border-t border-hairline bg-card/90 backdrop-blur-xl" />
+      <div className="fixed bottom-0 left-0 right-0 h-[68px] border-t border-hairline bg-bg/90 backdrop-blur-xl" />
     </main>
   );
 }

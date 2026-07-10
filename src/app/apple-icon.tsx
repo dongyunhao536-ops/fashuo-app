@@ -10,19 +10,30 @@ export default function AppleIcon() {
     (
       <div
         style={{
-          background: "linear-gradient(135deg, #0f172a 0%, #1e3a8a 100%)",
+          background: "linear-gradient(160deg, #c9574a 0%, #a8453a 100%)",
           width: "100%",
           height: "100%",
           display: "flex",
-          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           color: "#fff",
           fontFamily: "system-ui",
         }}
       >
-        <div style={{ fontSize: 96, fontWeight: 700, lineHeight: 1 }}>法</div>
-        <div style={{ fontSize: 22, marginTop: 6, opacity: 0.85 }}>备考</div>
+        {/* 印章双框：内圈细白框 + 单字，iOS 自动切圆角 */}
+        <div
+          style={{
+            width: 140,
+            height: 140,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            border: "3px solid rgba(255,255,255,0.4)",
+            borderRadius: 18,
+          }}
+        >
+          <div style={{ fontSize: 88, fontWeight: 700, lineHeight: 1 }}>法</div>
+        </div>
       </div>
     ),
     { ...size },

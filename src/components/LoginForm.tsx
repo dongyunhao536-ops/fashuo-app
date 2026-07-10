@@ -54,12 +54,12 @@ export function LoginForm() {
           if (state === "error") setState("idle");
         }}
         placeholder="口令"
-        className="rounded-[12px] bg-card px-4 py-3.5 text-[17px] text-label outline-none placeholder:text-label3 focus:ring-1 focus:ring-blue"
+        className="rounded-[12px] border border-hairline bg-card px-4 py-3.5 text-[17px] text-label outline-none placeholder:text-label3 focus:border-accent/60"
       />
       <button
         type="submit"
         disabled={state === "busy" || !password}
-        className="btn-blue-grad rounded-[14px] px-4 py-3.5 text-[17px] font-semibold text-white transition active:scale-[0.98] disabled:opacity-40"
+        className="btn-accent rounded-[12px] px-4 py-3.5 text-[17px] font-semibold text-white transition active:scale-[0.98] disabled:opacity-40"
       >
         {state === "busy" ? "登录中…" : "进入"}
       </button>

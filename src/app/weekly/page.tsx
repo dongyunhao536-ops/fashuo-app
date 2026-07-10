@@ -45,7 +45,7 @@ export default async function WeeklyPage() {
       <p className="px-6 pb-1 pt-4 text-[12px] text-label3">↓ 本周真实数据（复盘依据）</p>
 
       {/* 一屏数据条 */}
-      <section className="glass-card mx-4 rounded-[16px] p-4">
+      <section className="card mx-4 rounded-[14px] p-4">
         <div className="flex justify-around text-center">
           <Stat n={r.activity.asks} label="答疑" />
           <Stat n={r.activity.coachLogs} label="教练打卡" />
@@ -121,8 +121,8 @@ export default async function WeeklyPage() {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <>
-      <h2 className="mt-5 px-8 pb-2 text-[13px] text-label2">{title}</h2>
-      <section className="glass-card mx-4 rounded-[16px] p-4">{children}</section>
+      <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">{title}</h2>
+      <section className="card mx-4 rounded-[14px] p-4">{children}</section>
     </>
   );
 }
@@ -130,7 +130,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 function Stat({ n, label }: { n: number | string; label: string }) {
   return (
     <div>
-      <div className="text-[22px] font-bold leading-none tabular-nums">{n}</div>
+      <div className="font-serif text-[23px] font-bold leading-none tabular-nums">{n}</div>
       <div className="mt-1 text-[11px] text-label2">{label}</div>
     </div>
   );

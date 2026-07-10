@@ -1,36 +1,46 @@
 @import "tailwindcss";
 
 /* ===================================================================
-   极简暗色 / Apple HIG（真相源：D:\fashuo\系统设计\效果图\极简暗色版.html
-   + 极简暗色版-审查优化.md，2026-06-10 定稿）
+   墨卷 · Ink & Paper（2026-07-09 全站重设计，替换原「极简暗色/Apple HIG」）
+   气质定位：书房里的印本 / 红笔批注，不是操作系统、也不是"AI 产品"。
    纪律：
-     - 恒暗单套（无 light 模式）：bg 纯黑 / 卡 #1c1c1e / 二级 #2c2c2e
-     - 文字三档灰阶，层级靠字号+字重不靠彩色
-     - systemBlue #0a84ff 全站唯一强调色（激活态/主按钮/链接）
-     - 状态色（绿/橙/红）大面积仅用于强状态反馈；信息徽章允许 15% tint
-     - 全站恒暗无白底区（原背诵模块的 Anki 纸卡白底例外已随模块删除）
+     - 暖墨底三层（bg/card/card2），文字宣纸白三档；恒暗单套不变
+     - 朱砂 #cd5445 全站唯一强调色（印章、红笔的红）：主按钮/激活态/链接
+       状态色只做状态：苔青=成功、琥珀=提醒、赤=失败；大面积禁用
+     - 标题与大数字用衬线（宋体族），正文仍无衬线——书卷感的主要来源
+     - 卡片=平面底色 + 1px 细边（.card），无玻璃渐变、无辉光阴影、无渐变按钮
+     - 章节小标题带朱砂题头竖条（.sec-title），像书的节标
    =================================================================== */
 
 @theme {
-  --color-bg: #000000;
-  --color-card: #1c1c1e;
-  --color-card2: #2c2c2e;
-  --color-fill: rgba(120, 120, 128, 0.24);
-  --color-fill2: rgba(120, 120, 128, 0.16);
-  --color-label: #f5f5f7;
-  /* 2026-06-24 提对比：二/三档灰阶在纯黑 OLED 上原值偏暗（0.6/0.3），上调到 0.74/0.52；
-     卡边 hairline 0.08→0.12 让卡片轮廓在暗底浮出，缓解"层级太平"。 */
-  --color-label2: rgba(235, 235, 245, 0.74);
-  --color-label3: rgba(235, 235, 245, 0.52);
-  --color-hairline: rgba(255, 255, 255, 0.12);
-  --color-blue: #0a84ff;
-  --color-blue-soft: #5ab2ff;
-  --color-green: #30d158;
-  --color-orange: #ff9f0a;
-  --color-red: #ff453a;
+  /* 暖墨底：比纯黑暖两度，像磨开的墨，不像息屏的手机 */
+  --color-bg: #16140f;
+  --color-card: #201d16;
+  --color-card2: #2b271d;
+  --color-fill: rgba(203, 188, 152, 0.16);
+  --color-fill2: rgba(203, 188, 152, 0.1);
+  /* 宣纸白三档 */
+  --color-label: #ece7da;
+  --color-label2: rgba(236, 231, 218, 0.72);
+  --color-label3: rgba(236, 231, 218, 0.5);
+  --color-hairline: rgba(236, 231, 218, 0.14);
+  /* 朱砂（强调）/ 印泥（深朱，用户气泡等大面积用这档更沉） */
+  --color-accent: #cd5445;
+  --color-accent-soft: #ec8b7a;
+  --color-accent-ink: #9d4438;
+  /* 烫金：只给「荣誉/报告」性质的点缀（周报章、雷达覆盖线） */
+  --color-gold: #c8a76d;
+  /* 状态色（压饱和的苔青/琥珀/赤，融进暖墨底） */
+  --color-green: #8fae70;
+  --color-orange: #d9a441;
+  --color-red: #e0574a;
   --font-sans:
     -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB",
     "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  /* 衬线族：iPhone=Songti SC（漂亮），Windows 退 SimSun。只用于标题/大数字。 */
+  --font-serif:
+    "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", SimSun,
+    serif;
 }
 
 body {
@@ -40,18 +50,17 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  /* 移动端点击时系统默认那层灰色方块高亮框（丑、不跟圆角）——清零，改由 .pressable 给圆角化的原生反馈。 */
+  /* 移动端点击的系统灰色高亮框（丑、不跟圆角）——清零，按压反馈由 .pressable 给。 */
   -webkit-tap-highlight-color: transparent;
-  /* 竖向橡皮筋回弹不再露出容器边缘，整页更像原生 app */
+  /* 竖向橡皮筋回弹不露容器边缘，整页更像原生 app */
   overscroll-behavior-y: none;
-  /* 全局比例调小（云 2026-06-30 觉得偏大）：zoom 在 iOS Safari / Chrome 都生效，按比例缩放整页。
-     觉得还大就调更小（0.85）、还想大就调回 1。 */
+  /* 全局比例（云 2026-06-30 定的 0.9，重设计沿用——这是尺寸偏好不是风格） */
   zoom: 0.9;
 }
 
-/* 文本选中：systemBlue 15% tint，不用浏览器默认那抹刺眼的亮蓝。 */
+/* 文本选中：朱砂淡印 */
 ::selection {
-  background: rgba(10, 132, 255, 0.28);
+  background: rgba(205, 84, 69, 0.32);
   color: #fff;
 }
 
@@ -60,83 +69,83 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
-/* 玻璃卡：在 bg-card 之上加一道顶部 1px 内高光 + 微妙向下渐变，
-   暗色 UI 下卡片不再"扁平"，有 iOS 控件中心那种材质边缘感。
-   用法：把 className 里的 `bg-card` 换成 `glass-card`（不要叠加，会重复底色）。 */
-.glass-card {
-  background: linear-gradient(180deg, #202022 0%, #1c1c1e 100%);
-  /* 顶部 1px 内高光 + 底部收边，再叠一层很浅的环境阴影，让卡在纯黑 OLED 上不贴地、有轻微悬浮感。
-     阴影刻意压得很轻（半径小、透明度低），只补层级不做"发光"，守住不花哨。 */
-  box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.09),
-    0 0.5px 0 rgba(0, 0, 0, 0.4),
-    0 6px 16px -8px rgba(0, 0, 0, 0.5);
+/* 组件类入 components 层：让 border-gold/30、disabled:bg-fill 这类工具类能按需覆盖。 */
+@layer components {
+  /* 卡片：平面暖墨底 + 1px 细边 + 极轻落影（只为从底色上分层，不做玻璃感）。
+     用法：直接 `card rounded-[14px]`，不要再叠 bg-card / border。 */
+  .card {
+    background-color: var(--color-card);
+    border: 1px solid var(--color-hairline);
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+  }
+
+  /* 列表行 / 可点条目的按压反馈：按下微微提亮，松手回落。
+     所在圆角卡需配 overflow-hidden，把首/末行高光裁进圆角。 */
+  .pressable {
+    transition:
+      background-color 0.16s ease,
+      transform 0.16s ease;
+    -webkit-touch-callout: none;
+  }
+  .pressable:active {
+    background-color: rgba(236, 231, 218, 0.05);
+  }
+
+  /* 主按钮：朱砂平涂，无渐变无辉光；按下沉一档。禁用态由使用处覆盖底色。 */
+  .btn-accent {
+    background-color: var(--color-accent);
+  }
+  .btn-accent:active:not(:disabled) {
+    background-color: var(--color-accent-ink);
+  }
+
+  /* 章节小标题：左侧一道朱砂题头竖条，像书的节标。
+     用法：<h2 class="sec-title text-[13px] ...">今日动态</h2> */
+  .sec-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .sec-title::before {
+    content: "";
+    width: 3px;
+    height: 13px;
+    border-radius: 1.5px;
+    background: var(--color-accent);
+  }
+
+  /* 印章徽标：朱砂底 + 内圈细白框（双框阳刻），配衬线单字。
+     登录页 / 空态 hero 用。内层框由使用处的子元素画（border-white/35）。 */
+  .seal {
+    background: linear-gradient(160deg, #d15b4b 0%, #b8493c 100%);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+  }
+
+  /* 阴刻小印：透明底 + 朱砂细框 + 朱砂字——对话空态徽标用。 */
+  .seal-line {
+    border: 1.5px solid rgba(205, 84, 69, 0.55);
+    color: var(--color-accent-soft);
+    background: rgba(205, 84, 69, 0.08);
+  }
 }
 
-/* 列表行 / 可点条目的原生按压反馈：一层圆角化的半透明白高光 + 快速缓动。
-   放在 glass-card 内的透明行上，按下即微微提亮，松手回落——取代被清零的系统灰框。
-   注意：所在的圆角卡需配 overflow-hidden，才能把首/末行的高光裁进圆角。 */
-.pressable {
-  transition:
-    background-color 0.16s ease,
-    transform 0.16s ease;
-  -webkit-touch-callout: none;
-}
-.pressable:active {
-  background-color: rgba(255, 255, 255, 0.055);
-}
-
-/* 图标块材质：iOS「设置」里那种彩色圆角图标块的受光感——顶部一道 1px 内高光 +
-   一圈极细的内描边，让 15% tint 的纯色块从"贴纸"变"有厚度的控件"。
-   叠在既有 bg-<color>/15 之上，不改底色；配合单线图标即可。 */
-.tile-material {
-  box-shadow:
-    inset 0 0.5px 0 rgba(255, 255, 255, 0.22),
-    inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
-}
-
-/* 主蓝按钮的立体渐变：systemBlue 顶部提亮一档 → 标准蓝，替代纯色平涂，
-   按钮像被顶光打到、有弧面感。禁用态记得叠 bg-none 清掉这层渐变。 */
-.btn-blue-grad {
-  background-image: linear-gradient(180deg, #2b95ff 0%, #0a84ff 100%);
-}
-
-/* 桌面端细滚动条（移动端原生隐藏，不受影响）：半透明、圆头、轨道透明，
-   不抢内容。指针精细设备才启用。 */
+/* 桌面端细滚动条（移动端原生隐藏）：半透明、圆头、轨道透明。 */
 @media (pointer: fine) {
   ::-webkit-scrollbar {
     width: 8px;
     height: 8px;
   }
   ::-webkit-scrollbar-thumb {
-    background: rgba(120, 120, 128, 0.32);
+    background: rgba(203, 188, 152, 0.28);
     border-radius: 4px;
     border: 2px solid transparent;
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: rgba(120, 120, 128, 0.5);
+    background: rgba(203, 188, 152, 0.45);
     background-clip: padding-box;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
   }
 }
-
-/* 渐变文字（用于大数字 / hero 标题）。家族色保持中性灰阶，不引入彩色。 */
-.text-shine {
-  background: linear-gradient(180deg, #ffffff 0%, #d4d4d6 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  color: transparent;
-}
-
-/* 高频徽章 · 红→橙 渐变 + 焰光阴影。仅"高频"用，凸显日常最该背的考点。 */
-.freq-hot {
-  background: linear-gradient(135deg, #ff453a 0%, #ff9f0a 100%);
-  color: #fff;
-  box-shadow:
-    0 0 0 0.5px rgba(255, 255, 255, 0.15) inset,
-    0 2px 8px rgba(255, 69, 58, 0.35);
-}
-

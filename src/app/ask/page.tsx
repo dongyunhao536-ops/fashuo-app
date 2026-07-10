@@ -12,7 +12,7 @@ export default function AskPage() {
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-3 px-4 pb-20 pt-4">
       <header className="px-1">
-        <h1 className="text-[32px] font-bold leading-none tracking-tight">答疑</h1>
+        <h1 className="font-serif text-[30px] font-bold leading-none tracking-tight">答疑</h1>
         <p className="mt-2.5 text-[14px] text-label2">证据链作答 · 结论可溯源到教材 / 真题 / 心得</p>
       </header>
 

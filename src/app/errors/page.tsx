@@ -46,7 +46,7 @@ export default async function ErrorsPage() {
           </div>
         )
       ) : (
-        <div className="glass-card mx-4 mt-3 divide-y divide-hairline rounded-[16px]">
+        <div className="card mx-4 mt-3 divide-y divide-hairline overflow-hidden rounded-[14px]">
           {items.map((it, i) => (
             <div key={i} className="px-4 py-3.5">
               <div className="text-[15px] leading-snug">{it.knowledge}</div>

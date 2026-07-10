@@ -2,9 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 /**
- * 根布局（极简暗色 / Apple HIG，2026-06-10 改版）。
- * 字体走 -apple-system 系统栈（iPhone = SF Pro/苹方），不再加载 Geist（仅拉丁字形，中文场景无意义）。
- * 恒暗单套：主题色纯黑，PWA 状态栏沉浸。
+ * 根布局（墨卷 · Ink & Paper，2026-07-09 重设计）。
+ * 正文走 -apple-system 系统栈（iPhone = SF Pro/苹方）；标题/大数字用系统衬线（Songti SC），零字体加载。
+ * 恒暗单套：主题色暖墨 #16140f，PWA 状态栏沉浸。
  */
 
 export const metadata: Metadata = {
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#000000",
+  themeColor: "#16140f",
   width: "device-width",
   initialScale: 1,
   // PWA 独立模式下避免误触缩放

@@ -29,8 +29,8 @@ function valueTone(value: string): string {
 
 function PreflightCard({ items, ruling }: { items: PreflightItem[]; ruling: string }) {
   return (
-    <div className="rounded-[14px] border border-hairline bg-card2/60 p-4">
-      <div className="mb-3 flex items-center gap-1.5 text-[12.5px] font-bold text-blue-soft">
+    <div className="rounded-[12px] border border-hairline bg-card2/60 p-4">
+      <div className="mb-3 flex items-center gap-1.5 text-[12.5px] font-bold text-accent-soft">
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
           <rect x="3" y="3" width="18" height="18" rx="3" />
           <path d="M8 12l3 3 5-6" strokeLinecap="round" strokeLinejoin="round" />
@@ -40,7 +40,7 @@ function PreflightCard({ items, ruling }: { items: PreflightItem[]; ruling: stri
       <ul className="flex flex-col gap-2.5">
         {items.map((it, i) => (
           <li key={i} className="flex gap-3 text-[14px] leading-relaxed">
-            <span className="mt-[2px] grid h-5 w-5 shrink-0 place-items-center rounded-[7px] bg-blue/15 font-mono text-[11px] font-bold text-blue-soft">
+            <span className="mt-[2px] grid h-5 w-5 shrink-0 place-items-center rounded-[7px] bg-accent/12 font-serif text-[12px] font-bold text-accent-soft">
               {it.n || i + 1}
             </span>
             <span className="min-w-0 flex-1">
@@ -51,7 +51,7 @@ function PreflightCard({ items, ruling }: { items: PreflightItem[]; ruling: stri
         ))}
       </ul>
       {ruling && (
-        <div className="mt-3 flex items-start gap-2 rounded-[10px] bg-blue/12 px-3 py-2.5 text-[13.5px] leading-relaxed text-blue-soft">
+        <div className="mt-3 flex items-start gap-2 rounded-[10px] bg-accent/10 px-3 py-2.5 text-[13.5px] leading-relaxed text-accent-soft">
           <svg viewBox="0 0 24 24" className="mt-[2px] h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth={2}>
             <path d="M12 3v18M5 7h14M7 7l-3 6a3 3 0 006 0L7 7zm10 0l-3 6a3 3 0 006 0l-3-6z" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
@@ -66,7 +66,7 @@ function PreflightCard({ items, ruling }: { items: PreflightItem[]; ruling: stri
 
 /** 证据卡字段标签 → 色调 */
 const EV_TONE: Record<string, string> = {
-  教材: "bg-blue/15 text-blue-soft",
+  教材: "bg-accent/12 text-accent-soft",
   真题: "bg-orange/15 text-orange",
   心得: "bg-green/15 text-green",
   法硕立场: "bg-fill text-label2",
@@ -79,8 +79,8 @@ const EV_TONE: Record<string, string> = {
 
 function EvidenceCard({ fields }: { fields: EvidenceField[] }) {
   return (
-    <div className="rounded-[14px] border border-hairline bg-card2/60 p-4">
-      <div className="mb-3 flex items-center gap-1.5 text-[12.5px] font-bold text-blue-soft">
+    <div className="rounded-[12px] border border-hairline bg-card2/60 p-4">
+      <div className="mb-3 flex items-center gap-1.5 text-[12.5px] font-bold text-accent-soft">
         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
           <path d="M9 3h6l4 4v12a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1z" strokeLinejoin="round" />
           <path d="M9 12h6M9 16h6M9 8h2" strokeLinecap="round" />

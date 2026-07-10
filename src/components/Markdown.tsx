@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 
 /**
  * 统一暗色 markdown 渲染（答疑答案 / 辨析档案 / 教练四段都用它）。
- * 用项目 design token（label/label2/label3/blue/hairline/...），不引 prose 插件。
+ * 用项目 design token（label/label2/label3/accent/hairline/...），不引 prose 插件。
  * 保留换行（GFM `remark-breaks` 行为内嵌——单换行也成段，匹配 Opus 输出习惯）。
  */
 export function Markdown({ children }: { children: string }) {
@@ -42,7 +42,7 @@ export function Markdown({ children }: { children: string }) {
           ),
           em: ({ children }) => <em className="italic text-label2">{children}</em>,
           a: ({ href, children }) => (
-            <a href={href} className="text-blue underline-offset-2 hover:underline">
+            <a href={href} className="text-accent-soft underline-offset-2 hover:underline">
               {children}
             </a>
           ),
@@ -58,7 +58,7 @@ export function Markdown({ children }: { children: string }) {
           ),
           li: ({ children }) => <li className="pl-1 leading-[1.7]">{children}</li>,
           blockquote: ({ children }) => (
-            <blockquote className="my-2.5 rounded-r-[8px] border-l-[3px] border-blue/60 bg-card2/70 px-3.5 py-2 text-label2 [&>p]:my-0.5">
+            <blockquote className="my-2.5 rounded-r-[8px] border-l-[3px] border-accent/60 bg-card2/70 px-3.5 py-2 text-label2 [&>p]:my-0.5">
               {children}
             </blockquote>
           ),

@@ -94,7 +94,7 @@ export function ChatComposer({
         </div>
       )}
 
-      <div className={`flex items-end gap-2 rounded-[26px] border border-hairline bg-card/85 p-1.5 ${onImageChange ? "" : "pl-[18px]"} shadow-[0_10px_30px_rgba(0,0,0,0.6)] backdrop-blur-xl`}>
+      <div className={`flex items-end gap-2 rounded-[24px] border border-hairline bg-card/90 p-1.5 ${onImageChange ? "" : "pl-[18px]"} shadow-[0_8px_24px_rgba(0,0,0,0.45)] backdrop-blur-xl`}>
         {onImageChange && (
           <>
             <input
@@ -111,7 +111,7 @@ export function ChatComposer({
               className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-label2 transition active:scale-90 disabled:text-label3"
             >
               {compressing ? (
-                <span className="h-4 w-4 animate-spin rounded-full border-2 border-blue/25 border-t-blue" />
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-accent/25 border-t-accent-soft" />
               ) : (
                 <svg viewBox="0 0 24 24" className="h-[22px] w-[22px]" fill="none" stroke="currentColor" strokeWidth={1.8}>
                   <path d="M4 8.5A2.5 2.5 0 016.5 6h1l1.2-1.8A1.5 1.5 0 019.9 3.5h4.2a1.5 1.5 0 011.2.7L16.5 6h1A2.5 2.5 0 0120 8.5v8A2.5 2.5 0 0117.5 19h-11A2.5 2.5 0 014 16.5v-8z" strokeLinejoin="round" />
@@ -143,7 +143,7 @@ export function ChatComposer({
           onClick={onSend}
           disabled={!canSend}
           aria-label="发送"
-          className="btn-blue-grad grid h-10 w-10 shrink-0 place-items-center rounded-full text-white shadow-[0_2px_10px_rgba(10,132,255,0.5)] transition active:scale-90 disabled:bg-fill disabled:bg-none disabled:text-label3 disabled:shadow-none"
+          className="btn-accent grid h-10 w-10 shrink-0 place-items-center rounded-full text-white transition active:scale-90 disabled:bg-fill disabled:text-label3"
         >
           <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2.5}>
             <path d="M12 19V5M6 11l6-6 6 6" strokeLinecap="round" strokeLinejoin="round" />

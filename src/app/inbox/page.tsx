@@ -92,11 +92,11 @@ export default async function InboxPage() {
           const items = byType.get(type)!;
           return (
             <section key={type}>
-              <h2 className="px-8 pb-1 pt-5 text-[13px] text-label2">
+              <h2 className="sec-title px-5 pb-1 pt-5 text-[13px] font-medium text-label2">
                 {type} · {items.length}
               </h2>
-              <div className="px-8 pb-2 text-[11px] text-label3">{TYPE_DESC[type] ?? ""}</div>
-              <div className="glass-card mx-4 divide-y divide-hairline rounded-[16px]">
+              <div className="px-5 pb-2 text-[11px] text-label3">{TYPE_DESC[type] ?? ""}</div>
+              <div className="card mx-4 divide-y divide-hairline overflow-hidden rounded-[14px]">
                 {items.map((r) => (
                   <div key={r.id} className="px-4 py-3.5">
                     <div className="text-[15px] leading-snug">
@@ -113,7 +113,7 @@ export default async function InboxPage() {
                         </span>
                       )}
                       {r.payload?.拓展 === true && (
-                        <span className="rounded-[5px] bg-blue/15 px-1.5 py-0.5 text-blue-soft">
+                        <span className="rounded-[5px] bg-accent/12 px-1.5 py-0.5 text-accent-soft">
                           讲义拓展·待背书
                         </span>
                       )}

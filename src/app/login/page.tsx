@@ -8,14 +8,13 @@ import { LoginForm } from "@/components/LoginForm";
 export default function LoginPage() {
   return (
     <main className="flex min-h-full flex-1 flex-col items-center justify-center px-8 pb-20">
-      <div
-        className="mb-6 flex h-[88px] w-[88px] flex-col items-center justify-center rounded-[24px] bg-gradient-to-br from-blue-soft to-blue text-white"
-        style={{ boxShadow: "0 12px 32px rgba(10,132,255,0.4)" }}
-      >
-        <div className="text-[42px] font-bold leading-none">法</div>
-        <div className="mt-0.5 text-[11px] opacity-80">备考</div>
+      {/* 印章徽标：朱砂底双框阳刻「法」 */}
+      <div className="seal mb-6 grid h-[84px] w-[84px] place-items-center rounded-[16px]">
+        <div className="grid h-[70px] w-[70px] place-items-center rounded-[11px] border-[1.5px] border-white/35">
+          <span className="font-serif text-[44px] font-bold leading-none text-white">法</span>
+        </div>
       </div>
-      <h1 className="text-[26px] font-bold tracking-tight">法硕备考</h1>
+      <h1 className="font-serif text-[26px] font-bold tracking-tight">法硕备考</h1>
       <p className="mb-8 mt-1.5 text-[14px] text-label2">输入口令进入</p>
       <div className="w-full max-w-xs">
         <Suspense>

@@ -27,18 +27,18 @@ export default async function DashboardPage() {
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-4 pb-28 pt-5">
-      <header className="flex items-center justify-between px-5">
-        <h1 className="text-[30px] font-bold leading-none tracking-tight">今日</h1>
-        <span className="rounded-full bg-fill2 px-2.5 py-1 text-[12px] font-medium text-label2">{todayLabel} · 375+</span>
+      <header className="flex items-baseline justify-between px-5">
+        <h1 className="font-serif text-[30px] font-bold leading-none tracking-tight">今日</h1>
+        <span className="rounded-[8px] border border-hairline px-2.5 py-1 text-[12px] font-medium text-label2">{todayLabel} · 375+</span>
       </header>
 
       {/* ① 综合备考指数 + 各科能力·进度 雷达 */}
-      <section className="glass-card mx-4 rounded-[22px] border border-hairline p-5 shadow-[0_10px_30px_rgba(0,0,0,0.35)]">
+      <section className="card mx-4 rounded-[16px] p-5">
         <div className="flex items-start justify-between">
           <div>
             <div className="text-[11px] text-label3">综合备考指数</div>
             <div className="mt-0.5 flex items-baseline">
-              <span className="text-shine text-[40px] font-extrabold leading-none tracking-tight tabular-nums">{d.overall.index}</span>
+              <span className="font-serif text-[42px] font-bold leading-none tracking-tight tabular-nums">{d.overall.index}</span>
               <span className="ml-1.5 text-[14px] text-label3">/ 100</span>
             </div>
             <div className="mt-1 text-[10.5px] leading-tight text-label3">
@@ -55,18 +55,18 @@ export default async function DashboardPage() {
         {/* 雷达图 */}
         <svg viewBox="0 0 260 210" className="mt-1 w-full">
           {[20, 40, 60, 80, 100].map((lvl) => (
-            <polygon key={lvl} points={polyPts([lvl, lvl, lvl, lvl, lvl])} fill="none" stroke="rgba(130,130,142,0.16)" strokeWidth={1} />
+            <polygon key={lvl} points={polyPts([lvl, lvl, lvl, lvl, lvl])} fill="none" stroke="rgba(203,188,152,0.16)" strokeWidth={1} />
           ))}
           {subs.map((_, i) => {
             const [x, y] = at(i, 100);
-            return <line key={i} x1={CX} y1={CY} x2={x} y2={y} stroke="rgba(130,130,142,0.16)" strokeWidth={1} />;
+            return <line key={i} x1={CX} y1={CY} x2={x} y2={y} stroke="rgba(203,188,152,0.16)" strokeWidth={1} />;
           })}
-          {/* 进度(铺开)虚线 */}
-          <polygon points={polyPts(subs.map((s) => s.progress))} fill="none" stroke="rgba(48,209,88,0.85)" strokeWidth={1.3} strokeDasharray="3 2.5" />
-          {/* 能力 实心 */}
-          <polygon points={polyPts(subs.map((s) => s.ability))} fill="rgba(10,132,255,0.22)" stroke="rgba(10,132,255,0.95)" strokeWidth={1.6} strokeLinejoin="round" />
+          {/* 进度(铺开)虚线 · 烫金 */}
+          <polygon points={polyPts(subs.map((s) => s.progress))} fill="none" stroke="rgba(200,167,109,0.85)" strokeWidth={1.3} strokeDasharray="3 2.5" />
+          {/* 能力 实心 · 朱砂 */}
+          <polygon points={polyPts(subs.map((s) => s.ability))} fill="rgba(205,84,69,0.2)" stroke="rgba(205,84,69,0.95)" strokeWidth={1.6} strokeLinejoin="round" />
           {subs.map((s) => at(subs.indexOf(s), s.ability)).map(([x, y], i) => (
-            <circle key={i} cx={x} cy={y} r={2.2} fill="rgb(10,132,255)" />
+            <circle key={i} cx={x} cy={y} r={2.2} fill="rgb(205,84,69)" />
           ))}
           {/* 轴标签 */}
           {subs.map((s, i) => {
@@ -83,14 +83,14 @@ export default async function DashboardPage() {
 
         {/* 图例 + 每科拆解 */}
         <div className="-mt-1 flex items-center justify-center gap-4 text-[10.5px] text-label3">
-          <span className="flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-[2px] bg-blue" />能力(吃透)</span>
-          <span className="flex items-center gap-1"><i className="inline-block h-0 w-3 border-t border-dashed border-green" />覆盖率</span>
+          <span className="flex items-center gap-1"><i className="inline-block h-2 w-2 rounded-[2px] bg-accent" />能力(吃透)</span>
+          <span className="flex items-center gap-1"><i className="inline-block h-0 w-3 border-t border-dashed border-gold" />覆盖率</span>
         </div>
         <div className="mt-2.5 flex flex-col gap-1 border-t border-hairline pt-2.5">
           {subs.map((s) => (
             <div key={s.subject} className="flex items-baseline text-[12px]">
               <span className="w-11 shrink-0 font-medium">{s.subject}</span>
-              <span className="w-14 shrink-0 tabular-nums text-label">能力 <b className="text-blue">{s.ability}</b></span>
+              <span className="w-14 shrink-0 tabular-nums text-label">能力 <b className="text-accent-soft">{s.ability}</b></span>
               <span className="flex-1 text-[11px] tabular-nums text-label3">
                 {s.covered + s.open + s.absorbed === 0
                   ? "未启动"
@@ -111,8 +111,8 @@ export default async function DashboardPage() {
 
       {/* ② 今日动态 */}
       <div>
-        <h2 className="px-8 pb-2 text-[13px] text-label2">今日动态 · {todayLabel}</h2>
-        <section className="glass-card mx-4 rounded-[18px] p-4">
+        <h2 className="sec-title px-5 pb-2 text-[13px] font-medium text-label2">今日动态 · {todayLabel}</h2>
+        <section className="card mx-4 rounded-[14px] p-4">
           {d.today.studied.length === 0 && d.today.absorbed === 0 ? (
             <div className="text-[13px] text-label3">今天还没有记录——去教练页汇报，或电脑端复盘错题</div>
           ) : (
@@ -135,8 +135,8 @@ export default async function DashboardPage() {
 
       {/* ③ 快捷入口（答疑/教练在底栏，此处不重复） */}
       <div>
-        <h2 className="px-8 pb-2 text-[13px] text-label2">快捷入口</h2>
-        <section className="glass-card mx-4 divide-y divide-hairline overflow-hidden rounded-[18px]">
+        <h2 className="sec-title px-5 pb-2 text-[13px] font-medium text-label2">快捷入口</h2>
+        <section className="card mx-4 divide-y divide-hairline overflow-hidden rounded-[14px]">
           <Entry href="/errors" tone="orange" title="错题本" sub={d.top5[0] ? `${d.top5[0].subject ?? ""}·${d.top5[0].knowledge}`.slice(0, 22) : "空——说「记进错题本」才进来"} badge={d.coach.openErrors}>
             <path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 10h8M8 14h5" strokeLinejoin="round" strokeLinecap="round" />
           </Entry>
@@ -162,7 +162,7 @@ function Entry({
   const cls = { orange: "bg-orange/15 text-orange", neutral: "bg-fill text-label2" }[tone];
   return (
     <Link href={href} className="pressable flex min-h-11 items-center px-4 py-3">
-      <span className={`tile-material mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[10px] ${cls}`}>
+      <span className={`mr-3 grid h-[34px] w-[34px] shrink-0 place-items-center rounded-[9px] ${cls}`}>
         <svg viewBox="0 0 24 24" className="h-[19px] w-[19px]" fill="none" stroke="currentColor" strokeWidth={1.8}>{children}</svg>
       </span>
       <div className="min-w-0 flex-1">

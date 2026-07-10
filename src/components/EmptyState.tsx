@@ -2,8 +2,9 @@
  * 统一空状态（2026-06-25 抽出）：彩色徽标图标 + 标题 + 说明 + 可选操作。
  * 取代各页"一行灰字"的简陋空态，与教练/答疑空态同一设计语言。
  */
+// tone 键名沿用旧接口（blue=强调色位），映射到墨卷版 token
 const TONE: Record<"blue" | "green" | "orange" | "gray", string> = {
-  blue: "bg-blue/15 text-blue",
+  blue: "bg-accent/12 text-accent-soft",
   green: "bg-green/15 text-green",
   orange: "bg-orange/15 text-orange",
   gray: "bg-fill text-label2",
@@ -24,8 +25,8 @@ export function EmptyState({
   children?: React.ReactNode;
 }) {
   return (
-    <div className="glass-card flex flex-col items-center rounded-[18px] px-6 py-10 text-center">
-      <span className={`tile-material grid h-14 w-14 place-items-center rounded-[18px] ${TONE[tone]}`}>
+    <div className="card flex flex-col items-center rounded-[14px] px-6 py-10 text-center">
+      <span className={`grid h-14 w-14 place-items-center rounded-[14px] ${TONE[tone]}`}>
         <svg viewBox="0 0 24 24" className="h-7 w-7" fill="none" stroke="currentColor" strokeWidth={1.7}>
           {icon}
         </svg>

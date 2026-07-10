@@ -58,15 +58,15 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
     return (
       <button
         onClick={() => setOpen(true)}
-        className="flex w-full items-center gap-1.5 rounded-[12px] border border-hairline bg-card2 px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-label2 transition active:scale-[0.99]"
+        className="pressable flex w-full items-center gap-1.5 rounded-[12px] border border-hairline bg-card px-3.5 py-2.5 text-left text-[13.5px] leading-relaxed text-label2 transition active:scale-[0.99]"
       >
-        📝 讲义里的拓展点答疑不认？<span className="font-medium text-blue-soft">直接存进心得正文（即时生效）</span>
+        讲义里的拓展点答疑不认？<span className="font-medium text-accent-soft">直接存进心得正文（即时生效）</span>
       </button>
     );
   }
 
   return (
-    <div className="glass-card flex flex-col gap-2.5 rounded-[14px] p-3.5">
+    <div className="card flex flex-col gap-2.5 rounded-[14px] p-3.5">
       <div className="flex items-center justify-between">
         <span className="text-[13px] font-medium text-label">记一条讲义拓展 / 心得</span>
         <button onClick={() => setOpen(false)} className="text-[12px] text-label3">
@@ -83,7 +83,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
               if (state === "error") setState("idle");
             }}
             className={`rounded-full px-3 py-1 text-[12px] font-medium ${
-              subject === s ? "btn-blue-grad text-white" : "bg-card2 text-label2"
+              subject === s ? "btn-accent text-white" : "bg-card2 text-label2"
             }`}
           >
             {s}
@@ -112,7 +112,7 @@ export function XindeQuickAdd({ defaultSubject = "" }: { defaultSubject?: string
         <button
           onClick={save}
           disabled={state === "busy"}
-          className="btn-blue-grad rounded-[12px] px-4 py-1.5 text-[13px] font-medium text-white transition active:scale-95 disabled:opacity-50"
+          className="btn-accent rounded-[10px] px-4 py-1.5 text-[13px] font-medium text-white transition active:scale-95 disabled:opacity-50"
         >
           {state === "busy" ? "存…" : "存进心得正文"}
         </button>

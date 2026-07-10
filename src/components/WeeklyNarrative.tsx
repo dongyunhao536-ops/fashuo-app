@@ -21,13 +21,13 @@ export function WeeklyNarrative({ initialContent, initialGeneratedAt, costText, 
     : null;
 
   return (
-    <section className="glass-card mx-4 mt-3 rounded-[18px] border border-blue/20 p-4">
+    <section className="card mx-4 mt-3 rounded-[16px] border-gold/30 p-4">
       <div className="mb-2 flex items-center justify-between">
-        <h2 className="text-[15px] font-semibold text-label">
+        <h2 className="font-serif text-[16px] font-bold text-label">
           复盘 · 下周指导
-          {weekLabel && <span className="ml-1.5 text-[11px] font-normal text-label3">{weekLabel} 周</span>}
+          {weekLabel && <span className="ml-1.5 font-sans text-[11px] font-normal text-label3">{weekLabel} 周</span>}
         </h2>
-        <span className="rounded-[8px] bg-blue/12 px-2 py-0.5 text-[10.5px] font-medium text-blue-soft">电脑端生成</span>
+        <span className="rounded-[7px] border border-gold/40 px-2 py-0.5 text-[10.5px] font-medium text-gold">电脑端生成</span>
       </div>
 
       {content ? (
