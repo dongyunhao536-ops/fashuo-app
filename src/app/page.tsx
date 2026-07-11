@@ -24,6 +24,7 @@ export default async function DashboardPage() {
   const today = new Date();
   const todayLabel = `${today.getMonth() + 1} 月 ${today.getDate()} 日`;
   const subs = d.subjects;
+  const en = d.overall.english;
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col gap-4 pb-28 pt-5">
@@ -98,6 +99,16 @@ export default async function DashboardPage() {
               </span>
             </div>
           ))}
+          {/* 英语（公共课·四维口径不同，不入五科雷达） */}
+          <div className="flex items-baseline border-t border-hairline pt-1 text-[12px]">
+            <span className="w-11 shrink-0 font-medium">英语</span>
+            <span className="w-14 shrink-0 tabular-nums text-label">能力 <b className="text-accent-soft">{en.ability}</b></span>
+            <span className="flex-1 text-[11px] tabular-nums text-label3">
+              {en.reading == null && en.papers14d + en.essays30d + en.open + en.absorbed === 0
+                ? "未启动"
+                : `读${en.reading ?? "—"} 篇${en.papers14d} 文${en.essays30d} 环${en.closure != null ? en.closure : "—"}`}
+            </span>
+          </div>
         </div>
         {(d.overall.notStarted > 0 || d.overall.weakest.ability < 40) && (
           <div className="mt-2.5 rounded-[10px] bg-orange/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-orange">
@@ -105,7 +116,7 @@ export default async function DashboardPage() {
           </div>
         )}
         <div className="mt-2 text-[10px] leading-relaxed text-label3">
-          能力 = 广度25 + 深度20 + 背诵25 + 闭环30（深度＝听课→做题/复盘→背诵三台阶吃透，非"听过=会"）；综合 = 分值加权×0.7 + 最弱科×0.3（法硕单科线·反偏科）。真实数据·非模考。
+          五科能力 = 广度25 + 深度20 + 背诵25 + 闭环30；英语 = 读准45 + 节奏20 + 作文20 + 闭环15（读=近8篇阅读正确率，篇=近14天打卡，文=近30天作文）；综合 = 专业课(加权×0.7+最弱×0.3)×0.75 + 英语×0.25。真实数据·非模考。
         </div>
       </section>
 

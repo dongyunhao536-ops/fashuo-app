@@ -14,7 +14,12 @@ import { EXAM_OUTLINE } from "./exam-outline.gen";
  *       · 深度 = 已覆盖章平均台阶厚度/3（3 台阶=输入→检验→输出全走过=吃透）
  *       · 背诵 = 有"输出"台阶的章/总章
  *       · 闭环 = 闭环率 ×(1−0.5×重犯率)（同一知识点反复错=没真懂，扣分）
- *   - 综合备考指数 = 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）。
+ *   - 专业课指数 = 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）。
+ *   - 英语能力（2026-07-10 接入·云拍板计入综合）：章节四维不适用（无章节底座），改用英语自己的四维——
+ *       读准0.45（近8篇阅读 accuracy 均值·75+过关线=稳80）+ 节奏0.20（近14天篇数/4 封顶）
+ *       + 作文0.20（近30天作文篇数/2 封顶·零准备是真实短板）+ 闭环0.15（同专业课口径；无错题重归一化）。
+ *   - 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（按分值 300:100；政治不追踪不计入）。
+ *     英语刚启动无数据时能力≈0 会拉低综合——这是严标准设计（只认账本行为），刷起来即回升。
  */
 
 export interface SubjectStat {
@@ -32,9 +37,19 @@ export interface SubjectStat {
   ability: number;     // 各科能力分 0-100（北大严标准四维加权）
 }
 
+export interface EnglishStat {
+  ability: number;          // 英语能力 0-100（读准0.45+节奏0.20+作文0.20+闭环0.15）
+  reading: number | null;   // 近8篇阅读 accuracy 均值，无篇=null
+  papers14d: number;        // 近14天英语打卡条数（节奏分母4）
+  essays30d: number;        // 近30天作文篇数（分母2）
+  open: number;
+  absorbed: number;
+  closure: number | null;
+}
+
 export interface DashboardData {
   hero: { examDate: string; daysLeft: number; daysToBase: number };
-  overall: { index: number; balanced: number; weakest: { subject: string; ability: number }; notStarted: number };
+  overall: { index: number; proIndex: number; balanced: number; weakest: { subject: string; ability: number }; notStarted: number; english: EnglishStat };
   subjects: SubjectStat[];
   ask: { openCount: number; lastConfusion: string | null };
   coach: { openErrors: number };
@@ -113,7 +128,7 @@ export async function getDashboard(): Promise<DashboardData> {
     supabaseAdmin.from("ask_summary").select("confusion").eq("status", "open").order("created_at", { ascending: false }).limit(1),
     supabaseAdmin.from("ask_summary").select("*", { count: "exact", head: true }).eq("status", "open"),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
-    supabaseAdmin.from("study_log").select("subject, chapter, activity, log_date").order("log_date", { ascending: false }).limit(1000),
+    supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date").order("log_date", { ascending: false }).limit(1000),
     supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date").in("status", ["open", "absorbed"]).limit(3000),
   ]);
 
@@ -191,12 +206,31 @@ export async function getDashboard(): Promise<DashboardData> {
     return { subject: s, weight: WEIGHT[s], total, covered, progress, depth, recitePct, open: e.open, absorbed: e.absorbed, repeat: e.repeat, closure, ability };
   });
 
-  // 综合备考指数（北大严标准）= 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）
+  // 专业课指数（北大严标准）= 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）
   const wSum = SUBJECTS.reduce((a, s) => a + WEIGHT[s], 0);
   const balanced = Math.round(subjects.reduce((a, x) => a + x.weight * x.ability, 0) / wSum);
   const weakestSub = subjects.reduce((m, x) => (x.ability < m.ability ? x : m), subjects[0]);
-  const index = Math.round(0.7 * balanced + 0.3 * weakestSub.ability);
+  const proIndex = Math.round(0.7 * balanced + 0.3 * weakestSub.ability);
   const notStarted = subjects.filter((x) => x.covered === 0 && x.open === 0 && x.absorbed === 0).length;
+
+  // —— 英语能力（无章节底座 → 英语自己的四维；口径见文件头注释）——
+  const enLogs = logs.filter((r) => r.subject === "英语");
+  const accs = enLogs.filter((r) => r.accuracy != null && !/作文/.test(String(r.chapter ?? ""))).slice(0, 8).map((r) => Number(r.accuracy));
+  const reading = accs.length > 0 ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
+  const d14 = bjDateStr(new Date(now.getTime() - 14 * DAY)), d30 = bjDateStr(new Date(now.getTime() - 30 * DAY));
+  const papers14d = enLogs.filter((r) => String(r.log_date) >= d14).length;
+  const essays30d = enLogs.filter((r) => String(r.log_date) >= d30 && /作文/.test(String(r.chapter ?? ""))).length;
+  const enErr = errBy.get("英语") ?? { open: 0, absorbed: 0, repeat: 0 };
+  const enSeen = enErr.open + enErr.absorbed;
+  const enClosure = enSeen > 0 ? Math.round((enErr.absorbed / enSeen) * (1 - 0.5 * (enErr.repeat / enSeen)) * 100) : null;
+  const eR = (reading ?? 0) / 100, eP = Math.min(1, papers14d / 4), eW = Math.min(1, essays30d / 2), eC = enClosure != null ? enClosure / 100 : null;
+  const englishAbility = Math.round(100 * (eC != null
+    ? 0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC
+    : (0.45 * eR + 0.20 * eP + 0.20 * eW) / 0.85));
+  const english: EnglishStat = { ability: englishAbility, reading, papers14d, essays30d, open: enErr.open, absorbed: enErr.absorbed, closure: enClosure };
+
+  // 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（分值 300:100；政治不追踪。2026-07-10 云拍板英语计入）
+  const index = Math.round(0.75 * proIndex + 0.25 * englishAbility);
 
   const openAgg = new Map<string, ErrorItem>();
   for (const r of errs) {
@@ -213,7 +247,7 @@ export async function getDashboard(): Promise<DashboardData> {
 
   return {
     hero: { examDate: EXAM_DATE, daysLeft, daysToBase },
-    overall: { index, balanced, weakest: { subject: weakestSub.subject, ability: weakestSub.ability }, notStarted },
+    overall: { index, proIndex, balanced, weakest: { subject: weakestSub.subject, ability: weakestSub.ability }, notStarted, english },
     subjects,
     ask: { openCount: askCount.count ?? 0, lastConfusion: askLatest.data?.[0]?.confusion ?? null },
     coach: { openErrors: openAgg.size },
