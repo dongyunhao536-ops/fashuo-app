@@ -25,7 +25,7 @@ const db = createClient(
 );
 
 const DAY = 86400000;
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语错题=干扰项套路(2026-07-10 起)，生词归 Anki 不入本
 const PENDING = ".local/cuoti-pending.jsonl";
 const [cmd, ...args] = process.argv.slice(2);
 const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天

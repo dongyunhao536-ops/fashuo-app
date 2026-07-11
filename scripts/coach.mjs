@@ -9,7 +9,7 @@ import { dirname } from "node:path";
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
 const ACTIVITIES = ["听课", "做题", "背诵", "带背", "复盘", "其他"]; // 带背=PC辅导带背(理解层，非云自背)；今日页逐字渲染 activity 即可与"背诵"区分
 const DAY = 86400000;
 
@@ -25,7 +25,7 @@ function parseFlags(args) {
 // 暂存一条学习日志（进度汇报）→ 云说"同步"由 cuoti.mjs sync 落库到共享账本
 function log(args) {
   const f = parseFlags(args);
-  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史（还可 --chapter --activity --accuracy --feeling --date --raw）");
+  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw）");
   const op = {
     op: "study_log", subject: f.subject, chapter: f.chapter || null,
     activity: ACTIVITIES.includes(f.activity) ? f.activity : (f.activity ? "其他" : "其他"),
