@@ -78,7 +78,7 @@ async function ledger() {
 
   const line = (s) => console.log(s);
   line("═══════════ PC 教练 · 完整账本（火力全开·无截断）═══════════");
-  line(`今天 ${ymd}　距初试(${cfg.考试日期}) ${Math.max(0, daysTo(cfg.考试日期))} 天　距基础结业死线(${cfg.基础结业死线}) ${daysTo(cfg.基础结业死线) >= 0 ? daysTo(cfg.基础结业死线) + " 天" : "已过期 " + -daysTo(cfg.基础结业死线) + " 天"}`);
+  line(`今天 ${ymd}　距初试(${cfg.考试日期}) ${Math.max(0, daysTo(cfg.考试日期))} 天　距基础结业死线(${cfg.基础结业死线}) ${daysTo(cfg.基础结业死线) >= 0 ? daysTo(cfg.基础结业死线) + " 天" : "已过期 " + -daysTo(cfg.基础结业死线) + " 天"}${cfg.首次模拟 ? `　距首次模拟(${cfg.首次模拟}) ${daysTo(cfg.首次模拟)} 天·${cfg.红线?.["9月底模拟分下限"] ?? 320}分红线` : ""}`);
   line(`当前应在：${currentRound()}`);
 
   // 已学进度（按科聚合全部章节，不设 6 章上限）
