@@ -36,6 +36,8 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+# 模板无真实密钥，且灾备手册依赖它重建 .env.local——必须进 git
+!.env.local.example
 
 # 电脑端错题复盘的本地待同步缓冲（说"同步"才落库到系统，见 scripts/cuoti.mjs）
 /.local/
