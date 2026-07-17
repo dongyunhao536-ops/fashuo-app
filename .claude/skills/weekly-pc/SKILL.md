@@ -9,7 +9,7 @@ description: PC 端生产法硕周报（APP 只展示·PC 质量更高）。云�
 
 ## 工作流程
 1. `node --env-file=.env.local scripts/weekly.mjs data [--week YYYY-MM-DD]` —— 算本周真实数据（学了什么/本周吸收/错题本/答疑卡点/待办/成本，与 `src/lib/weekly-review.ts` 同口径），存 `.local/weekly-data.json`。默认本周（北京周一~周日）。
-2. 再 `coach.mjs ledger` 补全上下文（长期记忆/进度/距死线/最近对话）。
+2. 再 `coach.mjs ledger` 补全上下文（长期记忆/进度/距死线/最近对话）；**并 Read `.local/带背挂账.md`**（2026-07-17 起：挂账池规模/本周新挂与撤账——背诵轨的欠账不在 Supabase，不读它周报就只有半本账，复盘必报一句"台账现挂 X · 本周撤 Y 新挂 Z"）。
 3. **我据真实数据写叙事** → `.local/weekly-draft.md`（严格两段格式见下）。
 4. `node --env-file=.env.local scripts/weekly.mjs save --file .local/weekly-draft.md [--week ...]` —— upsert 到 `weekly_report`（week_start 覆盖），APP 叙事卡即刻展示。
 
@@ -22,6 +22,8 @@ description: PC 端生产法硕周报（APP 只展示·PC 质量更高）。云�
   2. **优先级由我明确分档**：每件事标 P0/P1/P2——P0=本周必须完成的红线（不超过 2 件，完不成下周报点名）、P1=应做、P2=有余力再做。冲突时舍 P2 保 P0，别让云自己猜轻重。
   3. 分档理由一句话说清（为什么它是 P0），扣病根或死线，不空排序。
 - 扣**死线**（距基础结业死线/距初试）和**弱点模式**（[[yun-weakspot-exceptions]] 例外/边界）说话；纯法硕口径 [[fashuo-only-no-fakao]]。
+- **「答疑卡点」段口径（2026-07-17）**：`ask_summary` 只有 APP 写、APP 已休眠——该段为空**≠云没卡点**，别误读；PC 答疑的卡点收口走 ask-pc 的三选一（入错题本/心得/不记），看本周错题本新增即可。
+- **政治哨兵（9 月起）**：政治 Rule8 云自管，但 9 月起周报全局项每周带一句"政治启动/进度？"——只提醒不管辖（时长、模拟两条红线"没人盯就蒸发"的教训）。模拟分落 `config/coach.json`「模拟分记录」，9-26 之后的周报必读它对 320 红线。
 - **用上"带背/学习效果"+上周周报**（`weekly.mjs data` 2026-07-07 起已含，见 [[daibei-skill]]）：复盘要读【带背/学习效果】段的**掌握轨迹**（云每节掌握到什么程度、盯哪些精度点），据此定"下周精度重点"；并对照【上一份周报】的"下周指导"看云本周**落实了没/欠了啥**，做到**周与周衔接**、别孤立地只讲本周。
 
 ## 输出格式（写进 weekly-draft.md，纯 markdown，学长口吻、大白话、无客套）
