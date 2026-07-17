@@ -83,7 +83,7 @@ async function list(subject) {
   let open = (data ?? []).filter((r) => r.status === "open");
   if (subject) open = open.filter((r) => r.subject === subject);
   const rows = open
-    .map((r) => { const a = agg.get(keyOf(r)); return { ...r, total: a.nOpen + a.nAbs, recur: a.nAbs > 0 }; })
+    .map((r) => { const a = agg.get(keyOf(r)); return { ...r, total: a.nOpen + a.nAbs, recurN: a.nAbs }; })
     .sort((x, y) => y.total - x.total || (x.log_date < y.log_date ? 1 : -1));
 
   const bySubj = {};
@@ -91,9 +91,9 @@ async function list(subject) {
 
   console.log(`错题本 open：${rows.length} 条` + (subject ? `（已筛 ${subject}）` : "") +
     "　按科目：" + (Object.entries(bySubj).map(([k, v]) => `${k}${v}`).join(" / ") || "空"));
-  console.log("（#id 用于 absorb；×N=累计错次，🔁=复发点=云病根优先考，⏳=已暂存待同步）\n");
+  console.log("（#id 用于 absorb；×N=累计错次，🔁×N=复发轮数（销过N次账又栽·N≥2=顽固错题优先打·销账升格跨两会话），⏳=已暂存待同步）\n");
   for (const r of rows) {
-    const flags = `${r.total > 1 ? " ×" + r.total : ""}${r.recur ? " 🔁复发" : ""}${staged.has(r.id) ? " ⏳待同步" : ""}`;
+    const flags = `${r.total > 1 ? " ×" + r.total : ""}${r.recurN > 0 ? " 🔁复发×" + r.recurN : ""}${staged.has(r.id) ? " ⏳待同步" : ""}`;
     console.log(`#${r.id}  [${r.subject ?? "?"}]${flags}  (${r.log_date})`);
     console.log(`     ${String(r.knowledge).replace(/\s+/g, " ").trim()}`);
   }

@@ -53,7 +53,7 @@ APP 教练为省钱砍过的，这里**全放开**（[[pc-primary-two-systems]]�
 ## 写回共享账本（PC↔APP 同一份数据，实时同步·不问云 —— 2026-07-06 起 [[pc-stage-then-sync]]）
 云的持久数据都进同一份 Supabase 账本、APP 应急能读到；写操作**写完立即 `cuoti.mjs sync` 落库、不问**：
 - **错题 / 销账**：`cuoti.mjs add <科目> <知识点>` / `cuoti.mjs absorb <id>` → 立即 `sync`。记错题口径（2026-07-17 统一，把云的实践转正）：**做题/复盘/考核中实际栽的题默认当场入账、云可当场否决**；纯口头问答/概念讨论仍指令制（云说记才记）。
-- **进度汇报 → study_log**：`coach.mjs log --subject X --activity 复盘|听课|做题|背诵 [--chapter "..." --accuracy N --feeling "..."]` → 立即 `cuoti.mjs sync`（已接线·实时）。做题 log **尽量带 `--accuracy`**（顺口问一句"总共几道、对几道"就有了；不报不强求，但"读不准"维缺数就是缺在这）。**长期记忆 → coach_memory**：`coach.mjs remember --fact "..." [--category 画像|倾向|里程碑|约定]` → `cuoti.mjs sync`（**已接线 2026-07-09**·APP 教练可读；只装画像级实锤，别灌流水账）。
+- **进度汇报 → study_log**：`coach.mjs log --subject X --activity 复盘|听课|做题|背诵 [--chapter "..." --accuracy N --feeling "..."]` → 立即 `cuoti.mjs sync`（已接线·实时）。做题 log 的 accuracy **强制换算规则（2026-07-17）**：云的汇报里只要含题数信息（"17 题栽 2 道""做了 10 道错 3"），**必须换算成 accuracy 填上**，不许记"总题数未统计"——缺数的根源是报了没人算，不是云不肯报；汇报里真没有题数就顺口问一句，问了还没有才留空。**长期记忆 → coach_memory**：`coach.mjs remember --fact "..." [--category 画像|倾向|里程碑|约定]` → `cuoti.mjs sync`（**已接线 2026-07-09**·APP 教练可读；只装画像级实锤，别灌流水账）。
 - 云明确"记录进心得"→ 走心得手动登记（archive，要 [[archive-sync]] 提交部署，另说）。
 - 记录=**指令制**：错题/心得/进度只在云明确要求时才写，绝不自作主张；觉得值得记就在正文里问一句。
 
