@@ -18,6 +18,14 @@ SUBJECTS = {
     "民法": {"book": "《民法学精讲一本通》岳业鹏",
              # 全书普查实锤的作者框（示例/分析是随文案例串讲，不进①档；"例外"是图表行标签非框）
              "extra_markers": ["规范拓展", "理论拓展", "背景拓展", "背诵口诀"]},
+    "法理": {"book": "《法理学精讲一本通》老杜",
+             # 老杜三件套天生对齐带背五步：推导逻辑→①逻辑链、形象理解→④挂例、一招制敌→应用锁扣；
+             # 法律格言=格言+出处+考点指向(论述弹药)；"知识索引"是导图框、OCR拍平成碎片且骨架走考试分析，不收
+             "extra_markers": ["推导逻辑", "形象理解", "一招制敌", "法律格言"]},
+    "法制史": {"book": "《法制史精讲一本通》龚成思",
+               # "点晴"=OCR 对"点睛"的常见误读，两变体都收（297晴/135睛）；典文释义=古文引文+意即=白话译文
+               # （成对出现、常带编号"典文释义4"）；记忆线索=口诀+法理学交叉指针（正中法综融合命题趋势）
+               "extra_markers": ["老龚点睛", "老龚点晴", "总结对比", "典文释义", "记忆线索", "意即"]},
 }
 OPEN = r'[\[［【（(（\s]*'          # [ ［ 【 （ ( 及空白，容错 OCR
 CLOSE = r'[\]］」》）)）：:：、]'  # ] ］ 」 》 ） ) ： :  、
@@ -47,7 +55,8 @@ def main():
         sys.exit(f"未知科目 {subject}，可选：{'/'.join(SUBJECTS)}")
     book = SUBJECTS[subject]["book"]
     markers = sorted(MARKERS + SUBJECTS[subject]["extra_markers"], key=len, reverse=True)
-    mk = re.compile('^' + OPEN + '(' + '|'.join(markers) + ')(' + CLOSE + r'|\s|$)')
+    # \d{0,2}：容纳"典文释义4"式带编号的框（法制史 124 处）；编号不进 group(1) 标签
+    mk = re.compile('^' + OPEN + '(' + '|'.join(markers) + r')\s*\d{0,2}\s*(' + CLOSE + r'|\s|$)')
     lines = open(inp, encoding="utf-8").read().split("\n")
     n = len(lines)
     page = 0
@@ -66,6 +75,27 @@ def main():
             i += 1
             while i < n and not is_delim(lines[i]):
                 buf.append(lines[i].rstrip())
+                i += 1
+            # 冒号清单续吃（2026-07-19 修）：框文以"："结尾且被编号行截断＝正文清单是框的本体
+            # （老杜"判断标准是：1.…2.…3.…"式，刑12/民2/法理9条受害）。只按编号顺序 1→2→3 续吃，
+            # 撞号/断号即停（框清单与后续正文节编号常直接相连甚至撞号），页码/页眉/下个框/中文序号/上限硬停。
+            expected = 1  # 下一个该出现的清单编号；>1 表示已进入清单模式
+            while i < n and expected <= 12:
+                in_list = expected > 1
+                if not in_list and not "".join(buf).rstrip().endswith("："):
+                    break  # 框文不是冒号收尾 → 不续吃
+                ln = lines[i]
+                if pagemk.match(ln) or mk.match(ln) or cn.match(ln) or cnb.match(ln) \
+                   or barenum.match(ln) or HEADER in ln or ln.strip() == "":
+                    break  # 硬停：页码/下个框/中文序号标题/页眉/空行
+                if num.match(ln):
+                    got = int(re.match(r'\s*(\d+)', ln).group(1))
+                    if got != expected:
+                        break  # 断号/撞号 = 已流入正文编号节
+                    expected += 1
+                elif not in_list:
+                    break  # 冒号后接的不是编号清单（表格等）→ 维持原截断
+                buf.append(ln.rstrip())
                 i += 1
             text = "".join(buf).strip()
             if len(text) >= 6:  # 去掉 OCR 噪音空框
