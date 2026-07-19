@@ -9,7 +9,7 @@ description: PC 端生产法硕周报（APP 只展示·PC 质量更高）。云�
 
 ## 工作流程
 1. `node --env-file=.env.local scripts/weekly.mjs data [--week YYYY-MM-DD]` —— 算本周真实数据（学了什么/本周吸收/错题本/答疑卡点/待办/成本，与 `src/lib/weekly-review.ts` 同口径），存 `.local/weekly-data.json`。默认本周（北京周一~周日）。
-2. 再 `coach.mjs ledger` 补全上下文（长期记忆/进度/距死线/最近对话）；**并 Read `.local/带背挂账.md`**（2026-07-17 起：挂账池规模/本周新挂与撤账——背诵轨的欠账不在 Supabase，不读它周报就只有半本账，复盘必报一句"台账现挂 X · 本周撤 Y 新挂 Z"）。
+2. 再 `coach.mjs ledger` 补全上下文（长期记忆/进度/距死线/最近对话）；**并 Read `.local/带背挂账.md`**（2026-07-17 起：挂账池规模/本周新挂与撤账——背诵轨的欠账不在 Supabase，不读它周报就只有半本账，复盘必报一句"台账现挂 X · 本周撤 Y 新挂 Z"）；**并 Read `.local/复盘排期.md`**（2026-07-19 起·唯一排期事实源：下周复盘/轻滚件与它**合并**——周报不另立执行清单、引用并把新排期**回写**进该文件，防"周一冻结清单执行到周日"漂移漏项——7-19 漏 #43 事故即此病）。
 3. **我据真实数据写叙事** → `.local/weekly-draft.md`（严格两段格式见下）。
 4. `node --env-file=.env.local scripts/weekly.mjs save --file .local/weekly-draft.md [--week ...]` —— upsert 到 `weekly_report`（week_start 覆盖），APP 叙事卡即刻展示。
 
