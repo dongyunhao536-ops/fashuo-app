@@ -41,6 +41,25 @@ const today = new Date();
 const ymd = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
 const daysTo = (d) => Math.ceil((new Date(d).getTime() - today.getTime()) / DAY);
 
+// —— 里程碑在轨体检（2026-07-22 云拍板）——
+// 剩余天数跌破 150/120/100/60/30 时必须主动提醒 + 做一次「当下学情 × 剩余时间」的在轨体检。
+// 到点未做 → 每次 ledger 都醒目告警，追到 config「里程碑.已完成」记上为止（别只提醒一次就飘过去）。
+function milestoneLine(line) {
+  const ms = cfg.里程碑;
+  if (!ms?.关键点_天?.length) return;
+  const left = Math.max(0, daysTo(cfg.考试日期));
+  const done = new Set((ms.已完成 ?? []).map((x) => Number(x.关键点 ?? x)));
+  const pts = [...ms.关键点_天].sort((a, b) => b - a);
+  const due = pts.filter((p) => left <= p && !done.has(p));      // 已到点但没做体检的
+  const next = pts.find((p) => left > p);                        // 下一个还没到的
+  if (due.length) {
+    line(`🚨 里程碑到点·欠一次【在轨体检】：${due.map((p) => p + "天").join("、")}（现剩 ${left} 天）`);
+    line(`   → 本次会话必须做：当下学情 × 剩余时间 → 还在不在轨/偏多少/怎么补（SOP 见 coach-pc「里程碑在轨体检」），做完把关键点记进 config/coach.json「里程碑.已完成」`);
+  } else if (next != null) {
+    line(`里程碑：下一个 ${next} 天关口还有 ${left - next} 天（${new Date(new Date(cfg.考试日期).getTime() - next * DAY).toISOString().slice(0, 10)}）`);
+  }
+}
+
 // 暂存一条关于云的长期记忆（画像/倾向/里程碑/约定）→ cuoti.mjs sync 落库到 coach_memory
 // PC↔APP 共享：APP 教练的 prompt 读 coach_memory，PC 侧画像更新由此同步过去（2026-07-09 接线，堵"双系统画像不同步"的洞）
 function remember(args) {
@@ -80,6 +99,7 @@ async function ledger() {
   line("═══════════ PC 教练 · 完整账本（火力全开·无截断）═══════════");
   line(`今天 ${ymd}　距初试(${cfg.考试日期}) ${Math.max(0, daysTo(cfg.考试日期))} 天　距基础结业死线(${cfg.基础结业死线}) ${daysTo(cfg.基础结业死线) >= 0 ? daysTo(cfg.基础结业死线) + " 天" : "已过期 " + -daysTo(cfg.基础结业死线) + " 天"}${cfg.首次模拟 ? `　距首次模拟(${cfg.首次模拟}) ${daysTo(cfg.首次模拟)} 天·${cfg.红线?.["9月底模拟分下限"] ?? 320}分红线` : ""}`);
   line(`当前应在：${currentRound()}`);
+  milestoneLine(line);
 
   // 已学进度（按科聚合全部章节，不设 6 章上限）
   const bySubj = {};

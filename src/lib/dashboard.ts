@@ -59,7 +59,9 @@ export interface DashboardData {
   top5: ErrorItem[];
 }
 
-const EXAM_DATE = "2026-12-21";
+// 2026-07-22 订正：原 2026-12-21 是【周一】，初试不可能在周一。12-19=周六，与云"距考 150 天"吻合。
+// 与 config/coach.json「考试日期」保持同源；教育部 9 月官宣后需复核一次。
+const EXAM_DATE = "2026-12-19";
 const BASE_DEADLINE = "2026-09-30";
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
