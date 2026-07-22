@@ -147,7 +147,7 @@ export async function getDashboard(): Promise<DashboardData> {
     supabaseAdmin.from("ask_summary").select("*", { count: "exact", head: true }).eq("status", "open"),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
     supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date, raw_input").order("log_date", { ascending: false }).limit(1000),
-    supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date").in("status", ["open", "absorbed"]).limit(3000),
+    supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).limit(3000),
   ]);
 
   const daysLeft = Math.max(0, Math.ceil((new Date(EXAM_DATE).getTime() - now.getTime()) / DAY));
@@ -187,21 +187,39 @@ export async function getDashboard(): Promise<DashboardData> {
     }
   }
   // —— 错题：按科统计 闭环 + 重犯（同一知识点反复错=没真懂，北大扣分；dismissed 已在查询侧排除）——
+  // 2026-07-22 重犯判定重做：原本只认「subject::knowledge 全字符串相同」，而错题描述中位数 245 字、
+  // 最长 1188 字，两条永不可能一字不差 —— 实测 51 条只揪出 1 组，惩罚系数 0.989，这一维（权重 0.30）
+  // 的重犯扣分形同虚设，而"重复犯老错"恰恰是云的核心病根。
+  // 新口径按可靠性排序，**不做文本模糊匹配**（245 字描述算相似度＝伪精度，会把不同错题错并）：
+  //   ① kp_id 相同（考点级连线，最可靠，但下线背诵检测后仅 8% 有值）
+  //   ② source 标了「复发」（cuoti.mjs recheck 失败 / add --recur-of 显式连线 → 写入时就标死）
+  //   ③ knowledge 全字符串相同（兜底，只兜得住 recheck 原样复制那条路径）
+  // 一行最多算一次重犯，三条口径不叠加。
   const errBy = new Map<string, { open: number; absorbed: number; repeat: number }>();
-  const knowSeen = new Map<string, number>();
+  const seenKey = new Set<string>();
   for (const r of errs) {
     const s = (r.subject as string | null) ?? "未分类";
     const e = errBy.get(s) ?? { open: 0, absorbed: 0, repeat: 0 };
     if (r.status === "absorbed") e.absorbed++; else e.open++;
+    const explicitRecur = /复发/.test(String(r.source ?? ""));
+    const key = `${s}::${r.kp_id ?? r.knowledge}`;
+    const dup = seenKey.has(key);
+    seenKey.add(key);
+    if (explicitRecur || dup) e.repeat++;
     errBy.set(s, e);
-    const k = `${s}::${r.knowledge}`;
-    knowSeen.set(k, (knowSeen.get(k) ?? 0) + 1);
   }
-  for (const [k, n] of knowSeen) {
-    if (n <= 1) continue;
-    const e = errBy.get(k.slice(0, k.indexOf("::")));
-    if (e) e.repeat += n - 1;
-  }
+
+  // 闭环先验（2026-07-22）：某科「有学习记录但一条错题都没登记」时，闭环无法实测，必须给个先验。
+  // 三种选法里挑最客观的一种：
+  //   ✗ 旧法 (0.25B+0.20D+0.25R)/0.70 —— 数学上等于"假设闭环≈该科其他三维的均值"。循环自证，
+  //     且在真实闭环低于其他三维时**不登记错题反而得分更高**（刑法实测 60 vs 56）。
+  //   ✗ 拍一个常数 0.5 —— 对到处都弱的科反成奖励（模拟：广度30/深度40/背诵20 由 29 涨到 36）。
+  //   ✓ 用云自己**已实测科目的合并闭环率**当经验先验（empirical prior）：不循环、不拍脑袋、随他
+  //     真实表现自更新。全库一条错题都没有时退回 0.5。
+  const pooled = [...errBy.values()].reduce((a, e) => ({ absorbed: a.absorbed + e.absorbed, seen: a.seen + e.open + e.absorbed, repeat: a.repeat + e.repeat }), { absorbed: 0, seen: 0, repeat: 0 });
+  const closurePrior = pooled.seen > 0
+    ? (pooled.absorbed / pooled.seen) * (1 - 0.5 * (pooled.repeat / pooled.seen))
+    : 0.5;
 
   const subjects: SubjectStat[] = SUBJECTS.map((s) => {
     const total = TOTAL_CH[s];
@@ -216,11 +234,14 @@ export async function getDashboard(): Promise<DashboardData> {
     const e = errBy.get(s) ?? { open: 0, absorbed: 0, repeat: 0 };
     const seen = e.open + e.absorbed;
     const closure = seen > 0 ? Math.round((e.absorbed / seen) * (1 - 0.5 * (e.repeat / seen)) * 100) : null;
-    // 各科能力（北大严标准）= 广度0.25 + 深度0.20 + 背诵0.25 + 闭环0.30（无错题→前三维重归一化到 0.70）
-    const B = progress / 100, D = depth / 100, R = recitePct / 100, C = closure != null ? closure / 100 : null;
-    const ability = Math.round(100 * (C != null
-      ? 0.25 * B + 0.20 * D + 0.25 * R + 0.30 * C
-      : (0.25 * B + 0.20 * D + 0.25 * R) / 0.70));
+    // 各科能力（北大严标准）= 广度0.25 + 深度0.20 + 背诵0.25 + 闭环0.30
+    // 2026-07-22 堵洞（详见上方 closurePrior 注释）：
+    //   · 有错题实测 → 用实测闭环
+    //   · 有学习记录但零错题 → 用云自己已实测科目的合并闭环率作经验先验
+    //   · 零学习记录（未开张）→ 0，四维全 0，能力 0（不因"没错题"凭空得分）
+    const B = progress / 100, D = depth / 100, R = recitePct / 100;
+    const C = closure != null ? closure / 100 : (covered > 0 ? closurePrior : 0);
+    const ability = Math.round(100 * (0.25 * B + 0.20 * D + 0.25 * R + 0.30 * C));
     return { subject: s, weight: WEIGHT[s], total, covered, progress, depth, recitePct, open: e.open, absorbed: e.absorbed, repeat: e.repeat, closure, ability };
   });
 
@@ -236,15 +257,18 @@ export async function getDashboard(): Promise<DashboardData> {
   const accs = enLogs.filter((r) => r.accuracy != null && !/作文/.test(String(r.chapter ?? ""))).slice(0, 8).map((r) => Number(r.accuracy));
   const reading = accs.length > 0 ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
   const d14 = bjDateStr(new Date(now.getTime() - 14 * DAY)), d30 = bjDateStr(new Date(now.getTime() - 30 * DAY));
-  const papers14d = enLogs.filter((r) => String(r.log_date) >= d14).length;
+  // 2026-07-22：papers14d 原本数「近14天所有英语日志」，没排作文——而 essays30d 排了非作文，
+  // 两边口径不一致：一周写 4 篇作文就能把"阅读节奏"顶满格。这里改为只数非作文（＝阅读篇数）。
+  const papers14d = enLogs.filter((r) => String(r.log_date) >= d14 && !/作文/.test(String(r.chapter ?? ""))).length;
   const essays30d = enLogs.filter((r) => String(r.log_date) >= d30 && /作文/.test(String(r.chapter ?? ""))).length;
   const enErr = errBy.get("英语") ?? { open: 0, absorbed: 0, repeat: 0 };
   const enSeen = enErr.open + enErr.absorbed;
   const enClosure = enSeen > 0 ? Math.round((enErr.absorbed / enSeen) * (1 - 0.5 * (enErr.repeat / enSeen)) * 100) : null;
-  const eR = (reading ?? 0) / 100, eP = Math.min(1, papers14d / 4), eW = Math.min(1, essays30d / 2), eC = enClosure != null ? enClosure / 100 : null;
-  const englishAbility = Math.round(100 * (eC != null
-    ? 0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC
-    : (0.45 * eR + 0.20 * eP + 0.20 * eW) / 0.85));
+  // 闭环维同专业课口径（2026-07-22）：有学习记录但零错题→用同一条经验先验，零记录→0。
+  // 原「无错题 → /0.85 重归一化」同样是"不记错题反而赚"。
+  const eR = (reading ?? 0) / 100, eP = Math.min(1, papers14d / 4), eW = Math.min(1, essays30d / 2);
+  const eC = enClosure != null ? enClosure / 100 : (enLogs.length > 0 ? closurePrior : 0);
+  const englishAbility = Math.round(100 * (0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC));
   const english: EnglishStat = { ability: englishAbility, reading, papers14d, essays30d, open: enErr.open, absorbed: enErr.absorbed, closure: enClosure };
 
   // 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（分值 300:100；政治不追踪。2026-07-10 云拍板英语计入）

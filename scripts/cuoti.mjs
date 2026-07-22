@@ -197,12 +197,18 @@ async function absorb(rest) {
 }
 
 // ---------- add：暂存新错题到本地缓冲 ----------
+// --recur-of <旧错题id>：显式标记"这条是老账复发"。2026-07-22 加——量化 v3 的重犯惩罚原本靠
+// 「knowledge 全字符串相同」判重犯，而错题描述中位数 245 字、永不重复，惩罚实际形同虚设（实测
+// 51 条只揪出 1 组）。重犯必须在【写入时】显式连线，不能靠事后猜文本相似度（那是伪精度、会错并）。
 function add(rest) {
+  let recurOf = null;
+  const ri = rest.indexOf("--recur-of");
+  if (ri !== -1) { recurOf = Number(rest[ri + 1]); rest.splice(ri, 2); if (!Number.isFinite(recurOf)) return fail("--recur-of 需要旧错题的数字 id，如：add 刑法 xxx --recur-of 36"); }
   const subject = rest[0] && SUBJECTS.includes(rest[0]) ? rest.shift() : null;
   const knowledge = rest.join(" ").trim();
-  if (!knowledge) return fail("add 需要知识点，如：add 刑法 牵连犯与吸收犯区分标准");
-  appendPending({ op: "new_error", subject, knowledge });
-  console.log(`⏳ 已暂存待同步·新错题：[${subject ?? "未分类"}] ${knowledge}`);
+  if (!knowledge) return fail("add 需要知识点，如：add 刑法 牵连犯与吸收犯区分标准 [--recur-of 36]");
+  appendPending({ op: "new_error", subject, knowledge, recurOf });
+  console.log(`⏳ 已暂存待同步·新错题：[${subject ?? "未分类"}]${recurOf ? ` 🔁复发（源#${recurOf}）` : ""} ${knowledge}`);
   console.log(`（未落库，云说"同步"再 sync）`);
 }
 
@@ -246,9 +252,13 @@ async function sync(rest) {
     okAbs = data?.length ?? 0;
   }
   for (const e of newErrs) {
+    // source 带「复发」标记＝量化 v3 重犯惩罚的唯一可靠信号（2026-07-22）。
+    // 此前 recheck 生成的 note 在这里被丢弃、复发信息断在管道里，dashboard 只能退回猜文本相同。
     const { error } = await db.from("study_error").insert({
       log_date: today, subject: e.subject, kp_id: null, knowledge: e.knowledge,
-      source: "pc复盘", raw_input: e.knowledge, status: "open",
+      source: e.recurOf ? "pc复盘·复发" : "pc复盘",
+      raw_input: e.recurOf ? `【复发·源#${e.recurOf}】${e.knowledge}` : e.knowledge,
+      status: "open",
     });
     if (error) { console.error("✗ 新错题写入失败：" + error.message); continue; }
     okNew++;
@@ -328,7 +338,7 @@ async function recheckFail(rest) {
   const ledger = readLedger();
   const now = new Date().toISOString();
   for (const r of data ?? []) {
-    appendPending({ op: "new_error", subject: r.subject, knowledge: String(r.knowledge), note: `老题抽查没过·复发（源#${r.id}）` });
+    appendPending({ op: "new_error", subject: r.subject, knowledge: String(r.knowledge), recurOf: r.id, note: `老题抽查没过·复发（源#${r.id}）` });
     ledger[r.id] = { last: now, count: (ledger[r.id]?.count ?? 0) + 1, result: "fail" };
     console.log(`↩ #${r.id} 没过 → 已暂存重新挂账：${String(r.knowledge).slice(0, 50)}`);
   }
