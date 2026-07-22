@@ -27,7 +27,7 @@ node --env-file=.env.local scripts/cuoti.mjs pass <id...>       # 老题这次�
 node --env-file=.env.local scripts/cuoti.mjs recheck-fail <id...> # 老题这次【没过】→ 暂存重新挂账（同步后带 🔁 复发）
 # 写操作 —— 先进本地缓冲 .local/cuoti-pending.jsonl，不直接落库
 node --env-file=.env.local scripts/cuoti.mjs absorb <id...>     # 暂存销账（云确认掌握后）；也可 absorb --like <片段> [--subject 刑法]
-node --env-file=.env.local scripts/cuoti.mjs add <科目> <知识点>  # 暂存一条新错题（复盘中发现的新漏洞）
+node --env-file=.env.local scripts/cuoti.mjs add <科目> <知识点> [--recur-of <旧错题id>]  # 暂存一条新错题（复盘中发现的新漏洞）
 node --env-file=.env.local scripts/cuoti.mjs pending [--clear]   # 查看/清空待同步缓冲
 node --env-file=.env.local scripts/cuoti.mjs sync [--dry]       # 云说"同步"时才跑：把缓冲一次落库到系统（--dry 只预览）
 ```
@@ -35,6 +35,7 @@ node --env-file=.env.local scripts/cuoti.mjs sync [--dry]       # 云说"同步"
 ### ⚠️ 数据同步纪律（云 2026-07-06 改口：实时同步·不用问）
 复盘产生的写操作（销账 absorb、新错题 add）**写完立即 `cuoti.mjs sync` 落库、不问云**（[[pc-stage-then-sync]]；推翻 07-05 的"暂存等同步"）。只落真实发生的、别谎称已入库。记错题口径（2026-07-17 统一，把云的实践转正）：**做题/复盘/考核中实际栽的题默认当场入账、云可当场否决**；纯口头问答/概念讨论仍指令制（云说记才记）。错题本是 Supabase 运行态、APP 实时读库即见、**无需重新部署**；只有产出「心得」入内容库才走 archive git 提交+部署（[[archive-sync]]）。`--dry` 只作偶尔大批量前预览用。
 
+- **`add` 前先查是不是老账复发，是就 `--recur-of <旧id>` 连线（2026-07-22 起·硬性）**：量化 v3 的重犯惩罚（闭环维·权重 0.30 里的乘数）**只认显式连线**——`kp_id` 相同 > `source` 标复发 > knowledge 全字符串相同。而我写的错题描述中位数 245 字、永不可能一字不差，**不连线＝这条重犯等于没发生**。原先 51 条错题只揪出 1 组重犯、惩罚系数 0.989，而"重复犯老错"恰恰是云的核心病根，等于给他的病装了个不会响的报警器。所以：新错题入账前用 `list <科目>` 或 `absorb --like <片段>` 的思路先扫一眼**同一考点/同一类边界**有没有旧账（含已销账的），命中就带 `--recur-of`。**算法认不出来，只有我在写入时能认出来。** 不确定是不是同一个点，就问云一句"这是不是上次 #X 那个坑又栽了"。（`recheck-fail` 路径已自动带上，不用手加。）
 - `material` 的【特征词】= 争点/情境特征（如查"犯罪中止"的因果争点就 `material 犯罪中止 因果`）——同时命中的条目会置顶，专治深页争点被浅页同词条挤掉。
 - 讲义心得里 `【讲义P__·提示/马工程/规范拓展/推导逻辑/一招制敌/老龚点睛等】` 是《精讲一本通》讲义（刑/民/法理/法制史四科；宪法暂无）作者亲手划的重点与易错，和做题心得同属最高档权威，出题/判题优先据它。法理`一招制敌`=选择题秒判标准、法制史`总结对比`=对照表——出题设陷阱/判分锚点直接用。
 
