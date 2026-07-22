@@ -97,12 +97,30 @@ const OUTLINE: Record<string, { num: number; keys: string[] }[]> = (() => {
   return out;
 })();
 
-/** 从日志章节自由文本识别出覆盖的官方章号集合：优先章/节标题匹配，退回解析"第X章"数字（封顶）。 */
-function detectChapters(subject: string, text: string): Set<number> {
+/**
+ * 从日志识别覆盖的官方章号集合：优先章/节标题匹配，退回解析"第X章"数字（封顶）。
+ * 2026-07-22：chapter 标题匹配不中时，**降级到 `raw_input`（云的原始汇报）再试一次标题匹配**。
+ * 因为 chapter 是压缩后的短标签，罪名/章名常被压掉，而原话里往往写全了。教训：#47
+ * chapter="第十章、第十一章"（云教材自编章号，与官方错位）走数字兜底误记为官方第10/11章，
+ * 但 raw_input 原话"第十章共同犯罪，第十一章罪数形态"里罪名齐全 —— 信息一直在库里没参与计算。
+ * ⚠️ 必须是**降级**而非两者合并扫：raw_input 是自然语言，含否定/枚举（"除渎职罪外都学过"）会反向
+ * 误判成学过（2026-07-22 实测踩到，刑法广度虚涨到 100%）。chapter 已能定章时就不许再读原话。
+ * 数字兜底仍**只扫 chapter**：原始汇报里的章号本就与官方错位、且常顺带提及多章，精度不够。
+ */
+function detectChapters(subject: string, text: string, raw?: string | null): Set<number> {
   const found = new Set<number>();
   const total = TOTAL_CH[subject] ?? 99;
-  for (const c of OUTLINE[subject] ?? []) {
+  const outline = OUTLINE[subject] ?? [];
+  for (const c of outline) {
     if (c.keys.some((k) => text.includes(k))) found.add(c.num);
+  }
+  if (found.size === 0 && raw) {
+    // 只用长标题（≥4 字）去咬原话：raw_input 是自然语言，短标题会误咬——2026-07-22 实测
+    // "法理学背完第四章"里的"法理学"咬中绪论章、"动机一般影响量刑"里的"量刑"咬中量刑章。
+    // chapter 是我写的受控标签，仍按 ≥2 字匹配。
+    for (const c of outline) {
+      if (c.keys.some((k) => k.length >= 4 && raw.includes(k))) found.add(c.num);
+    }
   }
   if (found.size === 0) {
     // 无标题命中 → 退回云自己的"第X章"编号（可能与官方错位，仅作计数兜底）
@@ -128,7 +146,7 @@ export async function getDashboard(): Promise<DashboardData> {
     supabaseAdmin.from("ask_summary").select("confusion").eq("status", "open").order("created_at", { ascending: false }).limit(1),
     supabaseAdmin.from("ask_summary").select("*", { count: "exact", head: true }).eq("status", "open"),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
-    supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date").order("log_date", { ascending: false }).limit(1000),
+    supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date, raw_input").order("log_date", { ascending: false }).limit(1000),
     supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date").in("status", ["open", "absorbed"]).limit(3000),
   ]);
 
@@ -162,7 +180,7 @@ export async function getDashboard(): Promise<DashboardData> {
     if (!SUBJECTS.includes(subj) || !ch || !step) continue;
     let m = stepsBy.get(subj);
     if (!m) { m = new Map(); stepsBy.set(subj, m); }
-    for (const n of detectChapters(subj, ch)) {
+    for (const n of detectChapters(subj, ch, r.raw_input as string | null)) {
       let set = m.get(n);
       if (!set) { set = new Set(); m.set(n, set); }
       set.add(step);
