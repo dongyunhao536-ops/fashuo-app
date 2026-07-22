@@ -103,13 +103,14 @@ async function list(subject) {
 }
 
 // ---------- material：出题弹药检索 ----------
+// 第三列＝该 kind 的保底字符配额（前面的 kind 吃不掉后面的，省下的才向后滚）
 const KINDS = [
-  ["xinde", "做题心得/讲义心得(马工程·提示·易错·辨析·总结)"],
-  ["textbook", "《考试分析》教材原文"],
-  ["yixiao", "易混概念库"],
-  ["zhenti", "真题分析/高频/主观题汇总"],
+  ["xinde", "做题心得/讲义心得(马工程·提示·易错·辨析·总结)", 4000],
+  ["textbook", "《考试分析》教材原文", 5000],
+  ["yixiao", "易混概念库", 2000],
+  ["zhenti", "真题分析/高频/主观题汇总", 3000],
 ];
-const CTX = 2, CLIP = 150, MAX_BLOCKS_PER_KIND = 6, TOTAL_CLIP = 14000;
+const CTX = 2, CLIP = 150, MAX_BLOCKS_PER_KIND = 6;
 const clip = (s) => { const t = s.trim(); return t.length <= CLIP ? t : t.slice(0, CLIP) + "…"; };
 
 function grep(rows, keyword, refine) {
@@ -150,18 +151,29 @@ async function material(keyword, refine) {
   if (!keyword) return fail('material 需要关键词，如：material 想象竞合 因果');
   console.log(`检索「${keyword}${refine ? " + " + refine : ""}」的出题弹药（►=命中行，带行号锚点）`);
   if (refine) console.log(`（特征词「${refine}」同时命中的条目已置顶）`);
-  let used = 0;
-  for (const [kind, label] of KINDS) {
+  // 配额制（2026-07-22 修）：原先四个 kind 共享一个 14000 总预算、超了直接 return，
+  // 宽词下 xinde 的合并巨块一段就吃光，教材/易混/真题整段不输出 → 预检"教材锚定"写成"无"＝假阴性。
+  // 现在每个 kind 有保底额度，且有命中就至少出一块，绝不整段空手。
+  let carry = 0;
+  for (const [kind, label, quota] of KINDS) {
     const { data } = await db.from("content_mirror").select("path, content, start_line").eq("kind", kind);
     const { blocks, totalHits } = grep(data ?? [], keyword, refine);
     console.log(`\n───── ${label}　命中 ${totalHits} 行 / ${blocks.length} 片段 ─────`);
-    if (!blocks.length) { console.log("（无命中）"); continue; }
+    if (!blocks.length) { console.log("（无命中）"); carry += quota; continue; }
+    const budget = quota + carry;
+    let used = 0, shown = 0;
     for (const b of blocks.slice(0, MAX_BLOCKS_PER_KIND)) {
-      const seg = `· ${b.path}\n${b.text}`;
-      if (used + seg.length > TOTAL_CLIP) { console.log("…（已达输出上限，换更具体的关键词再查）"); return; }
+      let seg = `· ${b.path}\n${b.text}`;
+      if (used + seg.length > budget) {
+        if (shown) break;
+        seg = seg.slice(0, budget) + "\n…（本片段过长已截断）"; // 保底：命中了就必须看见东西
+      }
       console.log(seg);
       used += seg.length;
+      shown++;
     }
+    if (shown < blocks.length) console.log(`…（本段还有 ${blocks.length - shown} 个片段未显示，换更具体的关键词或加特征词再查）`);
+    carry = Math.max(0, budget - used);
   }
 }
 
