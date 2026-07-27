@@ -4,22 +4,44 @@ import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
 import { EXAM_OUTLINE } from "./exam-outline.gen";
 
 /**
- * 今日页数据聚合（RSC 直接调）。2026-07-07 量化 v3（北大 375+ 严标准·更全面/真实）：
+ * 今日页数据聚合（RSC 直接调）。量化 v3.1（2026-07-26 口径重订·变更日志见文末）：
  * 全部落真实数据、透明标注依据，不编分。核心理念——"覆盖≠掌握，北大区分度在深度与均衡"：
  *   - 章节识别：优先按《考试分析》官方【章节标题】匹配官方章号（治"云的章号≠官方章号"），退回解析"第X章"数字（封顶总章数）。
  *   - 能力台阶：每章按经历的台阶累积——听课=输入(in) / 做题·复盘=检验(test) / 背诵·带背=输出(out)。
  *     （复盘＝最高频活动，v2 里被丢弃，v3 计入"检验"台阶；带背仍计入"输出"。）
- *   - 各科能力（四维·北大严标准）= 广度0.25 + 深度0.20 + 背诵0.25 + 闭环0.30（无错题→前三维重归一化到0.70）：
- *       · 广度 = 覆盖章/总章（"听过"权重从 v2 的 0.45 砍到 0.25，不虚高）
- *       · 深度 = 已覆盖章平均台阶厚度/3（3 台阶=输入→检验→输出全走过=吃透）
- *       · 背诵 = 有"输出"台阶的章/总章
- *       · 闭环 = 闭环率 ×(1−0.5×重犯率)（同一知识点反复错=没真懂，扣分）
+ *
+ * 【铁律一】覆盖型维度（广度/深度/背诵）分母恒为「总章数」，绝不许用「已覆盖章」当分母。
+ *   缺证据时自然趋 0，不需要任何兜底。否则"只听 1 章"会被算成"平均厚度 33%"这种虚高。
+ * 【铁律二】比率型维度（闭环率/正确率）不许当加分项，只能当乘法折扣系数作用在实体分上；
+ *   且必须平滑（+K 条虚拟"未销账"观测）、保守锚取 0（未登记的错题一律按未销账算）。
+ *   掌握度 = 覆盖 × 质量，本就是乘法；加法允许"覆盖满分＋质量为零"仍拿 70 分，荒谬。
+ *   保守锚令「瞒报错题必亏」在数学上成立，于是不再需要任何借来的先验。
+ * 新增维度一律照这两条办。四条性质测试（dashboard.test.ts）钉死它们，改公式必须先跑绿。
+ *
+ *   - 各科能力 = 实体分 × 质量系数：
+ *       实体分 = (广度0.25 + 深度0.20 + 背诵0.25)/0.70 ×100
+ *         · 广度 = 覆盖章/总章   · 深度 = Σmin(台阶,3)/3 / 总章   · 背诵 = 有"输出"台阶的章/总章
+ *       质量系数 = 0.5 + 0.5×闭环质量，闭环质量 = 已吸收/(已见+K) ×(1−0.5×重犯率)
+ *         （下限 0.5＝错题全不销账最多打对折，不归零：覆盖本身在考场上有分。
+ *           副产品：登记未销账错题不掉分、销账才涨分——不再惩罚诚实记录。）
+ *     由 深度≤广度、背诵≤广度 ⇒ 实体分 ≤ 100×广度 ⇒ 能力 ≤ 100×广度 **结构性成立**：
+ *     只摸过 5% 的章，哪怕这 5% 吃得透透的，对整科的掌握度也不可能超 5%。数学上界，非启发式。
  *   - 专业课指数 = 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）。
- *   - 英语能力（2026-07-10 接入·云拍板计入综合）：章节四维不适用（无章节底座），改用英语自己的四维——
- *       读准0.45（近8篇阅读 accuracy 均值·75+过关线=稳80）+ 节奏0.20（近14天篇数/4 封顶）
- *       + 作文0.20（近30天作文篇数/2 封顶·零准备是真实短板）+ 闭环0.15（同专业课口径；无错题重归一化）。
+ *   - 英语能力（2026-07-10 接入·云拍板计入综合）：无覆盖底座，铁律二不适用（读准是"水平"本身、
+ *       不是质量折扣），仍用加权四维——读准0.45（近8篇均值 × 样本闸 min(1,篇数/4)·75+过关线=稳80）
+ *       + 节奏0.20（近14天篇数/4 封顶）+ 作文0.20（近30天篇数/2 封顶）+ 闭环0.15（同保守平滑）。
  *   - 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（按分值 300:100；政治不追踪不计入）。
  *     英语刚启动无数据时能力≈0 会拉低综合——这是严标准设计（只认账本行为），刷起来即回升。
+ *
+ * —— 口径变更日志（改公式必须在此留痕；断点前后的历史评估报告/周报分数不可比）——
+ *   v3.0 2026-07-07 建。
+ *   v3.1 2026-07-26 根治「缺证据时默认给分」这一类失效（同一失效模式第 4 次现形，故改为立铁律+性质测试）：
+ *     ① 深度分母 已覆盖章 → 总章。原口径下民法只听 1 章、深度即 33%；且"多听一章新课反而掉分"
+ *        （某科 5 章满台阶再听第 6 章：广度 +1.25 分、深度 100→88.9 扣 2.22 分，净 −1）。
+ *     ② 闭环从加分项改为乘法折扣系数，删除 closurePrior（借他科闭环率当先验）。原口径下民法能力
+ *        20 分里 11.9 分是借来的——刑法多登记 2 道错题，民法一节课没上也跟着掉 1 分；且法理把 12 条
+ *        错题全删掉，能力反涨 2 分（58→60），说明 7-22 堵的"不记错题反而赚"并没堵死。
+ *     ③ 英语读准加样本闸。原口径下第 1 篇阅读拿 80%，英语能力当场 41 分。
  */
 
 export interface SubjectStat {
@@ -28,13 +50,14 @@ export interface SubjectStat {
   total: number;       // 官方总章数
   covered: number;     // 触及章数（听课/做题/背诵/带背/复盘任一台阶）
   progress: number;    // 广度 covered/total ×100
-  depth: number;       // 深度：已覆盖章平均经历的能力台阶(输入→检验→输出)厚度 ×100
+  depth: number;       // 深度：Σmin(台阶,3)/3 / total ×100（铁律一：分母恒为总章，不是已覆盖章）
   recitePct: number;   // 背诵密度：有"输出(背诵)"台阶的章 / total ×100
   open: number;        // 未闭环错题数
   absorbed: number;    // 已吸收错题数
   repeat: number;      // 重犯错题条数（同一知识点反复错）
-  closure: number | null; // 错题闭环健康度（闭环率×重犯惩罚）×100，无错题=null
-  ability: number;     // 各科能力分 0-100（北大严标准四维加权）
+  closure: number | null; // 错题闭环健康度实测值（闭环率×重犯惩罚）×100，无错题=null（仅供展示）
+  quality: number;     // 质量系数 ×100（铁律二：实际乘在实体分上的那个数，50-100）
+  ability: number;     // 各科能力分 0-100 = 实体分 × 质量系数
 }
 
 export interface EnglishStat {
@@ -67,6 +90,64 @@ const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const TOTAL_CH: Record<string, number> = { 刑法: 21, 民法: 21, 法理: 13, 宪法: 5, 法制史: 7 };
 const WEIGHT: Record<string, number> = { 刑法: 75, 民法: 75, 法理: 60, 宪法: 50, 法制史: 40 };
+
+// —— 铁律二的两个常数 ——
+const SMOOTH_K = 5;        // 平滑：+5 条虚拟"未销账"观测。样本极小时不给极端值（1 条错题不该决定一科死活）
+const QUALITY_FLOOR = 0.5; // 质量系数下限：错题全不销账最多打对折，不归零
+const READ_MIN_N = 4;      // 英语读准的样本闸：不足 4 篇按比例打折
+
+/** 闭环质量 0-1（铁律二：平滑 + 保守锚 0 + 重犯惩罚）。零错题 → 0，因此瞒报必亏。 */
+function closureQuality(open: number, absorbed: number, repeat: number): number {
+  const seen = open + absorbed;
+  return (absorbed / (seen + SMOOTH_K)) * (seen > 0 ? 1 - 0.5 * (repeat / seen) : 1);
+}
+
+/**
+ * 各科能力打分（纯函数）。性质测试直接打这里 —— 改动前先让 dashboard.test.ts 跑绿。
+ * chapSteps: 每个已覆盖章走过的台阶数(1..3)；outChapters: 其中有"输出(背诵)"台阶的章数。
+ */
+export function scoreSubject(ev: {
+  total: number;
+  chapSteps: number[];
+  outChapters: number;
+  open: number;
+  absorbed: number;
+  repeat: number;
+}): Omit<SubjectStat, "subject" | "weight" | "total"> {
+  const covered = ev.chapSteps.length;
+  // 铁律一：三维分母恒为 total
+  const progress = Math.round((covered / ev.total) * 100);
+  const recitePct = Math.round((ev.outChapters / ev.total) * 100);
+  const depthSum = ev.chapSteps.reduce((a, s) => a + Math.min(s, 3) / 3, 0);
+  const depth = Math.round((depthSum / ev.total) * 100);
+  const seen = ev.open + ev.absorbed;
+  const closure = seen > 0 ? Math.round((ev.absorbed / seen) * (1 - 0.5 * (ev.repeat / seen)) * 100) : null;
+  // 铁律二：闭环只作乘法折扣，不加分
+  const quality = Math.round((QUALITY_FLOOR + (1 - QUALITY_FLOOR) * closureQuality(ev.open, ev.absorbed, ev.repeat)) * 100);
+  const substance = ((0.25 * progress + 0.20 * depth + 0.25 * recitePct) / 0.70);
+  const ability = Math.round(substance * (quality / 100));
+  return { covered, progress, depth, recitePct, open: ev.open, absorbed: ev.absorbed, repeat: ev.repeat, closure, quality, ability };
+}
+
+/** 英语能力打分（纯函数）。无覆盖底座 → 仍是加权四维，但读准过样本闸、闭环用同一条保守平滑。 */
+export function scoreEnglish(ev: {
+  accs: number[]; // 近 8 篇阅读正确率 0-100（已排除作文）
+  papers14d: number;
+  essays30d: number;
+  open: number;
+  absorbed: number;
+  repeat: number;
+}): EnglishStat {
+  const reading = ev.accs.length > 0 ? Math.round(ev.accs.reduce((a, b) => a + b, 0) / ev.accs.length) : null;
+  const seen = ev.open + ev.absorbed;
+  const closure = seen > 0 ? Math.round((ev.absorbed / seen) * (1 - 0.5 * (ev.repeat / seen)) * 100) : null;
+  const eR = ((reading ?? 0) / 100) * Math.min(1, ev.accs.length / READ_MIN_N); // 样本闸
+  const eP = Math.min(1, ev.papers14d / 4);
+  const eW = Math.min(1, ev.essays30d / 2);
+  const eC = closureQuality(ev.open, ev.absorbed, ev.repeat);
+  const ability = Math.round(100 * (0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC));
+  return { ability, reading, papers14d: ev.papers14d, essays30d: ev.essays30d, open: ev.open, absorbed: ev.absorbed, closure };
+}
 
 // —— 解析《考试分析》知识架构 → {科目: [{num, keys:[章标题, ...节标题]}]}（供按标题匹配官方章号）——
 const OUTLINE: Record<string, { num: number; keys: string[] }[]> = (() => {
@@ -157,6 +238,11 @@ export async function getDashboard(): Promise<DashboardData> {
   const byType: Record<string, number> = {};
   for (const e of eventsPending.data ?? []) byType[e.type] = (byType[e.type] ?? 0) + 1;
 
+  // 查询失败时 supabase-js 只在 .error 里报，data 为 null。原先直接 ?? [] 吞掉 ——
+  // 结果是"数据库连不上"和"一条记录都没有"在页面上长得一模一样（全科未启动、综合 0 分）。
+  // 这与本文件"不编分"的原则冲突：读不到数据就该喊，而不是渲染一个假的零。
+  if (allLog.error) console.error("[dashboard] study_log 查询失败（能力分会偏低）:", allLog.error.message);
+  if (allErr.error) console.error("[dashboard] study_error 查询失败（闭环质量会偏低）:", allErr.error.message);
   const logs = allLog.data ?? [];
   const errs = allErr.data ?? [];
 
@@ -211,40 +297,19 @@ export async function getDashboard(): Promise<DashboardData> {
     errBy.set(s, e);
   }
 
-  // 闭环先验（2026-07-22）：某科「有学习记录但一条错题都没登记」时，闭环无法实测，必须给个先验。
-  // 三种选法里挑最客观的一种：
-  //   ✗ 旧法 (0.25B+0.20D+0.25R)/0.70 —— 数学上等于"假设闭环≈该科其他三维的均值"。循环自证，
-  //     且在真实闭环低于其他三维时**不登记错题反而得分更高**（刑法实测 60 vs 56）。
-  //   ✗ 拍一个常数 0.5 —— 对到处都弱的科反成奖励（模拟：广度30/深度40/背诵20 由 29 涨到 36）。
-  //   ✓ 用云自己**已实测科目的合并闭环率**当经验先验（empirical prior）：不循环、不拍脑袋、随他
-  //     真实表现自更新。全库一条错题都没有时退回 0.5。
-  const pooled = [...errBy.values()].reduce((a, e) => ({ absorbed: a.absorbed + e.absorbed, seen: a.seen + e.open + e.absorbed, repeat: a.repeat + e.repeat }), { absorbed: 0, seen: 0, repeat: 0 });
-  const closurePrior = pooled.seen > 0
-    ? (pooled.absorbed / pooled.seen) * (1 - 0.5 * (pooled.repeat / pooled.seen))
-    : 0.5;
-
+  // 2026-07-26 删除 closurePrior（借他科闭环率当先验）：它让某科的分随别科的错题数漂移，
+  // 且真实闭环低于先验的科「瞒报反而涨分」。铁律二的保守锚 0 直接消灭了先验这个概念。
   const subjects: SubjectStat[] = SUBJECTS.map((s) => {
     const total = TOTAL_CH[s];
     const chapMap = stepsBy.get(s) ?? new Map<number, Set<string>>();
-    const covered = chapMap.size;
-    const progress = Math.round((covered / total) * 100);
-    const outChs = [...chapMap.values()].filter((set) => set.has("out")).length;
-    const recitePct = Math.round((outChs / total) * 100);
-    let depthSum = 0;
-    for (const set of chapMap.values()) depthSum += Math.min(set.size, 3) / 3; // 3 台阶(输入→检验→输出)全走过=吃透
-    const depth = covered > 0 ? Math.round((depthSum / covered) * 100) : 0;
     const e = errBy.get(s) ?? { open: 0, absorbed: 0, repeat: 0 };
-    const seen = e.open + e.absorbed;
-    const closure = seen > 0 ? Math.round((e.absorbed / seen) * (1 - 0.5 * (e.repeat / seen)) * 100) : null;
-    // 各科能力（北大严标准）= 广度0.25 + 深度0.20 + 背诵0.25 + 闭环0.30
-    // 2026-07-22 堵洞（详见上方 closurePrior 注释）：
-    //   · 有错题实测 → 用实测闭环
-    //   · 有学习记录但零错题 → 用云自己已实测科目的合并闭环率作经验先验
-    //   · 零学习记录（未开张）→ 0，四维全 0，能力 0（不因"没错题"凭空得分）
-    const B = progress / 100, D = depth / 100, R = recitePct / 100;
-    const C = closure != null ? closure / 100 : (covered > 0 ? closurePrior : 0);
-    const ability = Math.round(100 * (0.25 * B + 0.20 * D + 0.25 * R + 0.30 * C));
-    return { subject: s, weight: WEIGHT[s], total, covered, progress, depth, recitePct, open: e.open, absorbed: e.absorbed, repeat: e.repeat, closure, ability };
+    const scored = scoreSubject({
+      total,
+      chapSteps: [...chapMap.values()].map((set) => set.size),
+      outChapters: [...chapMap.values()].filter((set) => set.has("out")).length,
+      ...e,
+    });
+    return { subject: s, weight: WEIGHT[s], total, ...scored };
   });
 
   // 专业课指数（北大严标准）= 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）
@@ -257,24 +322,16 @@ export async function getDashboard(): Promise<DashboardData> {
   // —— 英语能力（无章节底座 → 英语自己的四维；口径见文件头注释）——
   const enLogs = logs.filter((r) => r.subject === "英语");
   const accs = enLogs.filter((r) => r.accuracy != null && !/作文/.test(String(r.chapter ?? ""))).slice(0, 8).map((r) => Number(r.accuracy));
-  const reading = accs.length > 0 ? Math.round(accs.reduce((a, b) => a + b, 0) / accs.length) : null;
   const d14 = bjDateStr(new Date(now.getTime() - 14 * DAY)), d30 = bjDateStr(new Date(now.getTime() - 30 * DAY));
   // 2026-07-22：papers14d 原本数「近14天所有英语日志」，没排作文——而 essays30d 排了非作文，
   // 两边口径不一致：一周写 4 篇作文就能把"阅读节奏"顶满格。这里改为只数非作文（＝阅读篇数）。
   const papers14d = enLogs.filter((r) => String(r.log_date) >= d14 && !/作文/.test(String(r.chapter ?? ""))).length;
   const essays30d = enLogs.filter((r) => String(r.log_date) >= d30 && /作文/.test(String(r.chapter ?? ""))).length;
   const enErr = errBy.get("英语") ?? { open: 0, absorbed: 0, repeat: 0 };
-  const enSeen = enErr.open + enErr.absorbed;
-  const enClosure = enSeen > 0 ? Math.round((enErr.absorbed / enSeen) * (1 - 0.5 * (enErr.repeat / enSeen)) * 100) : null;
-  // 闭环维同专业课口径（2026-07-22）：有学习记录但零错题→用同一条经验先验，零记录→0。
-  // 原「无错题 → /0.85 重归一化」同样是"不记错题反而赚"。
-  const eR = (reading ?? 0) / 100, eP = Math.min(1, papers14d / 4), eW = Math.min(1, essays30d / 2);
-  const eC = enClosure != null ? enClosure / 100 : (enLogs.length > 0 ? closurePrior : 0);
-  const englishAbility = Math.round(100 * (0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC));
-  const english: EnglishStat = { ability: englishAbility, reading, papers14d, essays30d, open: enErr.open, absorbed: enErr.absorbed, closure: enClosure };
+  const english = scoreEnglish({ accs, papers14d, essays30d, ...enErr });
 
   // 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（分值 300:100；政治不追踪。2026-07-10 云拍板英语计入）
-  const index = Math.round(0.75 * proIndex + 0.25 * englishAbility);
+  const index = Math.round(0.75 * proIndex + 0.25 * english.ability);
 
   const openAgg = new Map<string, ErrorItem>();
   for (const r of errs) {

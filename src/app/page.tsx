@@ -95,7 +95,7 @@ export default async function DashboardPage() {
               <span className="flex-1 text-[11px] tabular-nums text-label3">
                 {s.covered + s.open + s.absorbed === 0
                   ? "未启动"
-                  : `覆${s.progress} 深${s.depth} 背${s.recitePct} 环${s.closure != null ? s.closure : "—"}`}
+                  : `覆${s.progress} 深${s.depth} 背${s.recitePct} 环${s.closure != null ? s.closure : "—"} 质${s.quality}`}
               </span>
             </div>
           ))}
