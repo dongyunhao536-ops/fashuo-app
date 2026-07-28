@@ -5,7 +5,6 @@
 // 事实源与 src/lib/weekly-review.ts 完全对齐（同口径），叙事零编造只据真实数据。
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
 
 const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAY = 86400000;

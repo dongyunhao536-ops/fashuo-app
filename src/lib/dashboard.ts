@@ -214,7 +214,7 @@ function detectChapters(subject: string, text: string, raw?: string | null): Set
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
       const t = m[1];
-      let n: number | null = /^[0-9]+$/.test(t) ? parseInt(t, 10) : t === "十" ? 10 : t.startsWith("二十") ? (t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1) : t.startsWith("十") ? 10 + CN.indexOf(t[1]) + 1 : CN.indexOf(t) + 1;
+      const n: number | null = /^[0-9]+$/.test(t) ? parseInt(t, 10) : t === "十" ? 10 : t.startsWith("二十") ? (t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1) : t.startsWith("十") ? 10 + CN.indexOf(t[1]) + 1 : CN.indexOf(t) + 1;
       if (n && n >= 1 && n <= total) found.add(n);
     }
     if (found.size === 0 && /绪论/.test(text)) found.add(1);

@@ -41,7 +41,7 @@ if (!Number.isFinite(years) || years < 1) {
 let secret;
 try {
   secret = readFileSync("/etc/fashuo-jwt-secret", "utf8").trim();
-} catch (e) {
+} catch {
   console.error("读不到 /etc/fashuo-jwt-secret —— 先跑 03-postgrest-install.sh");
   process.exit(1);
 }

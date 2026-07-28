@@ -13,6 +13,12 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  // .cjs 就是 CommonJS：pm2 用 require 加载 deploy/ecosystem.config.cjs，
+  // 改成 import 会直接起不来。禁 require 这条规则对该扩展名不适用，不是给它开后门。
+  {
+    files: ["**/*.cjs"],
+    rules: { "@typescript-eslint/no-require-imports": "off" },
+  },
 ]);
 
 export default eslintConfig;
