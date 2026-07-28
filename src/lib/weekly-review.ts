@@ -31,7 +31,9 @@ export interface WeeklyReview {
 
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 // "学了什么" 只认这几类【实打实学习动作】——含带背(PC辅导带背，云 2026-07-07 要求计入)；把闲聊/被考(复盘)/策略讨论(其他)/未识别排除。
-const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵", "带背"]);
+// 2026-07-28 补「复盘」：量化 v3 已把复盘计入"检验"台阶（见 dashboard.ts 文件头），
+// 这里却还停在 v2 的旧白名单，导致云最高频的动作（销账/讲解）在「本周学了什么」里整块消失。
+const STUDY_ACTIVITIES = new Set(["听课", "做题", "背诵", "带背", "复盘"]);
 
 export async function buildWeeklyReview(today = new Date()): Promise<WeeklyReview> {
   // 自然周窗口（云 2026-07-01）：北京时间本周一 ~ 周日，不再滚动最近 7 天。
