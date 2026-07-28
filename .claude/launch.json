@@ -4,13 +4,28 @@
     {
       "name": "fashuo",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "start"],
+      "runtimeArgs": [
+        "run",
+        "start"
+      ],
       "port": 3000
     },
     {
       "name": "fashuo-dev",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 3000
+    },
+    {
+      "name": "fashuo-dev-tls",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": [
+        "run",
+        "dev:tls"
+      ],
       "port": 3000
     }
   ]

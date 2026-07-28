@@ -80,6 +80,8 @@ export interface DashboardData {
   today: { studied: { subject: string; chapter: string | null; activity: string }[]; absorbed: number };
   week: { absorbed: number; logs: number };
   top5: ErrorItem[];
+  /** 首页「日报」栏摘要行：最新一份日报的靶心句（当天的没出就退回派单）。纯展示，不入量化。 */
+  daily: string | null;
 }
 
 // 2026-07-22 订正：原 2026-12-21 是【周一】，初试不可能在周一。12-19=周六，与云"距考 150 天"吻合。
@@ -225,12 +227,15 @@ export async function getDashboard(): Promise<DashboardData> {
   const todayStr = bjDateStr(now);
   const weekStart = bjWeekMonday(now);
 
-  const [askLatest, askCount, eventsPending, allLog, allErr] = await Promise.all([
+  const [askLatest, askCount, eventsPending, allLog, allErr, dailyLatest] = await Promise.all([
     supabaseAdmin.from("ask_summary").select("confusion").eq("status", "open").order("created_at", { ascending: false }).limit(1),
     supabaseAdmin.from("ask_summary").select("*", { count: "exact", head: true }).eq("status", "open"),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
     supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date, raw_input").order("log_date", { ascending: false }).limit(1000),
     supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).limit(3000),
+    // 日报只取最新一条的靶心句/派单，给首页「日报」栏当摘要行（2026-07-28）。
+    // 不参与任何量化计算——量化 v3 的口径别因为加了个展示字段被动过（见记忆 today-quant-v3-beida）。
+    supabaseAdmin.from("daily_report").select("report_date, headline, dispatch").order("report_date", { ascending: false }).limit(1),
   ]);
 
   const daysLeft = Math.max(0, Math.ceil((new Date(EXAM_DATE).getTime() - now.getTime()) / DAY));
@@ -356,5 +361,14 @@ export async function getDashboard(): Promise<DashboardData> {
     today: { studied, absorbed: todayAbsorbed },
     week: { absorbed: weekAbsorbed, logs: weekLogs },
     top5: openItems.slice(0, 5),
+    daily: (() => {
+      const r = dailyLatest.data?.[0];
+      if (!r) return null;
+      const body = r.headline ?? r.dispatch ?? null;
+      if (!body) return null;
+      // 不是今天的就标出来——日报靠电脑端 17:20 定时出，没开机会顺延，
+      // 首页不能让昨天的结论看起来像今天的（见记忆 report-fake-numbers）。
+      return String(r.report_date) === todayStr ? body : `${String(r.report_date).slice(5)}：${body}`;
+    })(),
   };
 }

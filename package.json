@@ -13,7 +13,8 @@
     "register": "node --env-file=.env.local scripts/register-events.mjs",
     "register:full": "node --env-file=.env.local scripts/register-full.mjs",
     "cost": "node --env-file=.env.local scripts/cost-report.mjs",
-    "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs"
+    "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs",
+    "dev:tls": "node --import=./scripts/lib/trust-fashuo-ca.mjs ./node_modules/next/dist/bin/next dev"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.101.0",

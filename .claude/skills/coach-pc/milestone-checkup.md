@@ -22,6 +22,7 @@
    `node --env-file=.env.local node_modules/jiti/lib/jiti-cli.mjs .local/_tijian.ts` 跑，**跑完删掉临时文件**。
    打印每科：能力 / 广度(covered/total) / 深度 / 背诵 / 闭环 / 重犯；以及 overall 的 balanced、proIndex、index、english。
 3. Read `.local/复盘排期.md`（排期唯一事实源）、`.local/带背挂账.md`（背诵栽点）、`.local/weekly-draft.md`（最近一版周报指导）。
+3b. **Read `.local/日报台账.md`（2026-07-28 起接线·到天的执行证据）** —— 上一关口至今的**派单执行率**（派了多少、落了多少、哪几件反复派反复欠）与**断档链**（最长连续零流水段、分科/分轨最后一次）。第四步"处方执行率"这项硬指标**必须拿它对账**，别再只凭周报自述——周报是自己写的，台账是每天当场记的。
 4. Read `config/coach.json`：轮次表、双轨节奏（含保守周时数）、红线、模拟分记录、里程碑.已完成。
 
 ## 第二步 · 出体检报告（四真：真实 · 客观 · 科学 · 可执行）

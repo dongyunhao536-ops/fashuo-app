@@ -148,6 +148,9 @@ export default async function DashboardPage() {
       <div>
         <h2 className="sec-title px-5 pb-2 text-[13px] font-medium text-label2">快捷入口</h2>
         <section className="card mx-4 divide-y divide-hairline overflow-hidden rounded-[14px]">
+          <Entry href="/daily" tone="orange" title="日报" sub={d.daily ?? "电脑端每天 17:20 出 · 结算昨天 + 派今晚"}>
+            <path d="M6 3h12a1 1 0 011 1v16a1 1 0 01-1 1H6a1 1 0 01-1-1V4a1 1 0 011-1zM9 8h6M9 12h6M9 16h3" strokeLinejoin="round" strokeLinecap="round" />
+          </Entry>
           <Entry href="/errors" tone="orange" title="错题本" sub={d.top5[0] ? `${d.top5[0].subject ?? ""}·${d.top5[0].knowledge}`.slice(0, 22) : "空——说「记进错题本」才进来"} badge={d.coach.openErrors}>
             <path d="M5 4h11l3 3v13a1 1 0 01-1 1H5a1 1 0 01-1-1V5a1 1 0 011-1zM8 10h8M8 14h5" strokeLinejoin="round" strokeLinecap="round" />
           </Entry>
