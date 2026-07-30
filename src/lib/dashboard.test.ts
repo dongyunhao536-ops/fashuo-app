@@ -87,12 +87,33 @@ describe("P3 反瞒报：删光某科错题不得涨分（7-22 那次没堵死�
     expect(scoreSubject({ ...ev, open: 0, absorbed: 0, repeat: 0 }).ability).toBeLessThan(scoreSubject(ev).ability);
   });
 
-  it("登记未销账的错题不掉分、销账才涨分（不惩罚诚实记录）", () => {
+  it("登记未销账的错题不掉分、销账才涨分——【仅当该科还没有任何销账记录时】（absorbed=0）", () => {
     const base: Ev = { total: 21, chapSteps: [3, 2, 2, 1], outChapters: 2, open: 0, absorbed: 0, repeat: 0 };
     const logged = scoreSubject({ ...base, open: 3 });
     const closed = scoreSubject({ ...base, absorbed: 3 });
     expect(logged.ability).toBe(scoreSubject(base).ability);
     expect(closed.ability).toBeGreaterThan(logged.ability);
+  });
+
+  // —— P3-c（2026-07-31 补·起因：上面那条测试只覆盖 absorbed=0，害得头注写下「登记未销账不掉分」这句
+  //    在 absorbed>0 时并不成立的假不变量，云问"综合指数是不是虚低"时才查出来）——
+  it("P3-c 方向：多登记一条错题永远不会让能力上升（否则会变成刷假错题赚分）", () => {
+    const r = rng(20260731);
+    for (let i = 0; i < SAMPLES; i++) {
+      const ev = randomEv(r);
+      expect(scoreSubject({ ...ev, open: ev.open + 1 }).ability, JSON.stringify(ev)).toBeLessThanOrEqual(scoreSubject(ev).ability);
+    }
+  });
+
+  it("P3-c 上界：absorbed>0 时诚实登记确实有代价（诚实税），但云当前形状下不得超过 12 能力分", () => {
+    // 云 2026-07-30 实况形状（跑 dashboard 拿的真值：刑法 open25/absorbed27/repeat5、法理 open13/absorbed4）
+    const 刑法: Ev = { total: 21, chapSteps: [...Array(21)].map((_, i) => (i < 12 ? 3 : i < 17 ? 2 : 1)), outChapters: 6, open: 25, absorbed: 27, repeat: 5 };
+    const 法理: Ev = { total: 13, chapSteps: [3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1], outChapters: 10, open: 13, absorbed: 4, repeat: 0 };
+    for (const ev of [刑法, 法理]) {
+      const tax = scoreSubject({ ...ev, open: 0 }).ability - scoreSubject(ev).ability;
+      expect(tax, `诚实税 ${tax} 分 @ ${JSON.stringify(ev)}`).toBeGreaterThan(0);   // 事实：它存在，别再写成"不掉分"
+      expect(tax, `诚实税 ${tax} 分 @ ${JSON.stringify(ev)}`).toBeLessThanOrEqual(12); // 红线：调 SMOOTH_K/QUALITY_FLOOR 放大它就报警
+    }
   });
 });
 
