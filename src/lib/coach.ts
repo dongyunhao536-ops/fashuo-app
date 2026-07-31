@@ -41,7 +41,7 @@ const DAY = 86400000;
 const daysBetween = (a: Date, b: Date) => Math.ceil((a.getTime() - b.getTime()) / DAY);
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const ACTIVITIES = ["听课", "做题", "背诵", "复盘", "其他"];
+const ACTIVITIES = ["听课", "看书", "做题", "背诵", "复盘", "其他"]; // 「看书」2026-07-31 补：自学看书与听课同属输入台阶，缺档会被降级成"其他"
 
 /** 机器块标记（路由据此抽取并从展示文本剥离，仿 ask-prompt 的 ASK_META） */
 export const COACH_META_OPEN = "<<<COACH_META";

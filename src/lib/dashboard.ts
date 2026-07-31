@@ -280,11 +280,13 @@ export async function getDashboard(): Promise<DashboardData> {
   const todayAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= todayTs).length;
   const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
-  // —— 各科能力台阶（四维之源）：每章按经历的台阶累积 听课=输入(in) / 做题·复盘=检验(test) / 背诵·带背=输出(out)。
+  // —— 各科能力台阶（四维之源）：每章按经历的台阶累积 听课·看书=输入(in) / 做题·复盘=检验(test) / 背诵·带背=输出(out)。
   //    复盘(最高频活动)与带背首次纳入——检验/输出是"吃透"的量化，非"听过=会了"。
+  //    2026-07-31 补「看书」：云自学看书与听网课同属输入台阶，但此前无此档、只能塞进「听课」记假账
+  //    （云当日点名"我说了是看书你怎么改成听课"）。两者同映射 in，指标不变、标签变真。
   const stepsBy = new Map<string, Map<number, Set<string>>>();
   const stepOf = (act: string): "in" | "test" | "out" | null =>
-    act === "听课" ? "in" : act === "做题" || act === "复盘" ? "test" : act === "背诵" || act === "带背" ? "out" : null;
+    act === "听课" || act === "看书" ? "in" : act === "做题" || act === "复盘" ? "test" : act === "背诵" || act === "带背" ? "out" : null;
   for (const r of logs) {
     const subj = r.subject as string;
     const ch = r.chapter as string | null;

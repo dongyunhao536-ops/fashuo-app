@@ -78,7 +78,7 @@ create table if not exists study_log (
   log_date     date not null default current_date,
   subject      text not null,
   chapter      text,
-  activity     text not null,             -- 听课/做题/背诵/复盘
+  activity     text not null,             -- 听课/看书/做题/背诵/带背/复盘（看书 2026-07-31 补：自学看书=输入台阶，与听课同映射）
   minutes      int,
   accuracy     real,                      -- 做题正确率（可空）
   feeling      text,                      -- 自评感受
