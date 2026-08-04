@@ -1,6 +1,7 @@
 import {
   AUTH_COOKIE,
   AUTH_MAX_AGE,
+  authConfigured,
   authDisabled,
   expectedToken,
 } from "@/lib/auth-edge";
@@ -34,6 +35,9 @@ function setCookieHeader(value: string, maxAge: number, secure: boolean): string
 export async function POST(req: Request) {
   if (authDisabled()) {
     return Response.json({ ok: true, note: "鉴权未启用（APP_PASSWORD 仍为默认）" });
+  }
+  if (!authConfigured()) {
+    return Response.json({ error: "服务端鉴权未正确配置" }, { status: 503 });
   }
 
   let body: { password?: string };

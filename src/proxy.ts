@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
-import { AUTH_COOKIE, authDisabled, expectedToken } from "@/lib/auth-edge";
+import { AUTH_COOKIE, authDisabled, isTokenValid } from "@/lib/auth-edge";
 
 /**
  * 全站统一鉴权网关（Next 16 proxy 约定，取代原先 7 个路由各自的 checkAuth）。
@@ -33,7 +33,7 @@ export async function proxy(req: NextRequest) {
   }
 
   const token = req.cookies.get(AUTH_COOKIE)?.value;
-  if (token && token === (await expectedToken())) {
+  if (await isTokenValid(token)) {
     return NextResponse.next();
   }
 

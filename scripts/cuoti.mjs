@@ -1,8 +1,8 @@
 // node --env-file=.env.local scripts/cuoti.mjs <命令> [参数]
 // 错题复盘·出题考核的数据管道（电脑端 skill「cuoti-fupan」专用）。
 //
-// 数据同步纪律（云 2026-07-05 拍板）：复盘产生的写操作（销账/新错题）【先记本地缓冲，不直接落库】；
-// 云说"同步"才 `sync` 一起提交到系统（Supabase 错题本，APP 实时读库、无需重新部署）。
+// 数据同步纪律（2026-08-04 收口）：复盘写操作先进入本地 outbox，再立即尝试同步；
+// 网络/数据库失败时只保留失败项，下一次写操作或 `sync` 自动重试。显式 `--stage` 才只暂存。
 // 出题/判题由电脑端的我=Opus 直接做，不调 APP 的付费 API、不受 ¥1.5/轮预算约束。
 //
 // 只读命令（随时可跑）：
@@ -10,16 +10,21 @@
 //   material <词> [特征词]  —— 在 教材/做题心得/讲义心得/易混库/真题 里检索出题弹药（带行号锚点）
 //   recheck                —— 列销账 5-60 天的旧账，突袭抽查名单
 // 写操作（先进本地缓冲 .local/cuoti-pending.jsonl）：
-//   absorb <id...>         —— 暂存销账（云确认掌握后）；也可 absorb --like <片段> [--subject 刑法]
-//   add <科目> <知识点...>  —— 暂存一条新错题（复盘中发现的新漏洞）
+//   absorb <id...>         —— 销账（云确认掌握后）；也可 absorb --like <片段> [--subject 刑法]
+//   add <科目> <知识点...>  —— 新增一条错题（复盘中发现的新漏洞）
 //   pending [--clear]      —— 查看待同步缓冲；--clear 清空
-//   sync [--dry]           —— 云说"同步"时：把缓冲一次落库到系统；--dry 只预览不写
+//   sync [--dry]           —— 重试 outbox；--dry 只预览不写。写命令加 --stage 可显式延后
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync, appendFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import {
+  appendOutbox,
+  readOutbox,
+  syncStudyOutbox,
+  writeOutbox,
+} from "./lib/study-outbox.mjs";
 
 const db = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY,
   { auth: { persistSession: false } },
 );
@@ -32,17 +37,13 @@ const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // �
 
 // ---------- 本地待同步缓冲 ----------
 function readPending() {
-  if (!existsSync(PENDING)) return [];
-  return readFileSync(PENDING, "utf8").split("\n").filter(Boolean).map((l) => {
-    try { return JSON.parse(l); } catch { return null; }
-  }).filter(Boolean);
+  return readOutbox(PENDING);
 }
 function appendPending(op) {
-  mkdirSync(dirname(PENDING), { recursive: true });
-  appendFileSync(PENDING, JSON.stringify({ ...op, ts: new Date().toISOString() }) + "\n");
+  return appendOutbox(PENDING, op);
 }
 function clearPending() {
-  if (existsSync(PENDING)) writeFileSync(PENDING, "");
+  writeOutbox(PENDING, []);
 }
 
 // ---------- 老错题抽查·本地轮换台账（只记每条"上次抽查时间/次数"，纯本地调度元数据，
@@ -99,7 +100,7 @@ async function list(subject) {
   }
   if (!rows.length) console.log("（错题本是空的——没有待复盘的错题）");
   const pend = readPending();
-  if (pend.length) console.log(`\n⏳ 本地缓冲有 ${pend.length} 条待同步（未落库）——跑 pending 看，云说"同步"再 sync。`);
+  if (pend.length) console.log(`\n⚠️ outbox 有 ${pend.length} 条上次同步失败/显式暂存的操作——跑 pending 查看、sync 重试。`);
 }
 
 // ---------- material：出题弹药检索 ----------
@@ -179,6 +180,8 @@ async function material(keyword, refine) {
 
 // ---------- absorb：暂存销账到本地缓冲 ----------
 async function absorb(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
   if (rest[0] === "--like") {
     const like = rest[1];
     if (!like) return fail('absorb --like 需要片段，如：absorb --like 盗窃既遂 --subject 刑法');
@@ -192,7 +195,8 @@ async function absorb(rest) {
     appendPending({ op: "absorb", ids: hit.map((r) => r.id), note: `模糊「${like}」`, items: hit.map((r) => `[${r.subject ?? "?"}] ${String(r.knowledge).slice(0, 50)}`) });
     console.log(`⏳ 已暂存待同步·销账 ${hit.length} 条（模糊「${like}」）：`);
     for (const r of hit) console.log(`   #${r.id} [${r.subject ?? "?"}] ${String(r.knowledge).slice(0, 60)}`);
-    return console.log(`（未落库，云说"同步"再 sync）`);
+    if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+    return sync([]);
   }
   const ids = rest.map(Number).filter((n) => Number.isInteger(n) && n > 0);
   if (!ids.length) return fail("absorb 需要错题 id（见 list），如：absorb 22  或  absorb --like 片段");
@@ -205,14 +209,17 @@ async function absorb(rest) {
   console.log(`⏳ 已暂存待同步·销账 ${openRows.length} 条：`);
   for (const r of openRows) console.log(`   #${r.id} [${r.subject ?? "?"}] ${String(r.knowledge).slice(0, 60)}`);
   if (notOpen.length) console.log(`（跳过非 open/不存在：${notOpen.map((x) => "#" + x).join(" ")}）`);
-  console.log(`（未落库，云说"同步"再 sync）`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+  await sync([]);
 }
 
 // ---------- add：暂存新错题到本地缓冲 ----------
 // --recur-of <旧错题id>：显式标记"这条是老账复发"。2026-07-22 加——量化 v3 的重犯惩罚原本靠
 // 「knowledge 全字符串相同」判重犯，而错题描述中位数 245 字、永不重复，惩罚实际形同虚设（实测
 // 51 条只揪出 1 组）。重犯必须在【写入时】显式连线，不能靠事后猜文本相似度（那是伪精度、会错并）。
-function add(rest) {
+async function add(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
   let recurOf = null;
   const ri = rest.indexOf("--recur-of");
   if (ri !== -1) { recurOf = Number(rest[ri + 1]); rest.splice(ri, 2); if (!Number.isFinite(recurOf)) return fail("--recur-of 需要旧错题的数字 id，如：add 刑法 xxx --recur-of 36"); }
@@ -221,7 +228,8 @@ function add(rest) {
   if (!knowledge) return fail("add 需要知识点，如：add 刑法 牵连犯与吸收犯区分标准 [--recur-of 36]");
   appendPending({ op: "new_error", subject, knowledge, recurOf });
   console.log(`⏳ 已暂存待同步·新错题：[${subject ?? "未分类"}]${recurOf ? ` 🔁复发（源#${recurOf}）` : ""} ${knowledge}`);
-  console.log(`（未落库，云说"同步"再 sync）`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+  await sync([]);
 }
 
 // ---------- pending：查看/清空缓冲 ----------
@@ -229,7 +237,7 @@ function pending(rest) {
   if (rest[0] === "--clear") { clearPending(); return console.log("已清空本地待同步缓冲。"); }
   const ops = readPending();
   if (!ops.length) return console.log("本地待同步缓冲为空。");
-  console.log(`本地待同步缓冲：${ops.length} 条（云说"同步"我跑 sync 一次落库）\n`);
+  console.log(`本地 outbox：${ops.length} 条（同步失败或显式 --stage；运行 sync 可重试）\n`);
   ops.forEach((o, i) => {
     if (o.op === "absorb") console.log(`${i + 1}. 销账 #${(o.ids ?? []).join(" #")}${o.note ? "（" + o.note + "）" : ""}\n   ${(o.items ?? []).join("\n   ")}`);
     else if (o.op === "new_error") console.log(`${i + 1}. 新错题 [${o.subject ?? "未分类"}] ${o.knowledge}`);
@@ -237,7 +245,7 @@ function pending(rest) {
   });
 }
 
-// ---------- sync：一次落库到系统 ----------
+// ---------- sync：逐项幂等落库；只移除成功项 ----------
 async function sync(rest) {
   const dry = rest.includes("--dry");
   const ops = readPending();
@@ -255,44 +263,23 @@ async function sync(rest) {
     return console.log("（预览完毕，未改动。去掉 --dry 才真正落库。）");
   }
 
-  let okAbs = 0, okNew = 0;
-  if (absorbIds.length) {
-    const { data, error } = await db.from("study_error")
-      .update({ status: "absorbed", absorbed_at: new Date().toISOString(), absorbed_via: "pc复盘" })
-      .in("id", absorbIds).eq("status", "open").select("id");
-    if (error) return fail("销账落库失败：" + error.message + "（缓冲保留，未清空）");
-    okAbs = data?.length ?? 0;
+  let report;
+  try {
+    report = await syncStudyOutbox({ db, path: PENDING, today });
+  } catch (error) {
+    return fail(`outbox 同步前检查/重写失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
   }
-  for (const e of newErrs) {
-    // source 带「复发」标记＝量化 v3 重犯惩罚的唯一可靠信号（2026-07-22）。
-    // 此前 recheck 生成的 note 在这里被丢弃、复发信息断在管道里，dashboard 只能退回猜文本相同。
-    const { error } = await db.from("study_error").insert({
-      log_date: today, subject: e.subject, kp_id: null, knowledge: e.knowledge,
-      source: e.recurOf ? "pc复盘·复发" : "pc复盘",
-      raw_input: e.recurOf ? `【复发·源#${e.recurOf}】${e.knowledge}` : e.knowledge,
-      status: "open",
-    });
-    if (error) { console.error("✗ 新错题写入失败：" + error.message); continue; }
-    okNew++;
+  const count = (kind) => report.succeeded
+    .filter(({ result }) => result.kind === kind)
+    .reduce((sum, { result }) => sum + result.affected, 0);
+  console.log(`✅ 已确认同步：销账 ${count("absorb")} 条、新增错题 ${count("new_error")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条。`);
+  if (report.failed.length) {
+    console.error(`⚠️ ${report.failed.length} 项失败，已保留在 outbox，绝未清空：`);
+    for (const { op, error } of report.failed) console.error(`   · ${op.operation_id} (${op.op})：${error}`);
+    process.exitCode = 1;
+  } else {
+    console.log("outbox 已清空；每项均由 operation_id 保证重试不重复。");
   }
-  let okLog = 0;
-  for (const l of logs) {
-    const { error } = await db.from("study_log").insert({
-      log_date: l.date ?? today, subject: l.subject, chapter: l.chapter ?? null,
-      activity: l.activity ?? "其他", accuracy: l.accuracy ?? null, feeling: l.feeling ?? null,
-      source: "pc", raw_input: l.raw ?? null,
-    });
-    if (error) { console.error("✗ 学习日志写入失败：" + error.message); continue; }
-    okLog++;
-  }
-  let okMem = 0;
-  for (const m of mems) {
-    const { error } = await db.from("coach_memory").insert({ fact: m.fact, category: m.category ?? "画像" });
-    if (error) { console.error("✗ 长期记忆写入失败：" + error.message); continue; }
-    okMem++;
-  }
-  clearPending();
-  console.log(`✅ 已同步到系统：销账 ${okAbs} 条、新增错题 ${okNew} 条、学习日志 ${okLog} 条、长期记忆 ${okMem} 条。缓冲已清空。`);
   console.log(`（错题本是 Supabase 运行态，APP 实时读库即可见，无需重新部署。若日后复盘产出「心得」入内容库才需 archive 提交+部署。）`);
 }
 
@@ -343,7 +330,8 @@ function pass(rest) {
 
 // 老题本次抽查【没过】：暂存重新挂账（同步后 open + 🔁 复发）+ 台账记一次（避免它立刻又在老池里冒头）
 async function recheckFail(rest) {
-  const ids = rest.map(Number).filter((x) => Number.isInteger(x) && x > 0);
+  const stageOnly = rest.includes("--stage");
+  const ids = rest.filter((arg) => arg !== "--stage").map(Number).filter((x) => Number.isInteger(x) && x > 0);
   if (!ids.length) return fail("recheck-fail 需要 id，如：recheck-fail 23（老题没过、重新挂账）");
   const { data, error } = await db.from("study_error").select("id, subject, knowledge").in("id", ids);
   if (error) return fail(error.message);
@@ -355,7 +343,8 @@ async function recheckFail(rest) {
     console.log(`↩ #${r.id} 没过 → 已暂存重新挂账：${String(r.knowledge).slice(0, 50)}`);
   }
   writeLedger(ledger);
-  console.log(`（云说"同步"后这些会重新出现在错题本、带 🔁 复发；重新吃透了再销账。）`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后 sync 后会重新挂账并标 🔁 复发。）");
+  await sync([]);
 }
 
 function fail(msg) { console.error("✗ " + msg); process.exitCode = 1; }
@@ -364,7 +353,7 @@ switch (cmd) {
   case "list": await list(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
   case "material": await material(args[0], args[1]); break;
   case "absorb": await absorb(args); break;
-  case "add": add(args); break;
+  case "add": await add(args); break;
   case "pending": pending(args); break;
   case "sync": await sync(args); break;
   case "recheck": await recheck(args); break;
@@ -374,6 +363,6 @@ switch (cmd) {
     console.log("用法：node --env-file=.env.local scripts/cuoti.mjs <命令> ...");
     console.log("  只读：list [科目] / material <词> [特征词]");
     console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
-    console.log("  写(先进本地缓冲)：absorb <id...>|--like <片段> / add <科目> <知识点> / pending [--clear]");
-    console.log('  落库：sync [--dry]  （云说"同步"才跑）');
+    console.log("  写(outbox 后立即同步)：absorb <id...>|--like <片段> / add <科目> <知识点>（加 --stage 才延后）");
+    console.log("  outbox：pending [--clear] / sync [--dry]（失败重试）");
 }

@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // 本机学习账本/临时检索脚本，不属于可复现的产品源码。
+    ".local/**",
   ]),
   // .cjs 就是 CommonJS：pm2 用 require 加载 deploy/ecosystem.config.cjs，
   // 改成 import 会直接起不来。禁 require 这条规则对该扩展名不适用，不是给它开后门。

@@ -8,8 +8,10 @@ on:
     paths-ignore:
       - "**/*.md"
       - "memory/**"
-      - "scripts/**" # PC 侧建库/运维工具，不在运行链路，改它不必重部署
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 # 同一时间只跑一个部署，新 push 取消进行中的旧部署
 concurrency:
@@ -30,12 +32,21 @@ jobs:
       - name: Install deps
         run: npm ci
 
+      - name: Unit tests
+        run: npm test
+
+      - name: Type check
+        run: npx tsc --noEmit --incremental false
+
+      - name: Lint
+        run: npm run lint -- --max-warnings=0
+
       - name: Build (standalone)
         env:
           NODE_ENV: production
-          # NEXT_PUBLIC_* 在 build 时内联进客户端 bundle，且 supabase.ts 顶层 createClient 需要 URL
-          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
-          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          # 全部页面 force-dynamic；构建期只需合法占位，真实服务端凭据由 ECS 运行时注入。
+          SUPABASE_URL: http://127.0.0.1:3001
+          SUPABASE_SERVICE_ROLE_KEY: build-only-placeholder
         run: npm run build
 
       - name: Assemble standalone bundle

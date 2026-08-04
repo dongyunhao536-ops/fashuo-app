@@ -2,16 +2,20 @@
 #   /rest/v1/* → PostgREST 127.0.0.1:3001（路径前缀去掉 /rest/v1）
 #   /*         → Next.js   127.0.0.1:3000
 #
+# PostgREST 对公网保留给 PC 脚本，但数据库已撤销 anon 的全部权限；只有 service_role JWT 可访问。
 # 占位符：<ECS-IP> 部署时 sed 替换。
 # 安装：cp nginx-fashuo.conf.tmpl /etc/nginx/sites-available/fashuo
 #       sed -i "s/<ECS-IP>/<真实IP>/g" /etc/nginx/sites-available/fashuo
 #       ln -sf /etc/nginx/sites-available/fashuo /etc/nginx/sites-enabled/
 #       nginx -t && systemctl reload nginx
 
+# 单 IP 登录限流：持续 5 次/分钟，允许短时 burst 5；防公开 IP 被暴力枚举口令。
+limit_req_zone $binary_remote_addr zone=fashuo_login:10m rate=5r/m;
+
 server {
-    listen 8443 ssl;
-    listen [::]:8443 ssl;
-    http2 on;
+    # ECS 当前为 nginx 1.18：HTTP/2 参数必须写在 listen 上（不支持新版 `http2 on;`）。
+    listen 8443 ssl http2;
+    listen [::]:8443 ssl http2;
     server_name <ECS-IP>;
 
     ssl_certificate     /etc/ssl/fashuo/cert.pem;
@@ -26,11 +30,27 @@ server {
     send_timeout 300s;
     client_max_body_size 16m;
 
+    # 自签 CA 公钥下载（新设备安装信任用；公钥可公开，需绕过 Next 登录）。
+    location = /fashuo-ca.crt {
+        alias /opt/fashuo-ca.crt;
+        default_type application/x-x509-ca-cert;
+    }
+
     # PostgREST 路由（supabase-js 默认路径 /rest/v1/<table>）
     location /rest/v1/ {
         # 把 /rest/v1/foo → /foo 喂给 PostgREST
         rewrite ^/rest/v1/(.*)$ /$1 break;
         proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+
+    location = /api/login {
+        limit_req zone=fashuo_login burst=5 nodelay;
+        limit_req_status 429;
+        proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

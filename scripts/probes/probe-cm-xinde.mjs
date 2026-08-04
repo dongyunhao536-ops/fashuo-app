@@ -1,5 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
-const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const sb = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const { data, error } = await sb.from("content_mirror").select("path, content, updated_at").eq("kind", "xinde").order("path");
 if (error) { console.error(error.message); process.exit(1); }
 for (const r of data) {

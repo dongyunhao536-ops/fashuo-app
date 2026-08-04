@@ -17,22 +17,26 @@ export const AUTH_COOKIE = "fashuo_auth";
 /** 固定盐：换它会让所有已发 cookie 失效（相当于踢所有登录态）。 */
 const SALT = "fashuo-app-auth-v1";
 
-/** cookie 有效期（秒）：180 天，单人自用不必频繁重登。 */
-export const AUTH_MAX_AGE = 60 * 60 * 24 * 180;
+/** cookie 有效期（秒）：30 天；仍保持低摩擦，同时收窄 cookie 泄露后的有效窗口。 */
+export const AUTH_MAX_AGE = 60 * 60 * 24 * 30;
+
+export function authConfigured(): boolean {
+  const pw = process.env.APP_PASSWORD;
+  return Boolean(pw && pw !== "change-me");
+}
 
 /**
- * 鉴权是否关闭。APP_PASSWORD 未设或仍是脚手架默认 "change-me" 时返回 true，
- * 全站放行——保持开发期/本地走查零摩擦（与上线前各路由的旧行为一致）。
- * 上线前云把 APP_PASSWORD 改成真实口令即自动启用。
+ * 仅非生产环境允许在 APP_PASSWORD 未配置时关闭鉴权。
+ * 生产环境始终 fail-closed：缺配置时登录接口返回 503，其余请求全部视为未授权。
  */
 export function authDisabled(): boolean {
-  const pw = process.env.APP_PASSWORD;
-  return !pw || pw === "change-me";
+  return process.env.NODE_ENV !== "production" && !authConfigured();
 }
 
 /** 计算期望的 cookie token = sha256(SALT:口令) 的十六进制串。 */
 export async function expectedToken(): Promise<string> {
-  const pw = process.env.APP_PASSWORD ?? "";
+  if (!authConfigured()) throw new Error("APP_PASSWORD 未配置或仍为 change-me");
+  const pw = process.env.APP_PASSWORD;
   const data = new TextEncoder().encode(`${SALT}:${pw}`);
   const digest = await crypto.subtle.digest("SHA-256", data);
   return [...new Uint8Array(digest)]
@@ -43,6 +47,7 @@ export async function expectedToken(): Promise<string> {
 /** 校验请求里带的 cookie token 是否匹配当前口令（鉴权关闭时恒为 true）。 */
 export async function isTokenValid(token: string | undefined): Promise<boolean> {
   if (authDisabled()) return true;
+  if (!authConfigured()) return false;
   if (!token) return false;
   return token === (await expectedToken());
 }

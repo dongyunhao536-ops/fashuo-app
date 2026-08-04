@@ -75,6 +75,7 @@ alter table detection_log add column if not exists explanation text;
 -- 学习日志：教练 tab 的活动流水（与 detection_log 同类；源=auto 吃背诵/答疑，manual 补 APP 外）
 create table if not exists study_log (
   id           bigserial primary key,
+  operation_id text,                          -- PC outbox 幂等键；历史/APP 直写可空
   log_date     date not null default current_date,
   subject      text not null,
   chapter      text,
@@ -90,11 +91,14 @@ create table if not exists study_log (
 create index if not exists idx_study_log_date on study_log (log_date);
 -- 既有库补列（schema.sql 重复执行时 create table if not exists 不会加列，故显式 alter）
 alter table study_log add column if not exists plan_decision text;
+alter table study_log add column if not exists operation_id text;
+create unique index if not exists uq_study_log_operation_id on study_log (operation_id);
 
 -- 自报错题独立通道（教练错题闭环·迁移 003）：云汇报的"做错的题"逐条入此，教练账本回读驱动规划。
 -- 【约束】只给教练用——与 kp_state.error_count 隔离，绝不影响背诵引擎排期。append-only。
 create table if not exists study_error (
   id           bigserial primary key,
+  operation_id text,                          -- PC outbox 幂等键；重试不重复挂账
   log_date     date not null default current_date,
   subject      text,                       -- 刑法/民法/法理/宪法/法制史 或 null
   kp_id        text,                       -- 匹配到的考点（可空=未匹配）；不加 FK
@@ -111,6 +115,8 @@ create table if not exists study_error (
 alter table study_error add column if not exists status text not null default 'open';
 alter table study_error add column if not exists absorbed_at timestamptz;
 alter table study_error add column if not exists absorbed_via text;
+alter table study_error add column if not exists operation_id text;
+create unique index if not exists uq_study_error_operation_id on study_error (operation_id);
 create index if not exists idx_study_error_date on study_error (log_date);
 create index if not exists idx_study_error_kp on study_error (kp_id);
 create index if not exists idx_study_error_subject on study_error (subject);
@@ -126,11 +132,14 @@ create table if not exists coach_message (
 create index if not exists idx_coach_message_created on coach_message (created_at);
 create table if not exists coach_memory (
   id          bigserial primary key,
+  operation_id text,                         -- PC outbox 幂等键；历史/APP 直写可空
   fact        text not null,
   category    text,                       -- 画像/倾向/目标/偏好/约束
   updated_at  timestamptz not null default now()
 );
 create index if not exists idx_coach_memory_updated on coach_memory (updated_at);
+alter table coach_memory add column if not exists operation_id text;
+create unique index if not exists uq_coach_memory_operation_id on coach_memory (operation_id);
 
 -- 教练周报缓存（迁移006）：真实数据聚合 + Opus 复盘/下周指导，按周缓存（同周覆盖）。
 create table if not exists weekly_report (

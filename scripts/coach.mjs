@@ -1,29 +1,47 @@
 // node --env-file=.env.local scripts/coach.mjs ledger
 // PC 端教练（coach-pc skill 专用）读【完整共享账本】——火力全开，不做 APP 那套成本截断。
 // PC 是 APP 的升级版、独立系统、共享同一份 Supabase 账本（见记忆 pc-primary-two-systems）。
-// 只读。出题弹药检索复用 cuoti.mjs material；错题/销账复用 cuoti.mjs add/absorb；
-// 进度/长期记忆的写回下一步接（走同一 stage→sync 缓冲）。
+// 出题弹药检索复用 cuoti.mjs material；错题/销账复用 cuoti.mjs add/absorb；
+// 进度/长期记忆先入同一 outbox，再立即幂等同步；失败项留待下一次自动重试。
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { readFileSync } from "node:fs";
+import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 
-const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
 const ACTIVITIES = ["听课", "做题", "背诵", "带背", "复盘", "其他"]; // 带背=PC辅导带背(理解层，非云自背)；今日页逐字渲染 activity 即可与"背诵"区分
 const DAY = 86400000;
 
-// 写回共享账本走同一个 stage→sync 缓冲（cuoti.mjs sync 统一落库）
+// 写回共享账本走同一个可靠 outbox（cuoti.mjs sync 也可手动重试）
 const PENDING = ".local/cuoti-pending.jsonl";
-function stage(op) { mkdirSync(dirname(PENDING), { recursive: true }); appendFileSync(PENDING, JSON.stringify({ ...op, ts: new Date().toISOString() }) + "\n"); }
+function stage(op) { return appendOutbox(PENDING, op); }
 function parseFlags(args) {
   const o = {};
   for (let i = 0; i < args.length; i++) if (args[i].startsWith("--")) o[args[i].slice(2)] = (args[i + 1] && !args[i + 1].startsWith("--")) ? args[++i] : true;
   return o;
 }
 
-// 暂存一条学习日志（进度汇报）→ 云说"同步"由 cuoti.mjs sync 落库到共享账本
-function log(args) {
+async function flushOutbox() {
+  let report;
+  try {
+    report = await syncStudyOutbox({ db, path: PENDING, today: ymd });
+  } catch (error) {
+    console.error(`✗ outbox 同步失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
+    process.exitCode = 1;
+    return;
+  }
+  if (report.failed.length) {
+    console.error(`⚠️ 已同步 ${report.succeeded.length} 项；${report.failed.length} 项失败并保留在 outbox：`);
+    for (const { op, error } of report.failed) console.error(`   · ${op.operation_id} (${op.op})：${error}`);
+    process.exitCode = 1;
+  } else {
+    console.log(`✅ 已同步共享账本（${report.succeeded.length} 项），outbox 已清空。`);
+  }
+}
+
+// 记录一条学习日志（进度汇报）：先入 outbox，再立即同步；--stage 才延后
+async function log(args) {
   const f = parseFlags(args);
   if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw）");
   const op = {
@@ -35,7 +53,8 @@ function log(args) {
   };
   stage(op);
   console.log(`⏳ 已暂存待同步·学习日志：${op.date} ${op.subject}${op.chapter ? " " + op.chapter : ""} ${op.activity}${op.accuracy != null ? " " + op.accuracy + "%" : ""}${op.feeling ? "（" + op.feeling + "）" : ""}`);
-  console.log(`（未落库，云说"同步"再 sync；用 cuoti.mjs pending 查、sync 落库）`);
+  if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
+  await flushOutbox();
 }
 const today = new Date();
 const ymd = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
@@ -60,15 +79,16 @@ function milestoneLine(line) {
   }
 }
 
-// 暂存一条关于云的长期记忆（画像/倾向/里程碑/约定）→ cuoti.mjs sync 落库到 coach_memory
+// 记录一条关于云的长期记忆（画像/倾向/里程碑/约定）→ outbox 后立即同步
 // PC↔APP 共享：APP 教练的 prompt 读 coach_memory，PC 侧画像更新由此同步过去（2026-07-09 接线，堵"双系统画像不同步"的洞）
-function remember(args) {
+async function remember(args) {
   const f = parseFlags(args);
   if (!f.fact || f.fact === true) return console.error('remember 需要 --fact "关于云的一条事实"（可选 --category 画像|倾向|里程碑|约定，默认 画像）');
   const op = { op: "coach_memory", fact: f.fact, category: (f.category && f.category !== true) ? f.category : "画像" };
   stage(op);
   console.log(`⏳ 已暂存待同步·长期记忆：[${op.category}] ${op.fact}`);
-  console.log(`（cuoti.mjs sync 落库后 APP 教练即读到）`);
+  if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
+  await flushOutbox();
 }
 
 // 当前应在第几轮（按 轮次表 窗口 "2026-07~08" / "2026-12" 粗匹配当月）
@@ -153,12 +173,12 @@ async function ledger() {
 
 const cmd = process.argv[2];
 if (cmd === "ledger") await ledger();
-else if (cmd === "log") log(process.argv.slice(3));
-else if (cmd === "remember") remember(process.argv.slice(3));
+else if (cmd === "log") await log(process.argv.slice(3));
+else if (cmd === "remember") await remember(process.argv.slice(3));
 else {
   console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|remember>");
   console.log("  ledger                                     读完整共享账本");
-  console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD]  暂存学习日志（云说"同步"落库）');
-  console.log('  remember --fact "..." [--category 画像|倾向|里程碑|约定]  暂存长期记忆 → coach_memory（APP 教练可读）');
-  console.log("（检索用 cuoti.mjs material；错题/销账用 cuoti.mjs add/absorb；统一 cuoti.mjs sync 落库）");
+  console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD]  记录学习日志');
+  console.log('  remember --fact "..." [--category 画像|倾向|里程碑|约定]  记录长期记忆 → coach_memory');
+  console.log("（写操作默认立即同步；显式 --stage 才延后，cuoti.mjs sync 可重试 outbox）");
 }

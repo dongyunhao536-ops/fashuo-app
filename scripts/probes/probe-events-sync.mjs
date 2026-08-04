@@ -3,7 +3,7 @@
 // 跑法：node --env-file=.env.local scripts/probe-events-sync.mjs [天数=14]
 import { createClient } from "@supabase/supabase-js";
 
-const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const sb = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAYS = Number(process.argv[2] || 14);
 const sinceIso = new Date(Date.now() - DAYS * 86400000).toISOString();
 const bj = (iso) => (iso ? new Date(new Date(iso).getTime() + 8 * 3600000).toISOString().slice(0, 16).replace("T", " ") : "—");

@@ -1,16 +1,19 @@
+import "server-only";
 import { createClient } from "@supabase/supabase-js";
 
 /**
- * Supabase 客户端。
- * - supabase：匿名（浏览器/读）
- * - supabaseAdmin：service role（后端写 B 状态 / C 待办筐 / 读内容镜像 grep）
- * 仅在服务端导入 supabaseAdmin，勿泄露到客户端 bundle。
+ * 服务端唯一 Supabase 客户端：页面、Route Handler 和 PC 管道都不走 anon 读。
+ * `server-only` 会在该模块被客户端组件误引入时让构建直接失败，防止 service role 泄露。
  */
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "";
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? anonKey;
+const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
-export const supabase = createClient(url, anonKey);
+if (!url) {
+  throw new Error("缺少 SUPABASE_URL（兼容期也可用 NEXT_PUBLIC_SUPABASE_URL）");
+}
+if (!serviceKey) {
+  throw new Error("缺少 SUPABASE_SERVICE_ROLE_KEY；服务端禁止退回公开 anon key");
+}
 
 export const supabaseAdmin = createClient(url, serviceKey, {
   auth: { persistSession: false },

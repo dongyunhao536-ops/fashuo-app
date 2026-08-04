@@ -33,11 +33,9 @@ cat >> /root/.ssh/authorized_keys   # 粘贴 ~/.ssh/fashuo-ci.pub 的内容，�
 | `ECS_HOST` | `47.103.148.124` |
 | `ECS_USER` | `root` |
 | `ECS_SSH_KEY` | `~/.ssh/fashuo-ci` **私钥**全文（`cat ~/.ssh/fashuo-ci`，含 BEGIN/END 行） |
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://47.103.148.124:8443`（与 .env.production 同值） |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | .env.production 里的 anon JWT |
+构建不再需要 Supabase GitHub Secret：所有数据访问都是 force-dynamic 的服务端访问，工作流使用无权限占位值完成模块检查。
 
-> 只有 `NEXT_PUBLIC_*` 进 build（会内联进客户端 bundle，本就公开）。
-> SERVICE_ROLE / LLM_API_KEY / APP_PASSWORD 等**服务端密钥不进 CI**——它们在 ECS 的 `.env.production` 里，运行时由 ecosystem 注入。
+`SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY`、LLM key 和 `APP_PASSWORD` 等真实值只保存在 ECS 的 `.env.production`，运行时由 ecosystem 注入；不会进入客户端 bundle 或 CI 日志。
 
 ### 3. ECS 准备（root，一次）
 

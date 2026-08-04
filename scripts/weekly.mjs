@@ -6,7 +6,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 
-const db = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语进周报叙事(2026-07-10 起)；量化v3(dashboard.ts)仍五科不动
 const STUDY_ACTIVITIES = new Set(["听课", "看书", "做题", "背诵", "带背"]); // "学了什么"只认实打实学习动作(含带背·云2026-07-07要求计入；含看书·2026-07-31补，自学看书=输入台阶)

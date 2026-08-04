@@ -2,7 +2,7 @@
 // 不调 LLM；纯验 coach.ts 闭环逻辑依赖的 DB 操作。跑法：node --env-file=.env.local scripts/probe-coach-loop.mjs
 import { createClient } from "@supabase/supabase-js";
 
-const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
+const sb = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
   auth: { persistSession: false },
 });
 const MARK = "__probe_loop__";

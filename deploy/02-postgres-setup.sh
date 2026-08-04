@@ -49,16 +49,22 @@ END \$\$;
 -- authenticator 能在请求时切换到 anon / service_role
 GRANT anon, service_role TO authenticator;
 
--- service_role 实际执行表操作的权限（设计上 BYPASSRLS + 全权访问）
-GRANT USAGE ON SCHEMA public TO anon, service_role;
+-- service_role 实际执行表操作的权限（设计上 BYPASSRLS + 全权访问）。
+-- anon JWT 会公开给无认证请求，绝不能读取任何个人学习数据。
+GRANT USAGE ON SCHEMA public TO service_role;
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM anon;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM anon;
+REVOKE USAGE ON SCHEMA public FROM anon;
+REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO service_role;
 
 -- 新建表自动授权
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO service_role;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO service_role;
-ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON TABLES FROM anon;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM anon;
 SQL
 
 echo "==> 应用 db/schema.sql"
@@ -76,11 +82,15 @@ if [[ -d "$MIG_DIR" ]]; then
   done
 fi
 
-# schema/migrations 应用后再补一次权限（新建的表/序列也要授权给 service_role）
+# schema/migrations 应用后再补一次权限（新建对象授权 service_role；anon 再兜底清零）
 sudo -u postgres psql -d fashuo <<SQL
 GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
 GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;
-GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon;
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA public FROM anon;
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public FROM anon;
+REVOKE USAGE ON SCHEMA public FROM anon;
+REVOKE USAGE ON SCHEMA public FROM PUBLIC;
+GRANT USAGE ON SCHEMA public TO service_role;
 SQL
 
 # 告诉 PostgREST 重读 schema 缓存（NOTIFY 信号；它会在下次请求生效）

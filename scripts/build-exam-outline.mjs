@@ -7,7 +7,7 @@
 import { createClient } from "@supabase/supabase-js";
 import { writeFileSync } from "fs";
 
-const sb = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+const sb = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
 /** 各科目录源文件（都是《考试分析》原文文本）。
  *  刑法分册（觉晓重排版）每章开头带页边栏小目录、PDF 提文时窜到上一章名下 → 只提章级；
