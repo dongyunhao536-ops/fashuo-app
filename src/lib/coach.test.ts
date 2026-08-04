@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { splitCoachMeta, aggregateErrorBook, COACH_META_OPEN, COACH_META_CLOSE, type ErrorBookRow } from "./coach";
+import { splitCoachMeta, aggregateErrorBook, normalizeCoachActivity, COACH_META_OPEN, COACH_META_CLOSE, type ErrorBookRow } from "./coach";
+
+describe("normalizeCoachActivity 学习活动白名单", () => {
+  it("保留看书，不再静默降级成其他", () => {
+    expect(normalizeCoachActivity("看书")).toBe("看书");
+    expect(normalizeCoachActivity("未知活动")).toBe("其他");
+    expect(normalizeCoachActivity(null)).toBeNull();
+  });
+});
 
 describe("splitCoachMeta 正文+META 分离", () => {
   it("抽出 META、剥离展示正文", () => {

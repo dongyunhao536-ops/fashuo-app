@@ -10,7 +10,7 @@ import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
-const ACTIVITIES = ["听课", "做题", "背诵", "带背", "复盘", "其他"]; // 带背=PC辅导带背(理解层，非云自背)；今日页逐字渲染 activity 即可与"背诵"区分
+const ACTIVITIES = ["听课", "看书", "做题", "背诵", "带背", "复盘", "其他"]; // 看书=自学输入；带背=PC辅导带背(理解层，非云自背)
 const DAY = 86400000;
 
 // 写回共享账本走同一个可靠 outbox（cuoti.mjs sync 也可手动重试）
@@ -114,6 +114,19 @@ async function ledger() {
     db.from("coach_memory").select("fact, category, updated_at").order("updated_at", { ascending: false }).limit(200),
     db.from("coach_message").select("role, content").order("id", { ascending: false }).limit(20),
   ]);
+
+  // 🔒 静默空账闸（2026-08-02 立·起因：当日月度评估首跑六张表全空、无任何报错，
+  //    若照单下笔会得出"云什么都没学"的完全错误结论；二跑即正常＝网络抖动。
+  //    Supabase 查询失败时 .data 为 null，原先被 `?? []` 吞掉 → 打印出一份全零账本。
+  //    规矩：任一查询报错就中止，绝不输出半份账本。）
+  const probes = { 进度: prog, 流水: recent, 错题: errs, 答疑: ask, 记忆: mem, 对话: msg };
+  const broken = Object.entries(probes).filter(([, r]) => r.error);
+  if (broken.length) {
+    console.error("❌ 账本读取失败，已中止（不输出半份账本，防止据空账下结论）：");
+    for (const [name, r] of broken) console.error(`   · ${name}：${r.error.message}`);
+    console.error("→ 多为网络抖动，重跑一次即可；连续失败请查 .env.local 的 SUPABASE 配置。");
+    process.exit(1);
+  }
 
   const line = (s) => console.log(s);
   line("═══════════ PC 教练 · 完整账本（火力全开·无截断）═══════════");

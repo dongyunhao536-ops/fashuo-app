@@ -43,6 +43,12 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
 const ACTIVITIES = ["听课", "看书", "做题", "背诵", "复盘", "其他"]; // 「看书」2026-07-31 补：自学看书与听课同属输入台阶，缺档会被降级成"其他"
 
+export function normalizeCoachActivity(activity: unknown): string | null {
+  if (activity == null || activity === "") return null;
+  const raw = String(activity);
+  return ACTIVITIES.includes(raw) ? raw : "其他";
+}
+
 /** 机器块标记（路由据此抽取并从展示文本剥离，仿 ask-prompt 的 ASK_META） */
 export const COACH_META_OPEN = "<<<COACH_META";
 export const COACH_META_CLOSE = "COACH_META>>>";
@@ -435,7 +441,7 @@ ${EXAM_OUTLINE}
 
 【输出格式】先【自然回复云】（用 markdown，正常对话口吻，不要分段标记、不要 JSON、不要把下面的字段名写进正文）。回复完后另起一行，输出且仅输出一个机器块（系统会剥离，云看不到）：
 ${COACH_META_OPEN}
-{"is_report":true/false（【只看"本轮云说"那一条消息】是否在汇报自己学了什么——他这条消息主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false。⚠️此前对话里的汇报你已经记过账了，据它填 true 会造成重复记账）,"is_judging":true/false（本轮你的回复里是否做了【对错判断/选项判断/给行为定性/教义争点辨析】——判了某道题/某个说法对错、判了选项、给某行为定性就是 true；纯论策略/规划/情绪/闲聊/汇报=false。系统据此触发独立复核，据实填）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"log_fix":{"subject":"刑法","from":"原记录里的章节关键词（如'第四章'）","to":"修正后的章节全名"}（【默认省略·仅主动指令】只有云本轮明确要求修正/改正之前记错的进度时才填）,"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
+{"is_report":true/false（【只看"本轮云说"那一条消息】是否在汇报自己学了什么——他这条消息主动说"今天听了/看了/做了第几章"才是 true；提问、讨论、被你考、闲聊一律 false。⚠️此前对话里的汇报你已经记过账了，据它填 true 会造成重复记账）,"is_judging":true/false（本轮你的回复里是否做了【对错判断/选项判断/给行为定性/教义争点辨析】——判了某道题/某个说法对错、判了选项、给某行为定性就是 true；纯论策略/规划/情绪/闲聊/汇报=false。系统据此触发独立复核，据实填）,"subject":"刑法|民法|法理|宪法|法制史 或省略","chapter":"如 第3章 或省略","activity":"听课|看书|做题|背诵|复盘|其他 或省略","accuracy":0-100或省略,"feeling":"一句或省略","confusion":"云本轮最卡的一句或省略（仅供你理解上下文、更好追问，不入任何库，可正常填）","wrongs":["【默认空·仅主动指令】只有云本轮明确说'记进错题本/记录进错题本/这个记错题'时才填对应考点"],"xinde_notes":["【默认空·仅主动指令】只有云本轮明确说'记录进心得/记进心得/这条记下来'时，才把那条规律原话整理成一句填进来"],"absorbed":["今天云明确说懂了/掌握了的考点短语"],"log_fix":{"subject":"刑法","from":"原记录里的章节关键词（如'第四章'）","to":"修正后的章节全名"}（【默认省略·仅主动指令】只有云本轮明确要求修正/改正之前记错的进度时才填）,"memory_updates":[{"fact":"关于云的【新】耐久事实","category":"画像|倾向|目标|偏好|约束"}]}
 ${COACH_META_CLOSE}
 规则（记录=云主动指令制，2026-06-30）：
 - **学习日志只认汇报**：is_report=true（云明确在汇报学习进度）时才填 subject/chapter/activity/accuracy；云提问/讨论/被考时这些全省略、is_report=false——系统只在 is_report=true 时写学习日志。
@@ -676,11 +682,10 @@ export async function runCoach(
   }
 
   // 从 META 还原结构化字段（白名单/范围净化，同旧逻辑）
-  const rawAct = meta?.activity ? String(meta.activity) : null;
   const parsed = {
     subject: SUBJECTS.includes(String(meta?.subject)) ? String(meta?.subject) : null,
     chapter: meta?.chapter ? String(meta.chapter) : null,
-    activity: rawAct ? (ACTIVITIES.includes(rawAct) ? rawAct : "其他") : null,
+    activity: normalizeCoachActivity(meta?.activity),
     accuracy: typeof meta?.accuracy === "number" ? clamp(meta.accuracy, 0, 100) : null,
     feeling: meta?.feeling ? String(meta.feeling) : null,
     confusion: meta?.confusion ? String(meta.confusion) : null,
