@@ -2,8 +2,8 @@
 # deploy/11-dataflow-check.sh — 数据流「闭环」巡检：不只看进程活着，看【数据真在流动/被吸收】。
 #
 # 10-healthcheck 查的是基础设施（pm2/备份/同步日志/REST 活着）；本脚本查应用数据的回流闭环：
-# 待办筐里的候选有没有被收下/登记、答疑澄清的复验有没有被实际背到、教练错题有没有被吸收、
-# 背诵主回路是否还在写库、沉淀有没有进搜索镜像。回答两件事：①数据流正常更新同步？②更新后被实际运用？
+# 待办筐里的候选有没有被收下/登记、答疑澄清的复验有没有被实际处理、教练错题有没有被吸收、
+# PC 主系统的共享学习账本是否还在写库、沉淀有没有进搜索镜像。回答两件事：①数据流正常更新同步？②更新后被实际运用？
 #
 # 数据全部本机 psql（postgres 用户 peer 认证，与 09-backup 同口径，不走 PostgREST/JWT）。
 # 全绿 → ok（默认只记日志）；任一越线 → warn 推一条汇总。阈值全可在 /etc/default/fashuo-ops 覆盖。
@@ -19,7 +19,7 @@ export PGCLIENTENCODING=UTF8
 REVIEW_STALE_DAYS="${REVIEW_STALE_DAYS:-3}"    # 复验请求：清单最高优先，正常 1-2 天就背到
 CONFIRM_STALE_DAYS="${CONFIRM_STALE_DAYS:-7}"  # 弱项/心得/已强化：等云在 APP 里收下再 PC 登记
 ERROR_STALE_DAYS="${ERROR_STALE_DAYS:-21}"     # 教练错题：靠背诵掌握/云说懂了慢慢吸收
-RECITE_STALE_DAYS="${RECITE_STALE_DAYS:-7}"    # 背诵主回路：多久没有新的检测记录（也可能单纯没背）
+LEDGER_STALE_DAYS="${LEDGER_STALE_DAYS:-${RECITE_STALE_DAYS:-7}}" # 共享学习账本：多久没有新增流水；兼容旧变量名
 MIRROR_STALE_DAYS="${MIRROR_STALE_DAYS:-7}"    # 内容镜像：沉淀进 content_mirror 的新鲜度
 
 # 一次查清所有信号（9 个标量，| 分隔）。age 列：-1=该队列为空（不算异常）；max 列空表 →9999。
@@ -37,7 +37,7 @@ select
   (select coalesce(floor(extract(epoch from (now()-min(created_at)))/86400)::int,-1)
      from study_error where status='open'),
   (select count(*) from study_error where status='open'),
-  (select coalesce(floor(extract(epoch from (now()-max(ts)))/86400)::int,9999) from detection_log),
+  (select coalesce(floor(extract(epoch from (now()-max(created_at)))/86400)::int,9999) from study_log),
   (select coalesce(floor(extract(epoch from (now()-max(updated_at)))/86400)::int,9999) from content_mirror)
 ;
 SQL
@@ -49,7 +49,7 @@ if [[ -z "$row" ]]; then
   exit 1
 fi
 
-IFS='|' read -r review_age review_badkp confirm_age confirm_cnt drift_cnt err_age err_cnt recite_age mirror_age <<<"$row"
+IFS='|' read -r review_age review_badkp confirm_age confirm_cnt drift_cnt err_age err_cnt ledger_age mirror_age <<<"$row"
 
 issues=()
 
@@ -73,9 +73,10 @@ issues=()
 [[ "$err_age" -ge "$ERROR_STALE_DAYS" ]] && \
   issues+=("教练错题 ${err_cnt} 条 open，最老一条已 ${err_age} 天未吸收（>${ERROR_STALE_DAYS}d）")
 
-# ⑥ 背诵主回路活性：detection_log 太久没新记录（接口挂了，或单纯没在背——后者也值得提醒）
-[[ "$recite_age" -ge "$RECITE_STALE_DAYS" ]] && \
-  issues+=("已 ${recite_age} 天没有新的背诵检测记录（主回路停摆或这阵子没背）")
+# ⑥ PC 主回路活性：study_log 是现役共享学习账本；detection_log 已随 APP 背诵检测模块冻结。
+# 用 created_at 而不是可回填的 log_date，检查的是“最近有没有成功写库”，不是学习发生在哪一天。
+[[ "$ledger_age" -ge "$LEDGER_STALE_DAYS" ]] && \
+  issues+=("共享学习账本已 ${ledger_age} 天没有新增流水（PC 写入链停摆或这阵子没记学习，>${LEDGER_STALE_DAYS}d）")
 
 # ⑦ 内容镜像新鲜度：content_mirror 太久没更新（沉淀没进搜索语料，答疑/教练检索不到新内容）
 [[ "$mirror_age" -ge "$MIRROR_STALE_DAYS" ]] && \
@@ -84,7 +85,7 @@ issues=()
 # 友好渲染天龄（-1=空队列显示「无」）
 ageday() { [[ "$1" -lt 0 ]] && echo "无" || echo "${1}d"; }
 
-summary="待收下 ${confirm_cnt} 条/最老 $(ageday "$confirm_age")｜复验最老 $(ageday "$review_age")｜教练错题 ${err_cnt} 条｜上次背诵 $(ageday "$recite_age") 前｜镜像 $(ageday "$mirror_age")"
+summary="待收下 ${confirm_cnt} 条/最老 $(ageday "$confirm_age")｜复验最老 $(ageday "$review_age")｜教练错题 ${err_cnt} 条｜账本最近 $(ageday "$ledger_age") 前｜镜像 $(ageday "$mirror_age")"
 
 if [[ ${#issues[@]} -eq 0 ]]; then
   notify ok "数据流闭环正常" "$summary"

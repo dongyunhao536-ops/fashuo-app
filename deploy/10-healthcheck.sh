@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # deploy/10-healthcheck.sh — 每天巡检，异常主动告警（而非云用时才发现）。
 #
-# 查五件事：① Next.js(pm2 fashuo) 在线？② 最近备份是否新鲜(<36h)？
+# 查五件事：① Next.js(pm2 fashuo) 在线？② 最近备份是否新鲜(<36h)且压缩包完整？
 #   ③ 档案自动同步是否近期跑过(<36h)？④ PostgREST(本机 REST) 是否应答？⑤ 磁盘水位是否安全？
 # 全绿 → ok（默认只记日志）；有异常 → warn 推送一条汇总。
 # 跑完无条件打一次心跳（死人开关）——cron/机器/告警管线整条死掉时，由对端反过来告警你。
@@ -37,6 +37,7 @@ if [[ -z "$LATEST" ]]; then
   issues+=("没有任何数据库备份")
 else
   a=$(age_of "$LATEST"); [[ "$a" -gt "$STALE" ]] && issues+=("最近备份超 36h 未更新")
+  gzip -t "$LATEST" 2>/dev/null || issues+=("最近备份压缩包损坏，无法通过 gzip 完整性校验")
 fi
 
 # ③ 档案自动同步新鲜度

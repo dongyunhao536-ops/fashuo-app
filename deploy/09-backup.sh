@@ -34,6 +34,13 @@ if ! sudo -u postgres pg_dump "$DB_NAME" | gzip > "$OUT"; then
   rm -f "$OUT"
   exit 1
 fi
+
+# 文件存在不等于可恢复：写完立即校验 gzip 流，截断/损坏的包绝不能进入异地仓库。
+if ! gzip -t "$OUT"; then
+  notify fail "数据库备份损坏" "新生成的备份未通过 gzip 完整性校验，已删除且未推送。见 /var/log/fashuo-backup.log。"
+  rm -f "$OUT"
+  exit 1
+fi
 SIZE=$(du -h "$OUT" | cut -f1)
 
 # rotate：删工作区里超过 KEEP_DAYS 天的（git 历史仍保留）
