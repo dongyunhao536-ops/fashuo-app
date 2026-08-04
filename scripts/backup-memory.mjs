@@ -1,11 +1,12 @@
 // node scripts/backup-memory.mjs
-// 灾备：把换 harness/换机时会丢的资产备份进 fashuo-archive git 仓（两个源）：
-//   ① Claude Code 记忆目录（云的能力画像/弱点模式/项目决策）→ Claude记忆备份/
-//      记忆目录在 ~/.claude/ 下、不在任何 git 仓里。见 docs/备用方案启动手册.md。
-//   ② fashuo-app/.local PC 工作区（带背挂账/评估报告/周报草稿/英语真题库）→ PC工作区备份/
+// 灾备：把换 harness/换机时会丢的资产备份进 fashuo-archive git 仓（三个源）：
+//   ① Claude Code 历史记忆（只作迁移后的画像/决策档案）→ Claude记忆备份/
+//   ② Codex 现役规则与技能 → Codex规则备份/
+//      正本仍是 fashuo-app/.agents；这里是跨仓灾备副本，不参与技能发现。
+//   ③ fashuo-app/.local PC 工作区（带背挂账/评估报告/周报草稿/英语真题库）→ PC工作区备份/
 //      .local 被 .gitignore 排除、此前不在任何备份链里（2026-07-17 反思补上的灾备空窗）。
 //      排除 英语真题/_raw（29MB 原始 PDF，静态资产，别灌进 git）。
-// 触发：Windows 计划任务 ClaudeMemoryBackup 每日 22:30 + 大段写记忆后手动跑。
+// 触发：Windows 计划任务 ClaudeMemoryBackup（历史任务名）每日 22:30 + 大段规则/台账变更后手动跑。
 // 不污染同步链：content_mirror 只按 config/mirror-scope.json 白名单同步，这两个目录不在白名单。
 import { execFileSync } from "node:child_process";
 import { rmSync, cpSync, existsSync } from "node:fs";
@@ -13,6 +14,7 @@ import { rmSync, cpSync, existsSync } from "node:fs";
 const REPO = "D:/fashuo";
 const JOBS = [
   { src: "C:/Users/Administrator/.claude/projects/D--fashuo-app/memory", dest: "Claude记忆备份" },
+  { src: "D:/fashuo-app/.agents", dest: "Codex规则备份" },
   { src: "D:/fashuo-app/.local", dest: "PC工作区备份", exclude: /[\\/]_raw$/ },
 ];
 
@@ -46,7 +48,7 @@ if (!staged) {
 }
 
 const today = new Date().toISOString().slice(0, 10);
-git("commit", "-m", `Claude记忆+PC工作区自动备份 ${today}`);
+git("commit", "-m", `PC连续性资产自动备份 ${today}`);
 try {
   git("push", "origin", "master");
   console.log(`已备份并推送 ${staged.split("\n").length} 个文件:\n${staged}`);

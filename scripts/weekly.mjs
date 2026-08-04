@@ -116,7 +116,7 @@ if (cmd === "data") {
   const r = await buildReview(weekStart);
   const { error } = await db.from("weekly_report").upsert({
     week_start: r.weekStart, week_end: r.weekEnd, content, data_snapshot: r,
-    model: "pc-opus-4.8", cost_usd: 0, generated_at: new Date().toISOString(),
+    model: "pc-codex", cost_usd: 0, generated_at: new Date().toISOString(),
   }, { onConflict: "week_start" });
   if (error) { console.error("✗ weekly_report 写入失败：" + error.message); process.exit(1); }
   console.log(`✅ 已写入共享 weekly_report（${r.weekStart}~${r.weekEnd}，PC 生产·¥0）。APP /weekly 叙事卡即刻展示这份。`);

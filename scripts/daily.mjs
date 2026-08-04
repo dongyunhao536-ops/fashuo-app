@@ -217,7 +217,7 @@ if (cmd === "data") {
   const { error } = await db.from("daily_report").upsert({
     report_date: date, content: md, headline,
     dispatch: 派单, settle: pick("昨日结算"), flow: pick("今日流水"), gap: pick("断档"),
-    model: "pc-opus-4.8", cost_usd: 0, generated_at: new Date().toISOString(),
+    model: "pc-codex", cost_usd: 0, generated_at: new Date().toISOString(),
   }, { onConflict: "report_date" });
   if (error) console.error(`⚠️ daily_report 同步失败（本地已落地、APP 会看到旧的一份）：${error.message}`);
   else console.log(`✅ 已同步共享 daily_report（${date}·PC 生产 ¥0），APP 日报栏即刻展示。`);
