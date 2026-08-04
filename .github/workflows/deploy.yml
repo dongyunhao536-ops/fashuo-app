@@ -26,7 +26,8 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # 与 ECS 运行时一致；Supabase Realtime 在 Node <22 无原生 WebSocket 会在模块初始化时报错。
+          node-version: "22"
           cache: npm
 
       - name: Install deps
