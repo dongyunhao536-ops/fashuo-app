@@ -15,6 +15,7 @@
     "sync": "node --env-file=.env.local scripts/sync-content.mjs",
     "register": "node --env-file=.env.local scripts/register-events.mjs",
     "register:full": "node --env-file=.env.local scripts/register-full.mjs",
+    "fenzhang": "node scripts/fenzhang.mjs",
     "cost": "node --env-file=.env.local scripts/cost-report.mjs",
     "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs",
     "dev:tls": "node --import=./scripts/lib/trust-fashuo-ca.mjs ./node_modules/next/dist/bin/next dev"
