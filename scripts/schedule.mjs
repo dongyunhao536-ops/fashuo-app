@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { beijingDate } from "./lib/recite-ledger.mjs";
 import { parseReviewSchedule } from "./lib/assessment-ledgers.mjs";
+import { appendScheduleItem, cleanScheduleValue } from "./lib/schedule-store.mjs";
 
 function flags(args) {
   const result = {};
@@ -14,7 +15,7 @@ function flags(args) {
 }
 
 function clean(value) {
-  return String(value ?? "").replace(/[\r\n|]/g, (char) => char === "|" ? "／" : " ").replace(/\s+/g, " ").trim();
+  return cleanScheduleValue(value);
 }
 
 function requireValue(options, key) {
@@ -49,10 +50,16 @@ if (command === "summary" || command === "check") {
   if (!/^20\d{2}-\d{2}-\d{2}$/.test(date)) throw new Error("--date 必须是 YYYY-MM-DD");
   if (!/^P[0-2]$/.test(priority)) throw new Error("--priority 只能是 P0/P1/P2");
   const id = options.id && options.id !== true ? clean(options.id) : `R${date.replaceAll("-", "")}-${randomUUID().slice(0, 8)}`;
-  const ref = options.ref && options.ref !== true ? ` | ref=${clean(options.ref)}` : "";
-  const section = markdown.includes("## 结构化排期（机器读取）") ? "" : "\n## 结构化排期（机器读取）\n\n> 新条目只用下列格式；旧散文保留作历史证据，不再复制第二份状态。\n";
-  const line = `- [ ] ${date} | ${priority} | id=${id} | type=${type} | task=${task}${ref}`;
-  writeFileSync(file, `${markdown.trimEnd()}${section}\n${line}\n`, "utf8");
+  const result = appendScheduleItem(markdown, {
+    id,
+    date,
+    priority,
+    type,
+    task,
+    ref: options.ref && options.ref !== true ? clean(options.ref) : "",
+  }, { referenceDate: today });
+  if (!result.added) throw new Error(`排期未追加：${result.reason}`);
+  writeFileSync(file, result.markdown, "utf8");
   console.log(`✅ 已加入复盘排期：${id} ${date} [${priority}] ${task}`);
 } else if (command === "done") {
   const id = process.argv[3] && !process.argv[3].startsWith("--") ? clean(process.argv[3]) : requireValue(options, "id");

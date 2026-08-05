@@ -1,9 +1,11 @@
 // 确定性评估事实快照：量化 v3 + DB 事实轴 + 四本本地台账，一次采齐后再由 pinggu-pc 下判断。
 import { createClient } from "@supabase/supabase-js";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { summarizeAskPoints } from "./lib/ask-point-summary.mjs";
 import { parseDailyLedger, parseReviewSchedule, parseSubjectiveLedger } from "./lib/assessment-ledgers.mjs";
 import { summarizeErrorBookRows } from "./lib/error-book-summary.mjs";
+import { buildLearningCoachSnapshot } from "./lib/learning-coach.mjs";
 import { beijingDate, parseReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
 import { buildQuantV3 } from "../src/lib/quant-v3.mjs";
 
@@ -72,7 +74,7 @@ function summarizeStudy(logs, referenceDate) {
   };
 }
 
-async function collect(referenceDate) {
+export async function collectAssessment(referenceDate) {
   const [logs, errors, errorBookRows, reviews, askRows] = await Promise.all([
     fetchAll((from, to) => db.from("study_log").select("id, subject, chapter, activity, accuracy, log_date, raw_input, feeling").order("id").range(from, to), "study_log"),
     fetchAll((from, to) => db.from("study_error").select("id, subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).order("id").range(from, to), "study_error"),
@@ -98,9 +100,20 @@ async function collect(referenceDate) {
   const reviews30 = reviews.filter((review) => String(review.review_date) >= review30Start && String(review.review_date) <= referenceDate);
   const examDate = config["考试日期"];
   const baseDeadline = config["基础结业死线"];
+  const coachEngine = buildLearningCoachSnapshot({
+    referenceDate,
+    errorSummary,
+    reviews,
+    reciteParsed,
+    quantV3,
+    studyLogs: logs,
+    targets: config["目标分"],
+    mockRecords: config["模拟分记录"]?.["记录"] ?? [],
+    dispatchLimit: 3,
+  });
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     referenceDate,
     dates: {
       examDate,
@@ -151,6 +164,7 @@ async function collect(referenceDate) {
       issues: schedule.issues,
     },
     subjective,
+    coachEngine,
     sources: {
       database: ["study_log", "study_error", "error_book_v2", "error_review", "ask_point_v2"],
       local: [".local/带背挂账.md", ".local/日报台账.md", ".local/复盘排期.md", ".local/主观题台账.md", "config/coach.json", "src/lib/exam-outline.gen.ts"],
@@ -158,13 +172,14 @@ async function collect(referenceDate) {
   };
 }
 
-function format(snapshot) {
+export function formatAssessmentSnapshot(snapshot) {
   const q = snapshot.quantV3;
   const e = snapshot.errorBook;
   const r = snapshot.recite;
   const d = snapshot.dailyExecution;
   const s = snapshot.reviewSchedule;
   const w = snapshot.subjective;
+  const c = snapshot.coachEngine;
   return [
     `评估事实快照（北京 ${snapshot.referenceDate}，schema v${snapshot.schemaVersion}，量化 v${q.version}）`,
     `距首次模拟 ${snapshot.dates.daysToFirstMock} 天 / 基础结业 ${snapshot.dates.daysToBaseDeadline} 天 / 初试 ${snapshot.dates.daysToExam} 天`,
@@ -174,13 +189,17 @@ function format(snapshot) {
     `日报：${d.counts.days} 个日块，严格完成 ${d.counts.completed}/${d.counts.total || "无可判证据"}，断链 ${d.gaps.length} 段，最新 ${d.latestDate ?? "无"}`,
     `排期：逾期 ${s.counts.overdue} / 今日 ${s.counts.dueToday} / 未来 ${s.counts.upcoming}（结构化 ${s.counts.canonical}，旧格式 ${s.counts.legacy}）`,
     `主观题：案例 ${w.counts.cases} / 论述 ${w.counts.essays} / 挂病灶 ${w.counts.activeDefects}；首稿均分 ${w.scores.averageDraft ?? "无样本"}/15，最新稿均分 ${w.scores.averageLatest ?? "无样本"}/15`,
+    `教练状态：强化 ${c.topicStates.counts.reinforcing} / 冷却 ${c.topicStates.counts.cooling} / 稳定 ${c.topicStates.counts.stable} / 长期保持 ${c.topicStates.counts.maintenance}；主题到期 ${c.topicStates.due.length} / 带背到期 ${c.reciteMemory.counts.due}`,
+    `考试风险：${c.examRisk.topRisks.map((item) => `${item.subject}${item.riskScore}`).join(" / ") || "无"}（调度分，校准=${c.examRisk.calibration.status}）`,
     "已写 .local/assessment-snapshot.json；pinggu-pc 只据该快照下结论，缺失字段不得脑补。",
   ].join("\n");
 }
 
-const options = flags(process.argv.slice(2));
-const referenceDate = options.today && options.today !== true ? String(options.today) : beijingDate();
-const snapshot = await collect(referenceDate);
-mkdirSync(".local", { recursive: true });
-writeFileSync(".local/assessment-snapshot.json", `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
-console.log(options.json ? JSON.stringify(snapshot, null, 2) : format(snapshot));
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const options = flags(process.argv.slice(2));
+  const referenceDate = options.today && options.today !== true ? String(options.today) : beijingDate();
+  const snapshot = await collectAssessment(referenceDate);
+  mkdirSync(".local", { recursive: true });
+  writeFileSync(".local/assessment-snapshot.json", `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
+  console.log(options.json ? JSON.stringify(snapshot, null, 2) : formatAssessmentSnapshot(snapshot));
+}

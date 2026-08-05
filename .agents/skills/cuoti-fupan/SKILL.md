@@ -13,14 +13,15 @@ description: 云在电脑端说“复盘错题”“销账错题”“考我错�
 
 - [数据契约.md](数据契约.md)：取数、归类、病根代码、状态迁移和写回命令。
 - [命题判题规范.md](命题判题规范.md)：出题、判题、病根认领、销账门槛。
+- [../_shared/智能教练契约.md](../_shared/智能教练契约.md)：七阶段状态、遗忘间隔、风险分边界与自动排期。
 
 需要修改易混概念档时，再读 `D:\fashuo\易混概念库\_索引.md`；该仓只在用户同意同步内容库后提交和推送。
 
 ## 开场
 
 1. 运行 `coach.mjs ledger`，读取当前进度、轮次和本周流水。
-2. 运行 `node scripts/schedule.mjs summary` 读取结构化复盘行动队列；`.local/复盘排期.md` 仍是唯一事实源，旧散文只作历史证据。再看 `.local/weekly-draft.md` 的 P0/P1，只用于宏观优先级。
-3. 运行 `cuoti.mjs topics [科目]` 和 `cuoti.mjs list [科目]`。未指定科目时，按“复发主题 > 同主题高频 > 到期排期 > 真题核心”选。
+2. 运行 `node --env-file=.env.local scripts/coach-engine.mjs snapshot` 与 `node scripts/schedule.mjs summary`；前者给七阶段、到期日与风险排序，后者是唯一行动队列。再看 `.local/weekly-draft.md` 的 P0/P1，只用于宏观优先级。
+3. 运行 `cuoti.mjs topics [科目]` 和 `cuoti.mjs list [科目]`。未指定科目时，按“已到期强化/冷却主题 > 复发主题 > 同主题高频 > 真题核心”选；不得把风险分当掌握概率。
 4. 英语事件跳过并转 `yingyu-pc`；背诵栽点转 `daibei-pc`。
 
 如果 P0 科目本周仍零动作，开场只提醒一句最小启动动作，不阻塞本次复盘。

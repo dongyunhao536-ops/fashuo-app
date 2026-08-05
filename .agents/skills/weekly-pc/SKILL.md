@@ -5,13 +5,13 @@ description: PC 端生产法硕周报（APP 只展示·PC 质量更高）。云�
 
 # PC 周报生产（升级版 · 火力全开 · 周报只在 PC 生产、APP 只展示）
 
-生成前先读 `../_shared/学习事实层.md`。周报的错题段必须分开写事件销账数、主题冷复检证据和主题掌握状态。
+生成前先读 `../_shared/学习事实层.md` 与 `../_shared/智能教练契约.md`。周报的错题段必须分开写事件销账数、主题冷复检证据和主题掌握状态。
 
 云 2026-07-06 定：**手机 APP = 应急 + 展示；周报只在 PC 生产、APP 端展示、PC 质量更高**（[[pc-primary-two-systems]]）。这里由当前 Codex 使用全账本和完整可用推理强度，写出比 APP 自动稿更狠更准的周报，落进共享 `weekly_report`（APP 页读它渲染，零 APP 改动就显示我的）。
 
 ## 工作流程
 1. `node --env-file=.env.local scripts/weekly.mjs data [--week YYYY-MM-DD]` —— 算本周真实数据（学了什么/本周吸收/错题本/答疑卡点/待办/成本，与 `src/lib/weekly-review.ts` 同口径），存 `.local/weekly-data.json`。默认本周（北京周一~周日）。
-2. 再 `coach.mjs ledger` 补全上下文（长期记忆/进度/距死线/最近对话）；读取 `.local/日报台账.md` 本周 7 块核派单执行率。`weekly.mjs data` 已内置带背**当前存量快照 + 本周 append-only 迁移流水**；本周新挂/撤池只认 `flow`，没有流水就报 0 条可审计迁移，绝不倒推。复盘排期先运行 `node scripts/schedule.mjs summary`；新排期用 `schedule.mjs add` 回写同一文件，完成用 `done`，旧散文只作历史证据。
+2. 再 `coach.mjs ledger` 补全上下文，并运行 `node --env-file=.env.local scripts/coach-engine.mjs snapshot` 读取七阶段分布、下周到期与科目风险排序；风险分只解释复检优先级，不当卷面预测。读取 `.local/日报台账.md` 本周 7 块核派单执行率。`weekly.mjs data` 已内置带背**当前存量快照 + 本周 append-only 迁移流水**；本周新挂/撤池只认 `flow`，没有流水就报 0 条可审计迁移，绝不倒推。复盘排期先运行 `node scripts/schedule.mjs summary`；新排期用 `schedule.mjs add` 回写同一文件，完成用 `done`，旧散文只作历史证据。
 3. **我据真实数据写叙事** → `.local/weekly-draft.md`（严格两段格式见下）。
 4. `node --env-file=.env.local scripts/weekly.mjs save --file .local/weekly-draft.md [--week ...]` —— upsert 到 `weekly_report`（week_start 覆盖），APP 叙事卡即刻展示。
 
