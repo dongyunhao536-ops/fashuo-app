@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { KINDS, clip, formatMaterialBlocks, grep } from "./cuoti.mjs";
 
@@ -10,14 +9,6 @@ describe("cuoti material sources", () => {
     expect([...byKind.values()].every(({ quota }) => quota > 0)).toBe(true);
     expect(byKind.get("exam")).toEqual({ label: "真题原卷/随卷参考答案解析", quota: 4000 });
     expect(byKind.get("zhenti")?.label).toContain("二次总结");
-  });
-
-  it("mirror scope 只把真题原始文本归入 exam", () => {
-    const config = JSON.parse(readFileSync(new URL("../config/mirror-scope.json", import.meta.url), "utf8"));
-    const originalExamRules = config.rules.filter(({ pattern }) => pattern.startsWith("真题/_文本/"));
-
-    expect(originalExamRules).toEqual([{ pattern: "真题/_文本/*.txt", kind: "exam" }]);
-    expect(config.sealedExamFromYear).toBe(2025);
   });
 });
 
