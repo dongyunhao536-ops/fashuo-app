@@ -2,6 +2,7 @@ import { supabaseAdmin } from "./supabase";
 import type { ErrorItem } from "./errorbook";
 import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
 import { EXAM_OUTLINE } from "./exam-outline.gen";
+import { buildQuantV3, scoreEnglishV3, scoreSubjectV3 } from "./quant-v3.mjs";
 
 /**
  * 今日页数据聚合（RSC 直接调）。量化 v3.1（2026-07-26 口径重订·变更日志见文末）：
@@ -108,20 +109,6 @@ export interface DashboardData {
 const EXAM_DATE = "2026-12-19";
 const BASE_DEADLINE = "2026-09-30";
 const DAY = 86400000;
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史"];
-const TOTAL_CH: Record<string, number> = { 刑法: 21, 民法: 21, 法理: 13, 宪法: 5, 法制史: 7 };
-const WEIGHT: Record<string, number> = { 刑法: 75, 民法: 75, 法理: 60, 宪法: 50, 法制史: 40 };
-
-// —— 铁律二的两个常数 ——
-const SMOOTH_K = 5;        // 平滑：+5 条虚拟"未销账"观测。样本极小时不给极端值（1 条错题不该决定一科死活）
-const QUALITY_FLOOR = 0.5; // 质量系数下限：错题全不销账最多打对折，不归零
-const READ_MIN_N = 4;      // 英语读准的样本闸：不足 4 篇按比例打折
-
-/** 闭环质量 0-1（铁律二：平滑 + 保守锚 0 + 重犯惩罚）。零错题 → 0，因此瞒报必亏。 */
-function closureQuality(open: number, absorbed: number, repeat: number): number {
-  const seen = open + absorbed;
-  return (absorbed / (seen + SMOOTH_K)) * (seen > 0 ? 1 - 0.5 * (repeat / seen) : 1);
-}
 
 /**
  * 各科能力打分（纯函数）。性质测试直接打这里 —— 改动前先让 dashboard.test.ts 跑绿。
@@ -135,19 +122,7 @@ export function scoreSubject(ev: {
   absorbed: number;
   repeat: number;
 }): Omit<SubjectStat, "subject" | "weight" | "total"> {
-  const covered = ev.chapSteps.length;
-  // 铁律一：三维分母恒为 total
-  const progress = Math.round((covered / ev.total) * 100);
-  const recitePct = Math.round((ev.outChapters / ev.total) * 100);
-  const depthSum = ev.chapSteps.reduce((a, s) => a + Math.min(s, 3) / 3, 0);
-  const depth = Math.round((depthSum / ev.total) * 100);
-  const seen = ev.open + ev.absorbed;
-  const closure = seen > 0 ? Math.round((ev.absorbed / seen) * (1 - 0.5 * (ev.repeat / seen)) * 100) : null;
-  // 铁律二：闭环只作乘法折扣，不加分
-  const quality = Math.round((QUALITY_FLOOR + (1 - QUALITY_FLOOR) * closureQuality(ev.open, ev.absorbed, ev.repeat)) * 100);
-  const substance = ((0.25 * progress + 0.20 * depth + 0.25 * recitePct) / 0.70);
-  const ability = Math.round(substance * (quality / 100));
-  return { covered, progress, depth, recitePct, open: ev.open, absorbed: ev.absorbed, repeat: ev.repeat, closure, quality, ability };
+  return scoreSubjectV3(ev) as Omit<SubjectStat, "subject" | "weight" | "total">;
 }
 
 /** 英语能力打分（纯函数）。无覆盖底座 → 仍是加权四维，但读准过样本闸、闭环用同一条保守平滑。 */
@@ -159,86 +134,7 @@ export function scoreEnglish(ev: {
   absorbed: number;
   repeat: number;
 }): EnglishStat {
-  const reading = ev.accs.length > 0 ? Math.round(ev.accs.reduce((a, b) => a + b, 0) / ev.accs.length) : null;
-  const seen = ev.open + ev.absorbed;
-  const closure = seen > 0 ? Math.round((ev.absorbed / seen) * (1 - 0.5 * (ev.repeat / seen)) * 100) : null;
-  const eR = ((reading ?? 0) / 100) * Math.min(1, ev.accs.length / READ_MIN_N); // 样本闸
-  const eP = Math.min(1, ev.papers14d / 4);
-  const eW = Math.min(1, ev.essays30d / 2);
-  const eC = closureQuality(ev.open, ev.absorbed, ev.repeat);
-  const ability = Math.round(100 * (0.45 * eR + 0.20 * eP + 0.20 * eW + 0.15 * eC));
-  return { ability, reading, papers14d: ev.papers14d, essays30d: ev.essays30d, open: ev.open, absorbed: ev.absorbed, closure };
-}
-
-// —— 解析《考试分析》知识架构 → {科目: [{num, keys:[章标题, ...节标题]}]}（供按标题匹配官方章号）——
-const OUTLINE: Record<string, { num: number; keys: string[] }[]> = (() => {
-  const CN = "一二三四五六七八九十";
-  const cn2num = (t: string): number | null => {
-    if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
-    if (t === "十") return 10;
-    if (t.startsWith("二十")) return t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1;
-    if (t.startsWith("十")) return 10 + CN.indexOf(t[1]) + 1;
-    const i = CN.indexOf(t);
-    return i >= 0 ? i + 1 : null;
-  };
-  const out: Record<string, { num: number; keys: string[] }[]> = {};
-  for (const block of EXAM_OUTLINE.split("◆").slice(1)) {
-    const lines = block.split("\n").map((l) => l.trim()).filter(Boolean);
-    const subj = SUBJECTS.find((s) => lines[0]?.startsWith(s));
-    if (!subj) continue;
-    const chapters: { num: number; keys: string[] }[] = [];
-    for (const ln of lines.slice(1)) {
-      const m = ln.match(/^第([0-9一二三四五六七八九十]+)章\s*([^：:]*)(?:[：:](.*))?$/);
-      if (!m) continue;
-      const num = cn2num(m[1]);
-      if (num == null) continue;
-      const title = (m[2] || "").trim();
-      const sections = (m[3] || "").split(/[；;]/).map((s) => s.replace(/^第[0-9一二三四五六七八九十]+节\s*/, "").trim()).filter((s) => s.length >= 2);
-      chapters.push({ num, keys: [title, ...sections].filter((k) => k.length >= 2) });
-    }
-    out[subj] = chapters;
-  }
-  return out;
-})();
-
-/**
- * 从日志识别覆盖的官方章号集合：优先章/节标题匹配，退回解析"第X章"数字（封顶）。
- * 2026-07-22：chapter 标题匹配不中时，**降级到 `raw_input`（云的原始汇报）再试一次标题匹配**。
- * 因为 chapter 是压缩后的短标签，罪名/章名常被压掉，而原话里往往写全了。教训：#47
- * chapter="第十章、第十一章"（云教材自编章号，与官方错位）走数字兜底误记为官方第10/11章，
- * 但 raw_input 原话"第十章共同犯罪，第十一章罪数形态"里罪名齐全 —— 信息一直在库里没参与计算。
- * ⚠️ 必须是**降级**而非两者合并扫：raw_input 是自然语言，含否定/枚举（"除渎职罪外都学过"）会反向
- * 误判成学过（2026-07-22 实测踩到，刑法广度虚涨到 100%）。chapter 已能定章时就不许再读原话。
- * 数字兜底仍**只扫 chapter**：原始汇报里的章号本就与官方错位、且常顺带提及多章，精度不够。
- */
-function detectChapters(subject: string, text: string, raw?: string | null): Set<number> {
-  const found = new Set<number>();
-  const total = TOTAL_CH[subject] ?? 99;
-  const outline = OUTLINE[subject] ?? [];
-  for (const c of outline) {
-    if (c.keys.some((k) => text.includes(k))) found.add(c.num);
-  }
-  if (found.size === 0 && raw) {
-    // 只用长标题（≥4 字）去咬原话：raw_input 是自然语言，短标题会误咬——2026-07-22 实测
-    // "法理学背完第四章"里的"法理学"咬中绪论章、"动机一般影响量刑"里的"量刑"咬中量刑章。
-    // chapter 是我写的受控标签，仍按 ≥2 字匹配。
-    for (const c of outline) {
-      if (c.keys.some((k) => k.length >= 4 && raw.includes(k))) found.add(c.num);
-    }
-  }
-  if (found.size === 0) {
-    // 无标题命中 → 退回云自己的"第X章"编号（可能与官方错位，仅作计数兜底）
-    const CN = "一二三四五六七八九十";
-    const re = /第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text))) {
-      const t = m[1];
-      const n: number | null = /^[0-9]+$/.test(t) ? parseInt(t, 10) : t === "十" ? 10 : t.startsWith("二十") ? (t === "二十" ? 20 : 20 + CN.indexOf(t[2]) + 1) : t.startsWith("十") ? 10 + CN.indexOf(t[1]) + 1 : CN.indexOf(t) + 1;
-      if (n && n >= 1 && n <= total) found.add(n);
-    }
-    if (found.size === 0 && /绪论/.test(text)) found.add(1);
-  }
-  return found;
+  return scoreEnglishV3(ev) as EnglishStat;
 }
 
 export async function getDashboard(): Promise<DashboardData> {
@@ -280,84 +176,11 @@ export async function getDashboard(): Promise<DashboardData> {
   const todayAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= todayTs).length;
   const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
-  // —— 各科能力台阶（四维之源）：每章按经历的台阶累积 听课·看书=输入(in) / 做题·复盘=检验(test) / 背诵·带背=输出(out)。
-  //    复盘(最高频活动)与带背首次纳入——检验/输出是"吃透"的量化，非"听过=会了"。
-  //    2026-07-31 补「看书」：云自学看书与听网课同属输入台阶，但此前无此档、只能塞进「听课」记假账
-  //    （云当日点名"我说了是看书你怎么改成听课"）。两者同映射 in，指标不变、标签变真。
-  const stepsBy = new Map<string, Map<number, Set<string>>>();
-  const stepOf = (act: string): "in" | "test" | "out" | null =>
-    act === "听课" || act === "看书" ? "in" : act === "做题" || act === "复盘" ? "test" : act === "背诵" || act === "带背" ? "out" : null;
-  for (const r of logs) {
-    const subj = r.subject as string;
-    const ch = r.chapter as string | null;
-    const step = stepOf((r.activity as string | null) ?? "");
-    if (!SUBJECTS.includes(subj) || !ch || !step) continue;
-    let m = stepsBy.get(subj);
-    if (!m) { m = new Map(); stepsBy.set(subj, m); }
-    for (const n of detectChapters(subj, ch, r.raw_input as string | null)) {
-      let set = m.get(n);
-      if (!set) { set = new Set(); m.set(n, set); }
-      set.add(step);
-    }
-  }
-  // —— 错题：按科统计 闭环 + 重犯（同一知识点反复错=没真懂，北大扣分；dismissed 已在查询侧排除）——
-  // 2026-07-22 重犯判定重做：原本只认「subject::knowledge 全字符串相同」，而错题描述中位数 245 字、
-  // 最长 1188 字，两条永不可能一字不差 —— 实测 51 条只揪出 1 组，惩罚系数 0.989，这一维（权重 0.30）
-  // 的重犯扣分形同虚设，而"重复犯老错"恰恰是云的核心病根。
-  // 新口径按可靠性排序，**不做文本模糊匹配**（245 字描述算相似度＝伪精度，会把不同错题错并）：
-  //   ① kp_id 相同（考点级连线，最可靠，但下线背诵检测后仅 8% 有值）
-  //   ② source 标了「复发」（cuoti.mjs recheck 失败 / add --recur-of 显式连线 → 写入时就标死）
-  //   ③ knowledge 全字符串相同（兜底，只兜得住 recheck 原样复制那条路径）
-  // 一行最多算一次重犯，三条口径不叠加。
-  const errBy = new Map<string, { open: number; absorbed: number; repeat: number }>();
-  const seenKey = new Set<string>();
-  for (const r of errs) {
-    const s = (r.subject as string | null) ?? "未分类";
-    const e = errBy.get(s) ?? { open: 0, absorbed: 0, repeat: 0 };
-    if (r.status === "absorbed") e.absorbed++; else e.open++;
-    const explicitRecur = /复发/.test(String(r.source ?? ""));
-    const key = `${s}::${r.kp_id ?? r.knowledge}`;
-    const dup = seenKey.has(key);
-    seenKey.add(key);
-    if (explicitRecur || dup) e.repeat++;
-    errBy.set(s, e);
-  }
-
-  // 2026-07-26 删除 closurePrior（借他科闭环率当先验）：它让某科的分随别科的错题数漂移，
-  // 且真实闭环低于先验的科「瞒报反而涨分」。铁律二的保守锚 0 直接消灭了先验这个概念。
-  const subjects: SubjectStat[] = SUBJECTS.map((s) => {
-    const total = TOTAL_CH[s];
-    const chapMap = stepsBy.get(s) ?? new Map<number, Set<string>>();
-    const e = errBy.get(s) ?? { open: 0, absorbed: 0, repeat: 0 };
-    const scored = scoreSubject({
-      total,
-      chapSteps: [...chapMap.values()].map((set) => set.size),
-      outChapters: [...chapMap.values()].filter((set) => set.has("out")).length,
-      ...e,
-    });
-    return { subject: s, weight: WEIGHT[s], total, ...scored };
-  });
-
-  // 专业课指数（北大严标准）= 分值加权均 ×0.7 + 最弱科 ×0.3（法硕有单科线，一科瘸腿全盘皆输→反偏科）
-  const wSum = SUBJECTS.reduce((a, s) => a + WEIGHT[s], 0);
-  const balanced = Math.round(subjects.reduce((a, x) => a + x.weight * x.ability, 0) / wSum);
-  const weakestSub = subjects.reduce((m, x) => (x.ability < m.ability ? x : m), subjects[0]);
-  const proIndex = Math.round(0.7 * balanced + 0.3 * weakestSub.ability);
-  const notStarted = subjects.filter((x) => x.covered === 0 && x.open === 0 && x.absorbed === 0).length;
-
-  // —— 英语能力（无章节底座 → 英语自己的四维；口径见文件头注释）——
-  const enLogs = logs.filter((r) => r.subject === "英语");
-  const accs = enLogs.filter((r) => r.accuracy != null && !/作文/.test(String(r.chapter ?? ""))).slice(0, 8).map((r) => Number(r.accuracy));
-  const d14 = bjDateStr(new Date(now.getTime() - 14 * DAY)), d30 = bjDateStr(new Date(now.getTime() - 30 * DAY));
-  // 2026-07-22：papers14d 原本数「近14天所有英语日志」，没排作文——而 essays30d 排了非作文，
-  // 两边口径不一致：一周写 4 篇作文就能把"阅读节奏"顶满格。这里改为只数非作文（＝阅读篇数）。
-  const papers14d = enLogs.filter((r) => String(r.log_date) >= d14 && !/作文/.test(String(r.chapter ?? ""))).length;
-  const essays30d = enLogs.filter((r) => String(r.log_date) >= d30 && /作文/.test(String(r.chapter ?? ""))).length;
-  const enErr = errBy.get("英语") ?? { open: 0, absorbed: 0, repeat: 0 };
-  const english = scoreEnglish({ accs, papers14d, essays30d, ...enErr });
-
-  // 综合备考指数 = 专业课 ×0.75 + 英语 ×0.25（分值 300:100；政治不追踪。2026-07-10 云拍板英语计入）
-  const index = Math.round(0.75 * proIndex + 0.25 * english.ability);
+  // 量化 v3 的纯算法与 PC 评估快照共用同一模块，避免两套公式漂移。
+  const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE });
+  const subjects = quant.subjects as SubjectStat[];
+  const { index, proIndex, balanced, notStarted, english } = quant.overall;
+  const weakestSub = quant.overall.weakest;
 
   const openAgg = new Map<string, ErrorItem>();
   for (const r of errs) {

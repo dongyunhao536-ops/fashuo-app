@@ -7,32 +7,43 @@
 //
 // 只读命令（随时可跑）：
 //   list [科目]            —— 拉错题本 open 行（带 #id、×累计错次、🔁复发），并标出已暂存待同步的
+//   topics [科目]          —— 按 v2 长期弱项主题聚合，事件条数与掌握状态分开显示
+//   triage [科目] [n]      —— 列出尚未关联弱项主题的历史错题事件
 //   material <词> [特征词]  —— 在 教材/做题心得/讲义心得/易混库/真题 里检索出题弹药（带行号锚点）
 //   recheck                —— 列销账 5-60 天的旧账，突袭抽查名单
 // 写操作（先进本地缓冲 .local/cuoti-pending.jsonl）：
 //   absorb <id...>         —— 销账（云确认掌握后）；也可 absorb --like <片段> [--subject 刑法]
-//   add <科目> <知识点...>  —— 新增一条错题（复盘中发现的新漏洞）
+//   add <科目> <事件说明> [--topic <标准主题> ...] —— 新增错题，可同时结构化归类
+//   classify <id> --topic <标准主题> ...            —— 给历史错题补分类
+//   review <topic-id> <pass|partial|fail> ...        —— 记录跨会话冷复检证据
 //   pending [--clear]      —— 查看待同步缓冲；--clear 清空
 //   sync [--dry]           —— 重试 outbox；--dry 只预览不写。写命令加 --stage 可显式延后
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { dirname } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   appendOutbox,
   readOutbox,
   syncStudyOutbox,
   writeOutbox,
 } from "./lib/study-outbox.mjs";
+import {
+  CLASSIFICATION_STATUSES,
+  ROOT_CAUSES,
+  SUBJECTS,
+  cleanTopicTitle,
+  parseAddArgs,
+  parseTopicOptions,
+  validateDiagnosisStatus,
+  validateReviewResult,
+  validateRootCause,
+} from "./lib/error-taxonomy.mjs";
 
-const db = createClient(
-  process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY,
-  { auth: { persistSession: false } },
-);
+let db;
 
 const DAY = 86400000;
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语错题=干扰项套路(2026-07-10 起)，生词归 Anki 不入本
 const PENDING = ".local/cuoti-pending.jsonl";
-const [cmd, ...args] = process.argv.slice(2);
 const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
 
 // ---------- 本地待同步缓冲 ----------
@@ -59,6 +70,24 @@ function writeLedger(obj) {
 }
 
 // ---------- list：错题本 ----------
+async function loadTopicLinks(ids) {
+  if (!ids.length) return new Map();
+  const response = await db
+    .from("study_error_topic")
+    .select("study_error_id, role, root_cause_code, diagnosis_status, error_topic(id, title, mastery_status, classification_status)")
+    .in("study_error_id", ids);
+  if (response.error) {
+    console.warn(`⚠️ v2 主题读取失败，已降级为旧错题视图：${response.error.message}`);
+    return new Map();
+  }
+  const links = new Map();
+  for (const row of response.data ?? []) {
+    const current = links.get(row.study_error_id);
+    if (!current || row.role === "primary") links.set(row.study_error_id, row);
+  }
+  return links;
+}
+
 async function list(subject) {
   // 拉全生命周期（open+absorbed），据此算【累计】错次与复发（销账不清零，同教练 aggregateErrorBook）
   const { data, error } = await db
@@ -68,7 +97,10 @@ async function list(subject) {
     .limit(2000);
   if (error) return fail(error.message);
 
-  const keyOf = (r) => r.kp_id ?? `${r.subject ?? "未分类"}::${r.knowledge}`;
+  const topicLinks = await loadTopicLinks((data ?? []).map((r) => r.id));
+  const keyOf = (r) => topicLinks.get(r.id)?.error_topic?.id
+    ? `topic:${topicLinks.get(r.id).error_topic.id}`
+    : r.kp_id ?? `${r.subject ?? "未分类"}::${r.knowledge}`;
   const agg = new Map();
   for (const r of data ?? []) {
     const k = keyOf(r);
@@ -92,10 +124,15 @@ async function list(subject) {
 
   console.log(`错题本 open：${rows.length} 条` + (subject ? `（已筛 ${subject}）` : "") +
     "　按科目：" + (Object.entries(bySubj).map(([k, v]) => `${k}${v}`).join(" / ") || "空"));
-  console.log("（#id 用于 absorb；×N=累计错次，🔁×N=复发轮数（销过N次账又栽·N≥2=顽固错题优先打·销账升格跨两会话），⏳=已暂存待同步）\n");
+  console.log("（#id=错题事件；T#id=长期弱项主题；×N=同主题累计错次；🔁×N=销账后复发轮数；⏳=待同步）\n");
   for (const r of rows) {
+    const link = topicLinks.get(r.id);
+    const topic = link?.error_topic;
     const flags = `${r.total > 1 ? " ×" + r.total : ""}${r.recurN > 0 ? " 🔁复发×" + r.recurN : ""}${staged.has(r.id) ? " ⏳待同步" : ""}`;
     console.log(`#${r.id}  [${r.subject ?? "?"}]${flags}  (${r.log_date})`);
+    console.log(topic
+      ? `     ↳ T#${topic.id} ${topic.title}｜${ROOT_CAUSES[link.root_cause_code] ?? link.root_cause_code}｜诊断 ${link.diagnosis_status}｜掌握 ${topic.mastery_status}`
+      : "     ↳ [待归类] 尚未关联长期弱项主题");
     console.log(`     ${String(r.knowledge).replace(/\s+/g, " ").trim()}`);
   }
   if (!rows.length) console.log("（错题本是空的——没有待复盘的错题）");
@@ -103,18 +140,95 @@ async function list(subject) {
   if (pend.length) console.log(`\n⚠️ outbox 有 ${pend.length} 条上次同步失败/显式暂存的操作——跑 pending 查看、sync 重试。`);
 }
 
+// ---------- topics / triage：v2 主题视图与历史待归类池 ----------
+async function topics(subject) {
+  let topicQuery = db
+    .from("error_topic")
+    .select("id, subject, chapter, section, kp_id, title, classification_status, mastery_status, created_at, updated_at")
+    .order("updated_at", { ascending: false });
+  if (subject) topicQuery = topicQuery.eq("subject", subject);
+  const topicResponse = await topicQuery;
+  if (topicResponse.error) return fail(`读取 v2 弱项主题失败：${topicResponse.error.message}`);
+  const topicRows = topicResponse.data ?? [];
+  if (!topicRows.length) return console.log(subject ? `${subject}暂无 v2 弱项主题。` : "暂无 v2 弱项主题；先用 classify 或带 --topic 的 add 归类。");
+
+  const topicIds = topicRows.map((row) => row.id);
+  const linkResponse = await db
+    .from("study_error_topic")
+    .select("topic_id, study_error_id, role, root_cause_code, diagnosis_status")
+    .in("topic_id", topicIds);
+  if (linkResponse.error) return fail(linkResponse.error.message);
+  const eventIds = [...new Set((linkResponse.data ?? []).map((row) => row.study_error_id))];
+  const eventResponse = eventIds.length
+    ? await db.from("study_error").select("id, status, log_date").in("id", eventIds)
+    : { data: [], error: null };
+  if (eventResponse.error) return fail(eventResponse.error.message);
+  const eventById = new Map((eventResponse.data ?? []).map((row) => [row.id, row]));
+
+  console.log(`长期弱项主题：${topicRows.length} 个${subject ? `（${subject}）` : ""}\n`);
+  for (const topic of topicRows) {
+    const links = (linkResponse.data ?? []).filter((row) => row.topic_id === topic.id);
+    const events = links.map((link) => eventById.get(link.study_error_id)).filter(Boolean);
+    const counts = Object.fromEntries(["open", "absorbed", "dismissed"].map((status) => [status, events.filter((event) => event.status === status).length]));
+    const causes = [...new Set(links.filter((link) => link.diagnosis_status === "confirmed").map((link) => ROOT_CAUSES[link.root_cause_code] ?? link.root_cause_code))];
+    console.log(`T#${topic.id} [${topic.subject}] ${topic.title}｜掌握 ${topic.mastery_status}｜分类 ${topic.classification_status}`);
+    console.log(`   ${[topic.chapter, topic.section, topic.kp_id].filter(Boolean).join(" · ") || "（章节/考点待补）"}｜事件 open ${counts.open} / absorbed ${counts.absorbed} / dismissed ${counts.dismissed}`);
+    console.log(`   病根：${causes.join("、") || "待认领"}\n`);
+  }
+}
+
+async function triage(rest) {
+  const subject = rest.find((arg) => SUBJECTS.includes(arg));
+  const n = Number(rest.find((arg) => /^\d+$/.test(arg))) || 20;
+  let eventQuery = db
+    .from("study_error")
+    .select("id, subject, knowledge, status, log_date")
+    .in("status", ["open", "absorbed"])
+    .order("status", { ascending: false })
+    .order("log_date", { ascending: false })
+    .limit(3000);
+  if (subject) eventQuery = eventQuery.eq("subject", subject);
+  const [eventResponse, linkResponse] = await Promise.all([
+    eventQuery,
+    db.from("study_error_topic").select("study_error_id").limit(5000),
+  ]);
+  if (eventResponse.error) return fail(eventResponse.error.message);
+  if (linkResponse.error) return fail(`读取 v2 关联失败：${linkResponse.error.message}`);
+  const linked = new Set((linkResponse.data ?? []).map((row) => row.study_error_id));
+  const unclassified = (eventResponse.data ?? []).filter((row) => !linked.has(row.id));
+  console.log(`待归类错题事件：${unclassified.length} 条${subject ? `（${subject}）` : ""}；本次显示 ${Math.min(n, unclassified.length)} 条。`);
+  console.log("归类：classify <id> --topic <标准主题> [--chapter ... --cause ... --diagnosis pending|confirmed --anchor ...]\n");
+  for (const row of unclassified.slice(0, n)) {
+    console.log(`#${row.id} [${row.subject ?? "?"}] ${row.status} ${row.log_date}\n   ${String(row.knowledge).replace(/\s+/g, " ").slice(0, 180)}`);
+  }
+}
+
 // ---------- material：出题弹药检索 ----------
 // 第三列＝该 kind 的保底字符配额（前面的 kind 吃不掉后面的，省下的才向后滚）
-const KINDS = [
+export const KINDS = [
   ["xinde", "做题心得/讲义心得(马工程·提示·易错·辨析·总结)", 4000],
-  ["textbook", "《考试分析》教材原文", 5000],
+  ["textbook", "教材重排/机构讲义/法律更新混合库（按路径辨源）", 5000],
   ["yixiao", "易混概念库", 2000],
-  ["zhenti", "真题分析/高频/主观题汇总", 3000],
+  ["exam", "真题原卷/随卷参考答案解析", 4000],
+  ["zhenti", "真题二次总结/高频/主观题汇总", 3000],
 ];
 const CTX = 2, CLIP = 150, MAX_BLOCKS_PER_KIND = 6;
-const clip = (s) => { const t = s.trim(); return t.length <= CLIP ? t : t.slice(0, CLIP) + "…"; };
+export function clip(s, anchor) {
+  const text = String(s).trim();
+  if (text.length <= CLIP) return text;
+  const hit = anchor ? text.indexOf(anchor) : -1;
+  if (hit < 0) return text.slice(0, CLIP) + "…";
 
-function grep(rows, keyword, refine) {
+  // OCR/解析文本偶有超长行；窗口围绕命中词展开，避免“命中了却看不见词”。
+  const width = Math.max(CLIP, anchor.length);
+  const roomAroundAnchor = Math.max(0, width - anchor.length);
+  let start = Math.max(0, hit - Math.floor(roomAroundAnchor / 2));
+  start = Math.min(start, Math.max(0, text.length - width));
+  const end = Math.min(text.length, start + width);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end)}${end < text.length ? "…" : ""}`;
+}
+
+export function grep(rows, keyword, refine) {
   const blocks = [];
   let totalHits = 0;
   for (const row of rows) {
@@ -136,7 +250,8 @@ function grep(rows, keyword, refine) {
       const text = [];
       for (let i = s.from; i <= s.to; i++) {
         if (refine && lines[i].includes(refine)) refineHit = true;
-        text.push(`${base + i}${hitSet.has(i) ? "►" : " "} ${clip(lines[i])}`);
+        const anchor = hitSet.has(i) ? keyword : (refine && lines[i].includes(refine) ? refine : undefined);
+        text.push(`${base + i}${hitSet.has(i) ? "►" : " "} ${clip(lines[i], anchor)}`);
       }
       blocks.push({ path: row.path, lines: s.hits.map((i) => base + i), text: text.join("\n"), refineHit });
     }
@@ -146,6 +261,21 @@ function grep(rows, keyword, refine) {
     return b.lines.length - a.lines.length;
   });
   return { blocks, totalHits };
+}
+
+export function formatMaterialBlocks(blocks, budget, maxBlocks = MAX_BLOCKS_PER_KIND) {
+  const segments = [];
+  let used = 0;
+  for (const block of blocks.slice(0, maxBlocks)) {
+    let segment = `· ${block.path}\n${block.text}`;
+    if (used + segment.length > budget) {
+      if (segments.length) break;
+      segment = segment.slice(0, budget) + "\n…（本片段过长已截断）";
+    }
+    segments.push(segment);
+    used += segment.length;
+  }
+  return { segments, used, shown: segments.length };
 }
 
 async function material(keyword, refine) {
@@ -162,17 +292,8 @@ async function material(keyword, refine) {
     console.log(`\n───── ${label}　命中 ${totalHits} 行 / ${blocks.length} 片段 ─────`);
     if (!blocks.length) { console.log("（无命中）"); carry += quota; continue; }
     const budget = quota + carry;
-    let used = 0, shown = 0;
-    for (const b of blocks.slice(0, MAX_BLOCKS_PER_KIND)) {
-      let seg = `· ${b.path}\n${b.text}`;
-      if (used + seg.length > budget) {
-        if (shown) break;
-        seg = seg.slice(0, budget) + "\n…（本片段过长已截断）"; // 保底：命中了就必须看见东西
-      }
-      console.log(seg);
-      used += seg.length;
-      shown++;
-    }
+    const { segments, used, shown } = formatMaterialBlocks(blocks, budget);
+    for (const segment of segments) console.log(segment);
     if (shown < blocks.length) console.log(`…（本段还有 ${blocks.length - shown} 个片段未显示，换更具体的关键词或加特征词再查）`);
     carry = Math.max(0, budget - used);
   }
@@ -220,14 +341,115 @@ async function absorb(rest) {
 async function add(rest) {
   const stageOnly = rest.includes("--stage");
   rest = rest.filter((arg) => arg !== "--stage");
-  let recurOf = null;
-  const ri = rest.indexOf("--recur-of");
-  if (ri !== -1) { recurOf = Number(rest[ri + 1]); rest.splice(ri, 2); if (!Number.isFinite(recurOf)) return fail("--recur-of 需要旧错题的数字 id，如：add 刑法 xxx --recur-of 36"); }
-  const subject = rest[0] && SUBJECTS.includes(rest[0]) ? rest.shift() : null;
-  const knowledge = rest.join(" ").trim();
-  if (!knowledge) return fail("add 需要知识点，如：add 刑法 牵连犯与吸收犯区分标准 [--recur-of 36]");
-  appendPending({ op: "new_error", subject, knowledge, recurOf });
-  console.log(`⏳ 已暂存待同步·新错题：[${subject ?? "未分类"}]${recurOf ? ` 🔁复发（源#${recurOf}）` : ""} ${knowledge}`);
+  let parsed;
+  try { parsed = parseAddArgs(rest); } catch (error) { return fail(error.message); }
+  appendPending({ op: "new_error", ...parsed });
+  console.log(`⏳ 已暂存待同步·新错题：[${parsed.subject}]${parsed.recurOf ? ` 🔁复发（源#${parsed.recurOf}）` : ""} ${parsed.knowledge}`);
+  if (parsed.topic) {
+    console.log(`   ↳ 主题「${parsed.topic.title}」｜病根 ${ROOT_CAUSES[parsed.topic.rootCauseCode]}｜诊断 ${parsed.topic.diagnosisStatus}`);
+  } else if (!parsed.recurOf) {
+    console.log("   ↳ 未提供 --topic：事件会保留，但进入 triage 待归类池，不再把整段错题文字冒充长期弱项。");
+  }
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+  await sync([]);
+}
+
+async function classify(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
+  const studyErrorId = Number(rest.shift());
+  if (!Number.isInteger(studyErrorId) || studyErrorId <= 0) return fail("classify 需要错题事件 id，如：classify 81 --topic 监护人顺位");
+  let parsed;
+  try { parsed = parseTopicOptions(rest, { requireTopic: true }); } catch (error) { return fail(error.message); }
+  if (parsed.rest.length) return fail(`无法识别的 classify 参数：${parsed.rest.join(" ")}`);
+  appendPending({ op: "classify_error", studyErrorId, topic: parsed.topic });
+  console.log(`⏳ 已暂存待同步·归类 #${studyErrorId} →「${parsed.topic.title}」｜病根 ${ROOT_CAUSES[parsed.topic.rootCauseCode]}｜诊断 ${parsed.topic.diagnosisStatus}`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+  await sync([]);
+}
+
+async function classifyBatch(rest) {
+  const stageOnly = rest.includes("--stage");
+  const file = rest.find((arg) => arg !== "--stage");
+  if (!file) return fail("classify-batch 需要 JSON 文件路径");
+  let rows;
+  try {
+    rows = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    return fail(`读取批量归类文件失败：${error.message}`);
+  }
+  if (!Array.isArray(rows) || !rows.length) return fail("批量归类文件必须是非空 JSON 数组");
+  const operations = [];
+  try {
+    for (const [index, row] of rows.entries()) {
+      const studyErrorId = Number(row.studyErrorId);
+      if (!Number.isInteger(studyErrorId) || studyErrorId <= 0) throw new Error(`第 ${index + 1} 项 studyErrorId 无效`);
+      const title = cleanTopicTitle(row.topic?.title);
+      if (!title) throw new Error(`第 ${index + 1} 项缺 topic.title`);
+      const classificationStatus = row.topic.classificationStatus ?? "confirmed";
+      if (!CLASSIFICATION_STATUSES.includes(classificationStatus)) throw new Error(`第 ${index + 1} 项 classificationStatus 无效`);
+      const role = row.topic.role ?? "primary";
+      if (!["primary", "related"].includes(role)) throw new Error(`第 ${index + 1} 项 role 无效`);
+      operations.push({
+        op: "classify_error",
+        studyErrorId,
+        topic: {
+          title,
+          chapter: row.topic.chapter ?? null,
+          section: row.topic.section ?? null,
+          kpId: row.topic.kpId ?? null,
+          classificationStatus,
+          rootCauseCode: validateRootCause(row.topic.rootCauseCode ?? "unclassified"),
+          rootCauseNote: row.topic.rootCauseNote ?? null,
+          diagnosisStatus: validateDiagnosisStatus(row.topic.diagnosisStatus ?? "pending"),
+          evidenceAnchor: row.topic.evidenceAnchor ?? null,
+          role,
+        },
+      });
+    }
+  } catch (error) { return fail(error.message); }
+  for (const op of operations) appendPending(op);
+  console.log(`⏳ 已暂存批量归类 ${operations.length} 条（${file}）`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；可先 sync --dry 预览。）");
+  await sync([]);
+}
+
+function takeNamed(rest, name) {
+  const index = rest.indexOf(name);
+  if (index === -1) return null;
+  const value = rest[index + 1];
+  if (value == null || String(value).startsWith("--")) throw new Error(`${name} 需要一个值`);
+  rest.splice(index, 2);
+  return value;
+}
+
+async function review(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
+  const topicId = Number(rest.shift());
+  if (!Number.isInteger(topicId) || topicId <= 0) return fail("review 需要弱项主题 id，如：review 12 pass --angle 变式案例");
+  let result;
+  try { result = validateReviewResult(rest.shift()); } catch (error) { return fail(error.message); }
+  let op;
+  try {
+    const studyErrorIdRaw = takeNamed(rest, "--event");
+    const studyErrorId = studyErrorIdRaw == null ? null : Number(studyErrorIdRaw);
+    if (studyErrorIdRaw != null && (!Number.isInteger(studyErrorId) || studyErrorId <= 0)) throw new Error("--event 需要正整数错题 id");
+    op = {
+      op: "error_review",
+      topicId,
+      result,
+      studyErrorId,
+      date: takeNamed(rest, "--date") ?? today,
+      sessionKey: takeNamed(rest, "--session"),
+      angle: takeNamed(rest, "--angle"),
+      evidenceAnchor: takeNamed(rest, "--anchor"),
+      note: takeNamed(rest, "--note"),
+    };
+  } catch (error) { return fail(error.message); }
+  if (rest.length) return fail(`无法识别的 review 参数：${rest.join(" ")}`);
+  appendPending(op);
+  console.log(`⏳ 已暂存待同步·T#${topicId} 冷复检 ${result}${op.angle ? `｜角度 ${op.angle}` : ""}${op.date ? `｜${op.date}` : ""}`);
   if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
   await sync([]);
 }
@@ -240,8 +462,12 @@ function pending(rest) {
   console.log(`本地 outbox：${ops.length} 条（同步失败或显式 --stage；运行 sync 可重试）\n`);
   ops.forEach((o, i) => {
     if (o.op === "absorb") console.log(`${i + 1}. 销账 #${(o.ids ?? []).join(" #")}${o.note ? "（" + o.note + "）" : ""}\n   ${(o.items ?? []).join("\n   ")}`);
-    else if (o.op === "new_error") console.log(`${i + 1}. 新错题 [${o.subject ?? "未分类"}] ${o.knowledge}`);
+    else if (o.op === "new_error") console.log(`${i + 1}. 新错题 [${o.subject ?? "未分类"}] ${o.knowledge}${o.topic ? ` → 主题「${o.topic.title}」` : " → 待归类"}`);
+    else if (o.op === "classify_error") console.log(`${i + 1}. 归类 #${o.studyErrorId} → 主题「${o.topic?.title ?? "?"}」`);
+    else if (o.op === "error_review") console.log(`${i + 1}. 冷复检 T#${o.topicId} ${o.result} ${o.date ?? ""}`);
     else if (o.op === "study_log") console.log(`${i + 1}. 学习日志 ${o.date ?? ""} [${o.subject}]${o.chapter ? " " + o.chapter : ""} ${o.activity}${o.accuracy != null ? " " + o.accuracy + "%" : ""}${o.feeling ? "（" + o.feeling + "）" : ""}`);
+    else if (o.op === "ask_point") console.log(`${i + 1}. 答疑卡点 [${o.subject}] ${o.confusion}`);
+    else if (o.op === "resolve_ask_point") console.log(`${i + 1}. 答疑收口 A#${o.pointId} → ${o.action}`);
   });
 }
 
@@ -254,12 +480,20 @@ async function sync(rest) {
   const newErrs = ops.filter((o) => o.op === "new_error");
   const logs = ops.filter((o) => o.op === "study_log");
   const mems = ops.filter((o) => o.op === "coach_memory");
+  const classifications = ops.filter((o) => o.op === "classify_error");
+  const reviews = ops.filter((o) => o.op === "error_review");
+  const askPoints = ops.filter((o) => o.op === "ask_point");
+  const askResolutions = ops.filter((o) => o.op === "resolve_ask_point");
 
-  console.log(`${dry ? "【预览·不写库】" : "同步到系统"}：销账 ${absorbIds.length} 条${absorbIds.length ? "（#" + absorbIds.join(" #") + "）" : ""}、新错题 ${newErrs.length} 条、学习日志 ${logs.length} 条、长期记忆 ${mems.length} 条`);
+  console.log(`${dry ? "【预览·不写库】" : "同步到系统"}：销账 ${absorbIds.length} 条${absorbIds.length ? "（#" + absorbIds.join(" #") + "）" : ""}、新错题 ${newErrs.length} 条、补归类 ${classifications.length} 条、冷复检 ${reviews.length} 条、答疑卡点 ${askPoints.length} 条、答疑收口 ${askResolutions.length} 条、学习日志 ${logs.length} 条、长期记忆 ${mems.length} 条`);
   if (dry) {
-    for (const e of newErrs) console.log(`   + 错题 [${e.subject ?? "未分类"}] ${e.knowledge}`);
+    for (const e of newErrs) console.log(`   + 错题 [${e.subject ?? "未分类"}] ${e.knowledge}${e.topic ? ` → ${e.topic.title}` : " → 待归类"}`);
+    for (const c of classifications) console.log(`   + 归类 #${c.studyErrorId} → ${c.topic?.title}`);
+    for (const r of reviews) console.log(`   + 冷复检 T#${r.topicId} ${r.result} ${r.date ?? ""}`);
     for (const l of logs) console.log(`   + 日志 ${l.date ?? ""} [${l.subject}]${l.chapter ? " " + l.chapter : ""} ${l.activity}${l.accuracy != null ? " " + l.accuracy + "%" : ""}${l.feeling ? "（" + l.feeling + "）" : ""}`);
     for (const m of mems) console.log(`   + 记忆 [${m.category ?? "画像"}] ${m.fact}`);
+    for (const a of askPoints) console.log(`   + 答疑卡点 [${a.subject}] ${a.confusion}`);
+    for (const a of askResolutions) console.log(`   + 答疑收口 A#${a.pointId} → ${a.action}`);
     return console.log("（预览完毕，未改动。去掉 --dry 才真正落库。）");
   }
 
@@ -272,7 +506,7 @@ async function sync(rest) {
   const count = (kind) => report.succeeded
     .filter(({ result }) => result.kind === kind)
     .reduce((sum, { result }) => sum + result.affected, 0);
-  console.log(`✅ 已确认同步：销账 ${count("absorb")} 条、新增错题 ${count("new_error")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条。`);
+  console.log(`✅ 已确认同步：销账 ${count("absorb")} 条、新增错题 ${count("new_error")} 条、补归类 ${count("classify_error")} 条、冷复检 ${count("error_review")} 条、答疑卡点 ${count("ask_point")} 条、答疑收口 ${count("resolve_ask_point")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条。`);
   if (report.failed.length) {
     console.error(`⚠️ ${report.failed.length} 项失败，已保留在 outbox，绝未清空：`);
     for (const { op, error } of report.failed) console.error(`   · ${op.operation_id} (${op.op})：${error}`);
@@ -306,6 +540,7 @@ async function recheck(rest) {
   const ready = pool.filter((r) => now - r.lastTouch >= RECHECK_MIN_GAP).sort(bySince);
   const draw = (ready.length ? ready : pool.slice().sort(bySince)).slice(0, n);
   const never = pool.filter((r) => !r.tested).length;
+  const topicLinks = await loadTopicLinks(draw.map((r) => r.id));
 
   console.log(`老错题轮换池：共 ${pool.length} 条（【全部已销账老题都在池里，无上限、永不淘汰】）`);
   console.log(`本次抽 ${draw.length} 条——最久没考的优先、考过的沉底让位，反复跑保证【每一条终会被轮到、不遗漏】：\n`);
@@ -313,6 +548,9 @@ async function recheck(rest) {
     const tag = r.tested ? `上次考 ${r.sinceDays} 天前·累计抽查 ${r.count} 次` : `销账后 ${r.sinceDays} 天·从没抽查过`;
     console.log(`#${r.id} [${r.subject ?? "?"}]（${tag}）`);
     console.log(`   ${String(r.knowledge).replace(/\s+/g, " ").slice(0, 80)}`);
+    const link = topicLinks.get(r.id);
+    const topic = link?.error_topic;
+    if (topic) console.log(`   ↳ T#${topic.id} ${topic.title}`);
   }
   if (never) console.log(`\n（池里还有 ${never} 条【从没被抽查过】，排最前优先出——一条不漏。抽查后：过了→ pass <id>；没过→ recheck-fail <id> 重新挂账）`);
 }
@@ -349,20 +587,42 @@ async function recheckFail(rest) {
 
 function fail(msg) { console.error("✗ " + msg); process.exitCode = 1; }
 
-switch (cmd) {
-  case "list": await list(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
-  case "material": await material(args[0], args[1]); break;
-  case "absorb": await absorb(args); break;
-  case "add": await add(args); break;
-  case "pending": pending(args); break;
-  case "sync": await sync(args); break;
-  case "recheck": await recheck(args); break;
-  case "pass": pass(args); break;
-  case "recheck-fail": await recheckFail(args); break;
-  default:
-    console.log("用法：node --env-file=.env.local scripts/cuoti.mjs <命令> ...");
-    console.log("  只读：list [科目] / material <词> [特征词]");
-    console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
-    console.log("  写(outbox 后立即同步)：absorb <id...>|--like <片段> / add <科目> <知识点>（加 --stage 才延后）");
-    console.log("  outbox：pending [--clear] / sync [--dry]（失败重试）");
+async function main(argv) {
+  db = createClient(
+    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { auth: { persistSession: false } },
+  );
+  const [cmd, ...args] = argv;
+  switch (cmd) {
+    case "list": await list(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
+    case "topics": await topics(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
+    case "triage": await triage(args); break;
+    case "material": await material(args[0], args[1]); break;
+    case "absorb": await absorb(args); break;
+    case "add": await add(args); break;
+    case "classify": await classify(args); break;
+    case "classify-batch": await classifyBatch(args); break;
+    case "review": await review(args); break;
+    case "pending": pending(args); break;
+    case "sync": await sync(args); break;
+    case "recheck": await recheck(args); break;
+    case "pass": pass(args); break;
+    case "recheck-fail": await recheckFail(args); break;
+    default:
+      console.log("用法：node --env-file=.env.local scripts/cuoti.mjs <命令> ...");
+      console.log("  只读：list [科目] / topics [科目] / triage [科目] [n] / material <词> [特征词]");
+      console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
+      console.log("  写：absorb <id...>|--like <片段>");
+      console.log("      add <科目> <事件说明> [--topic 标准主题 --chapter 章 --section 节 --kp ID --classification pending|confirmed --cause 病根代码 --cause-note 说明 --diagnosis pending|confirmed --anchor 锚点 --recur-of id]");
+      console.log("      classify <事件id> --topic <标准主题> [同上主题参数]");
+      console.log("      classify-batch <归类计划.json> [--stage]");
+      console.log("      review <主题id> <pass|partial|fail> [--event 错题id --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键]");
+      console.log(`  病根代码：${Object.entries(ROOT_CAUSES).map(([code, label]) => `${code}=${label}`).join(" / ")}`);
+      console.log("  outbox：pending [--clear] / sync [--dry]（失败重试）");
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main(process.argv.slice(2));
 }

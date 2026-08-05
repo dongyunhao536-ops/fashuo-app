@@ -1,5 +1,5 @@
 // node --env-file=.env.local scripts/daily.mjs data [--date YYYY-MM-DD]
-// node --env-file=.env.local scripts/daily.mjs save --file <日报.md> [--date YYYY-MM-DD]
+// node --env-file=.env.local scripts/daily.mjs save --file <日报.md> [--date YYYY-MM-DD] [--scheduled]
 // PC 端日报（ribao-pc skill 专用 · 每天北京 17:20 定时跑）：
 //   data  = 拉当日事实源（昨日全天结算面 + 今日截至此刻 + 断档链 + 欠账池 + 周报分档 + 昨日派单）
 //   save  = 落 .local/日报/YYYY-MM-DD.md，并把摘要块 upsert 进 .local/日报台账.md（周报/评估读它拿日粒度）
@@ -7,6 +7,10 @@
 // 铁律：零编造；库里没有 = 【没记录】，不等于没做，措辞必须分开（见 skill）。
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { summarizeErrorBookRows, topicLabel } from "./lib/error-book-summary.mjs";
+import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
+import { summarizeAskPoints } from "./lib/ask-point-summary.mjs";
+import { parseReviewSchedule } from "./lib/assessment-ledgers.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
@@ -80,18 +84,27 @@ function weeklyBuckets() {
   return lines.length ? lines : null;
 }
 
-// —— 两本欠账台账的规模（细节让 skill 去 Read 原文，这里只给体量）——
-function guazhangScale() {
+// —— 带背欠账的结构化快照（Markdown 是唯一事实源；这里不另存第二本账）——
+function reciteLedgerSnapshot(referenceDate) {
   const f = ".local/带背挂账.md";
-  if (!existsSync(f)) return "（无台账文件）";
-  const m = readFileSync(f, "utf8").match(/^##\s*挂账中[^\n]*/m);
-  return m ? m[0].replace(/^##\s*/, "").slice(0, 120) : "（未找到「挂账中」小节）";
+  if (!existsSync(f)) throw new Error(`日报事实源读取失败：缺 ${f}`);
+  const parsed = parseReciteLedger(readFileSync(f, "utf8"), { referenceDate });
+  const summary = summarizeReciteLedger(parsed);
+  if (summary.counts.errors) {
+    throw new Error(`日报事实源读取失败：带背账本有 ${summary.counts.errors} 个结构错误；先运行 node scripts/daibei-ledger.mjs audit --today ${referenceDate}`);
+  }
+  return summary;
 }
 
 async function collect(date) {
   const yday = shift(date, -1);
   const from14 = shift(date, -13);
-  const [todayLog, ydayLog, heat, ydayErrNew, ydayErrAbs, todayErrNew, todayErrAbs, openErr, lastBySubj, allAct] = await Promise.all([
+  const reciteSummary = reciteLedgerSnapshot(date);
+  const scheduleFile = ".local/复盘排期.md";
+  if (!existsSync(scheduleFile)) throw new Error(`日报事实源读取失败：缺 ${scheduleFile}`);
+  const schedule = parseReviewSchedule(readFileSync(scheduleFile, "utf8"), { referenceDate: date });
+  if (schedule.counts.errors) throw new Error(`日报事实源读取失败：复盘排期有 ${schedule.counts.errors} 个结构错误；先运行 node scripts/schedule.mjs check --today ${date}`);
+  const [todayLog, ydayLog, heat, ydayErrNew, ydayErrAbs, todayErrNew, todayErrAbs, errorBook, askPoints, lastBySubj, allAct] = await Promise.all([
     db.from("study_log").select("subject, chapter, activity, accuracy, feeling, raw_input").eq("log_date", date),
     db.from("study_log").select("subject, chapter, activity, accuracy, feeling, raw_input").eq("log_date", yday),
     db.from("study_log").select("log_date, subject, activity").gte("log_date", from14).lte("log_date", date),
@@ -99,26 +112,26 @@ async function collect(date) {
     db.from("study_error").select("subject, knowledge").eq("status", "absorbed").gte("absorbed_at", dayStart(yday)).lt("absorbed_at", dayStart(date)),
     db.from("study_error").select("subject, knowledge").eq("log_date", date),
     db.from("study_error").select("subject, knowledge").eq("status", "absorbed").gte("absorbed_at", dayStart(date)).lt("absorbed_at", dayStart(shift(date, 1))),
-    db.from("study_error").select("subject, kp_id, knowledge, log_date, status").in("status", ["open", "absorbed"]).limit(2000),
-    Promise.all(SUBJECTS.map((s) => db.from("study_log").select("log_date, activity").eq("subject", s).order("log_date", { ascending: false }).limit(1).then((r) => [s, r.data?.[0] ?? null]))),
+    db.from("error_book_v2").select("study_error_id, log_date, event_subject, knowledge, event_status, absorbed_at, role, root_cause_code, diagnosis_status, topic_id, topic_subject, chapter, section, topic_title, classification_status, mastery_status").limit(5000),
+    db.from("ask_point_v2").select("id, subject, confusion, question_type, status, effective_status, ttl_until, source, created_at, resolved_at").eq("active", true).limit(5000),
+    Promise.all(SUBJECTS.map((s) => db.from("study_log").select("log_date, activity").eq("subject", s).order("log_date", { ascending: false }).limit(1).then((response) => [s, response]))),
     db.from("study_log").select("log_date, activity").order("log_date", { ascending: false }).limit(600),
   ]);
+
+  const probes = { 今日流水: todayLog, 昨日流水: ydayLog, 热力: heat, 昨日新增错题: ydayErrNew, 昨日销账: ydayErrAbs, 今日新增错题: todayErrNew, 今日销账: todayErrAbs, 错题主题: errorBook, 答疑卡点: askPoints, 分轨: allAct };
+  const broken = Object.entries(probes).filter(([, response]) => response.error);
+  for (const [subject, response] of lastBySubj) if (response.error) broken.push([`${subject}最近流水`, response]);
+  if (broken.length) {
+    throw new Error(`日报事实源读取失败：${broken.map(([name, response]) => `${name}=${response.error.message}`).join("；")}`);
+  }
 
   // 轨道断档：按 activity 看各条轨最后一次（"带背轨断了 6 天"这种信号，只看"每天有没有流水"看不出来
   // ——周报 P1 常点名某条轨，日报得答得上它断没断。2026-07-28 首跑就逮到带背断 6 天）
   const trackLast = {};
   for (const row of allAct.data ?? []) if (row.activity && !(row.activity in trackLast)) trackLast[row.activity] = String(row.log_date);
 
-  // 错题本 open 聚合（同 coach.mjs：累计错次×新近，🔁=曾吸收又错）
-  const agg = new Map();
-  for (const r of openErr.data ?? []) {
-    if (!r.knowledge) continue;
-    const key = r.kp_id ?? `${r.subject ?? "未分类"}::${r.knowledge}`;
-    const cur = agg.get(key) ?? { label: `${r.subject ?? "未分类"}·${cut(r.knowledge, 40)}`, nOpen: 0, nAbs: 0, last: "" };
-    if (r.status === "absorbed") cur.nAbs++; else { cur.nOpen++; const d = String(r.log_date ?? ""); if (d > cur.last) cur.last = d; }
-    agg.set(key, cur);
-  }
-  const open = [...agg.values()].filter((e) => e.nOpen > 0);
+  const errorSummary = summarizeErrorBookRows(errorBook.data ?? []);
+  const askSummary = summarizeAskPoints(askPoints.data ?? [], { referenceDate: date });
 
   // 近 14 天热力 + 连续零流水链
   const byDate = new Map();
@@ -128,7 +141,8 @@ async function collect(date) {
 
   return { date, yday, todayLog: todayLog.data ?? [], ydayLog: ydayLog.data ?? [], days, gap, trackLast,
     ydayErrNew: ydayErrNew.data ?? [], ydayErrAbs: ydayErrAbs.data ?? [], todayErrNew: todayErrNew.data ?? [], todayErrAbs: todayErrAbs.data ?? [],
-    open, lastBySubj: Object.fromEntries(lastBySubj) };
+    errorSummary, reciteSummary, askSummary, schedule,
+    lastBySubj: Object.fromEntries(lastBySubj.map(([subject, response]) => [subject, response.data?.[0] ?? null])) };
 }
 
 function fmtLog(rows) {
@@ -172,17 +186,35 @@ function render(r) {
   L.push(`  分轨最后一次：${Object.entries(r.trackLast).sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([a, d]) => `${a} ${d}(${ago(d)}天前)`).join(" ／ ")}`);
 
   L.push(`\n──── ⑤ 欠账池（三本账的体量；细节自己去 Read 原文）────`);
-  L.push(`  错题本：open ${r.open.length} 类，其中 🔁曾吸收又错 ${r.open.filter((e) => e.nAbs > 0).length} 类、🔺已达 ${cfg.红线?.同弱项错次转专题 ?? 3} 次转专题 ${r.open.filter((e) => e.nOpen + e.nAbs >= (cfg.红线?.同弱项错次转专题 ?? 3)).length} 类`);
-  L.push(`  最久没碰的 open：${r.open.slice().sort((a, b) => (a.last < b.last ? -1 : 1)).slice(0, 5).map((e) => `${e.label}(${e.last || "?"})`).join("、") || "（无）"}`);
-  L.push(`  带背挂账：${guazhangScale()}`);
-  L.push(`  复盘排期：Read .local/复盘排期.md 取「到期未执行」的验收项（本脚本不解析，避免养成第二本账）`);
+  const redline = cfg.红线?.同弱项错次转专题 ?? 3;
+  const unclassifiedText = Object.entries(r.errorSummary.unclassifiedEvents.reduce((counts, event) => {
+    const subject = event.subject ?? "未分类";
+    counts[subject] = (counts[subject] ?? 0) + 1;
+    return counts;
+  }, {})).map(([subject, count]) => `${subject}${count}`).join("/") || "无";
+  L.push(`  错题事件：open ${r.errorSummary.eventCounts.open} / absorbed ${r.errorSummary.eventCounts.absorbed} / dismissed ${r.errorSummary.eventCounts.dismissed}`);
+  L.push(`  长期主题：活跃 ${r.errorSummary.activeTopics.length} / 事件已销但待冷检 ${r.errorSummary.awaitingColdReviewTopics.length} / monitoring ${r.errorSummary.masteryCounts.monitoring} / stable ${r.errorSummary.masteryCounts.stable}`);
+  L.push(`  主题警报：🔁跨轮复发 ${r.errorSummary.activeTopics.filter((topic) => topic.eventCounts.absorbed > 0).length} 个、🔺累计事件达 ${redline} 次 ${r.errorSummary.activeTopics.filter((topic) => topic.eventTotal >= redline).length} 个、待归类事件 ${r.errorSummary.unclassifiedEvents.length} 条（${unclassifiedText}）`);
+  L.push(`  最久未新增证据的活跃主题：${r.errorSummary.activeTopics.slice().sort((a, b) => a.latestOpenDate.localeCompare(b.latestOpenDate)).slice(0, 5).map((topic) => `${topicLabel(topic)}(${topic.latestOpenDate || "?"})`).join("、") || "（无）"}`);
+  const reciteOldest = r.reciteSummary.oldestActive.slice(0, 5)
+    .map((entry) => `${entry.id} ${entry.subject}·${cut(entry.title, 28)}(${entry.lastTouchedOn ?? "日期缺失"})`).join("、") || "（无）";
+  const reciteClosed = r.reciteSummary.withdrawnReviewCandidates.slice(0, 3)
+    .map((entry) => `${entry.id} ${entry.subject}(${entry.lastTouchedOn ?? "日期缺失"})`).join("、") || "（无）";
+  L.push(`  带背挂账：active ${r.reciteSummary.counts.active} / 可复检 ${r.reciteSummary.counts.actionable} / Anki轨 ${r.reciteSummary.counts.anki} / 已撤池 ${r.reciteSummary.counts.withdrawn} / 移交 ${r.reciteSummary.counts.transferred}`);
+  L.push(`  最久未碰的带背候选：${reciteOldest}`);
+  L.push(`  已撤池轮抽候选：${reciteClosed}${r.reciteSummary.counts.warnings ? `（账本格式警告 ${r.reciteSummary.counts.warnings}，详见 daibei-ledger audit）` : ""}`);
+  L.push(`  答疑卡点：有效 open ${r.askSummary.activePoints.length}；${r.askSummary.activePoints.slice(0, 5).map((point) => `A#${point.id} ${point.subject ?? "未分类"}·${cut(point.confusion, 35)}(${String(point.createdAt ?? "").slice(0, 10) || "?"})`).join("、") || "（无）"}`);
+  L.push(`  复盘排期：逾期 ${r.schedule.counts.overdue} / 今日 ${r.schedule.counts.dueToday} / 未来 ${r.schedule.counts.upcoming}（只认结构化行动项；旧格式 ${r.schedule.counts.legacy} 条只作证据）`);
+  for (const item of [...r.schedule.overdue, ...r.schedule.dueToday, ...r.schedule.upcoming].slice(0, 8)) {
+    L.push(`    - ${item.dueDate} [${item.priority}] ${item.id} ${item.task}`);
+  }
 
   L.push(`\n──── ⑥ 本周周报分档（派单唯一来源 · 日报不另立标准）────`);
   const wk = weeklyBuckets();
   if (wk) L.push(...wk.map((l) => "  " + l));
   else L.push("  （.local/weekly-draft.md 无 P0/P1 行或文件缺失——如实说明，别自己编一套优先级）");
 
-  L.push(`\n（据此写日报到 .local/日报草稿.md，必须含 4 行摘要：**派单** / **昨日结算** / **今日流水** / **断档**；再 daily.mjs save --file .local/日报草稿.md）`);
+  L.push(`\n（据此写日报到 .local/日报草稿.md，必须含 4 行摘要：**派单** / **昨日结算** / **今日流水** / **断档**；再 daily.mjs save --file .local/日报草稿.md。定时任务须额外带 --scheduled，手动出日报不要带。）`);
   return L.join("\n");
 }
 
@@ -194,6 +226,13 @@ if (cmd === "data") {
   console.log(render(await collect(date)));
 } else if (cmd === "save") {
   if (!f.file || f.file === true) { console.error("save 需要 --file <日报markdown路径>"); process.exit(1); }
+  if (f.scheduled) {
+    const now = bjNow();
+    if (now < "17:15" || now >= "18:30") {
+      console.error(`拒绝定时日报写入：北京时间 ${now} 不在 17:15–18:29 运行窗内；手动补日报请省略 --scheduled。`);
+      process.exit(1);
+    }
+  }
   const md = readFileSync(f.file, "utf8").trim();
   if (!md) { console.error("日报文件为空"); process.exit(1); }
   const pick = (label) => { const m = md.match(new RegExp(`^-\\s*\\*\\*${label}\\*\\*[：:]\\s*(.+)$`, "m")); return m ? m[1].trim() : null; };
@@ -223,7 +262,7 @@ if (cmd === "data") {
   else console.log(`✅ 已同步共享 daily_report（${date}·PC 生产 ¥0），APP 日报栏即刻展示。`);
   console.log(`（周报/评估/里程碑体检下次会读这本台账拿日粒度执行率与断档链）`);
 } else {
-  console.log("用法：node --env-file=.env.local scripts/daily.mjs <data|save> [--date YYYY-MM-DD] [--file 日报.md]");
+  console.log("用法：node --env-file=.env.local scripts/daily.mjs <data|save> [--date YYYY-MM-DD] [--file 日报.md] [--scheduled]");
   console.log("  data                       拉当日事实源（昨日结算面+今日切面+断档链+欠账池+周报分档+昨日派单）");
   console.log("  save --file .local/日报草稿.md   落 .local/日报/ 并 upsert .local/日报台账.md");
 }

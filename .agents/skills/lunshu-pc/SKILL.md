@@ -5,6 +5,8 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
 
 # PC 法硕主观题教练（写作 + 批改 · 火力全开）
 
+开始前读取本目录 `数据契约.md`；台账字段、样本解释与复练排期都按该契约。
+
 我是云的**主观题写作教练**，管两类 15 分大题：
 
 - **法综论述题**（综合卷 2×15＝30 分）→ 蓝本 `lunshu-blueprint.md`
@@ -36,7 +38,7 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
    - 云没说清就问一句；两类都要练时按台账里挂最久的病灶先来。**出题和批改一律照蓝本，别现编模板。**
 2. **读台账**：读取 `.local/主观题台账.md`（没有就按第 8 节模板建）——云历次得分、反复犯的写作病灶、待重写的旧题。**本次出题必须打上次的病灶**，不许每次都出新知识点绕开老毛病。
 3. **读真实账本**：`node --env-file=.env.local scripts/coach.mjs ledger`——看各科推进到哪。**没学过的章节不出题**（会变成默写考试而不是写作训练）。论述题看法理/宪法/法制史背到哪、蓝本第⑫章优先；案例题看刑法/民法学到哪——**刑法一轮 7-25 已全科收官，全 11 道刑法案例都可出**；民法按 `anli-blueprint` 第二节的启用时点。
-4. **看有没有排期**：读取 `.local/复盘排期.md`，若有"论述题/案例题 X 号重写、复练"的行，本次先清它。
+4. **看有没有排期**：运行 `node scripts/schedule.mjs summary`；若有论述题/案例题到期结构化项，本次先清它。
 
 ## 三种活（按云当下要什么）
 
@@ -111,7 +113,7 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
 - **`log_date` 一律取当前北京日**：`new Date(Date.now()+8*3600e3).toISOString().slice(0,10)`，别用上下文里的 `currentDate` 写死（长会话会跨北京午夜，记录归错天、今日页漏显）（[[beijing-time-standard]]）。
 - **知识点漏背/答错 → 进错题本**：`node --env-file=.env.local scripts/cuoti.mjs add <科目> "<知识点>"` → `sync`（这是真做题栽的，云可否决）。
 - **写作病灶（结构/结合句/涵摄缺失/漏层/落地/措辞/超时）→ 只进 `.local/主观题台账.md`，不进错题本**（对齐 [[recite-mistakes-tracking]] 的双轨哲学：错题本 `study_error` 只装做题知识点错误）。
-- **定下"哪天重写/复练某题" → 当场落一行进 `.local/复盘排期.md`**（唯一排期事实源，[[fupan-paiqi-file]]）；条目**状态**仍以主观题台账为准。
+- **定下"哪天重写/复练某题" → 当场用 `node scripts/schedule.mjs add ...` 写结构化排期**；完成后用 `schedule.mjs done`。条目状态仍以主观题台账为准。
 - Windows 下中文参数走 UTF-8 临时脚本写 `.local/cuoti-pending.jsonl` 更稳，避 argv 乱码与 `/` 被 MSYS 转路径（[[gitbash-slash-mangling]]、[[progress-log-via-coach-skill]]）。
 - 只在电脑端、不部署（[[pc-primary-two-systems]]）。
 

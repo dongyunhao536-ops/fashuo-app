@@ -5,6 +5,9 @@
 // 进度/长期记忆先入同一 outbox，再立即幂等同步；失败项留待下一次自动重试。
 import { createClient } from "@supabase/supabase-js";
 import { readFileSync } from "node:fs";
+import { summarizeErrorBookRows, topicLabel } from "./lib/error-book-summary.mjs";
+import { ROOT_CAUSES } from "./lib/error-taxonomy.mjs";
+import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
@@ -106,11 +109,17 @@ function currentRound() {
 }
 
 async function ledger() {
-  const [prog, recent, errs, ask, mem, msg] = await Promise.all([
+  const reciteParsed = parseReciteLedger(readFileSync(".local/带背挂账.md", "utf8"), { referenceDate: ymd });
+  const reciteSummary = summarizeReciteLedger(reciteParsed);
+  if (reciteSummary.counts.errors) {
+    console.error(`❌ 带背账本有 ${reciteSummary.counts.errors} 个结构错误，已中止（先运行 node scripts/daibei-ledger.mjs audit --today ${ymd}）`);
+    process.exit(1);
+  }
+  const [prog, recent, errorBook, ask, mem, msg] = await Promise.all([
     db.from("study_log").select("log_date, subject, chapter").not("chapter", "is", null).order("log_date", { ascending: false }).limit(400),
     db.from("study_log").select("log_date, subject, chapter, activity, accuracy, feeling, raw_input").order("id", { ascending: false }).limit(8),
-    db.from("study_error").select("subject, kp_id, knowledge, log_date, status, absorbed_at").in("status", ["open", "absorbed"]).limit(2000),
-    db.from("ask_summary").select("subject, confusion, created_at").eq("status", "open").not("confusion", "is", null).order("created_at", { ascending: false }).limit(30),
+    db.from("error_book_v2").select("study_error_id, log_date, event_subject, knowledge, event_status, absorbed_at, role, root_cause_code, diagnosis_status, topic_id, topic_subject, chapter, section, topic_title, classification_status, mastery_status").limit(5000),
+    db.from("ask_point_v2").select("id, subject, confusion, question_type, source, created_at, ttl_until").eq("active", true).not("confusion", "is", null).order("created_at", { ascending: false }).limit(30),
     db.from("coach_memory").select("fact, category, updated_at").order("updated_at", { ascending: false }).limit(200),
     db.from("coach_message").select("role, content").order("id", { ascending: false }).limit(20),
   ]);
@@ -119,7 +128,7 @@ async function ledger() {
   //    若照单下笔会得出"云什么都没学"的完全错误结论；二跑即正常＝网络抖动。
   //    Supabase 查询失败时 .data 为 null，原先被 `?? []` 吞掉 → 打印出一份全零账本。
   //    规矩：任一查询报错就中止，绝不输出半份账本。）
-  const probes = { 进度: prog, 流水: recent, 错题: errs, 答疑: ask, 记忆: mem, 对话: msg };
+  const probes = { 进度: prog, 流水: recent, 错题主题: errorBook, 答疑: ask, 记忆: mem, 对话: msg };
   const broken = Object.entries(probes).filter(([, r]) => r.error);
   if (broken.length) {
     console.error("❌ 账本读取失败，已中止（不输出半份账本，防止据空账下结论）：");
@@ -148,26 +157,35 @@ async function ledger() {
     line(`· ${[r.log_date, r.subject, r.chapter, r.activity, r.accuracy != null ? r.accuracy + "%" : "", r.feeling].filter(Boolean).join(" ")}${r.raw_input ? `（原话：${String(r.raw_input).slice(0, 40)}）` : ""}`);
   if (!(recent.data ?? []).length) line("（暂无）");
 
-  // 错题本 = 弱项（全生命周期聚合：累计错次×新近，🔁复发）
-  const agg = new Map();
-  for (const r of errs.data ?? []) {
-    const key = r.kp_id ?? `${r.subject ?? "未分类"}::${r.knowledge}`;
-    const cur = agg.get(key) ?? { label: `${r.subject ?? "未分类"}·${r.knowledge}`, nOpen: 0, nAbs: 0, last: "" };
-    if (r.status === "absorbed") cur.nAbs++;
-    else { cur.nOpen++; const d = String(r.log_date ?? ""); if (d > cur.last) cur.last = d; }
-    agg.set(key, cur);
-  }
-  const openErrs = [...agg.values()].filter((e) => e.nOpen > 0).sort((a, b) => b.nOpen + b.nAbs - (a.nOpen + a.nAbs) || (a.last < b.last ? 1 : -1));
-  const absorbedCount = [...agg.values()].filter((e) => e.nOpen === 0 && e.nAbs > 0).length;
-  line(`\n──── 错题本（=弱项·唯一事实源；open ${openErrs.length} 类 / 已销账 ${absorbedCount} 类；🔁=复发=病根优先）────`);
-  for (const e of openErrs) {
-    const n = e.nOpen + e.nAbs;
-    line(`· ${e.label}${n > 1 ? " ×" + n : ""}${e.nAbs > 0 ? " 🔁曾吸收又错" : ""}${n >= (cfg.红线?.同弱项错次转专题 ?? 3) ? " 🔺转专题" : ""}（最近 ${e.last || "?"}）`);
-  }
-  if (!openErrs.length) line("（错题本 open 为空——用 cuoti.mjs recheck 抽老题）");
+  line("\n──── 带背挂账（结构化回读；背诵栽点不混入错题本）────");
+  line(`状态：active ${reciteSummary.counts.active} / 可复检 ${reciteSummary.counts.actionable} / Anki轨 ${reciteSummary.counts.anki} / 已撤池 ${reciteSummary.counts.withdrawn} / 移交 ${reciteSummary.counts.transferred}`);
+  line(`分科可复检：${Object.entries(reciteSummary.bySubject).filter(([, count]) => count).map(([subject, count]) => `${subject}${count}`).join(" / ") || "无"}`);
+  line(`最久未碰：${reciteSummary.oldestActive.map((entry) => `${entry.id} ${entry.subject}·${String(entry.title).slice(0, 44)}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}`);
+  line(`已撤池轮抽：${reciteSummary.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}·${String(entry.title).slice(0, 44)}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}${reciteSummary.counts.warnings ? `｜格式警告 ${reciteSummary.counts.warnings}` : ""}`);
 
-  line("\n──── 答疑最近卡点（ask_summary open·互通只读）────");
-  for (const r of ask.data ?? []) line(`· ${r.subject ?? "未分类"}·${String(r.confusion).slice(0, 70)}（${r.created_at ? String(r.created_at).slice(0, 10) : "?"}）`);
+  const errorSummary = summarizeErrorBookRows(errorBook.data ?? []);
+  const redline = cfg.红线?.同弱项错次转专题 ?? 3;
+  line(`\n──── 错题本 v2（事件与长期主题分轴）────`);
+  line(`事件：open ${errorSummary.eventCounts.open} / absorbed ${errorSummary.eventCounts.absorbed} / dismissed ${errorSummary.eventCounts.dismissed}；主题：活跃 ${errorSummary.activeTopics.length} / 待冷检 ${errorSummary.awaitingColdReviewTopics.length} / monitoring ${errorSummary.masteryCounts.monitoring} / stable ${errorSummary.masteryCounts.stable}`);
+  line("【活跃主题：仍有 open 错题事件；按复发/累计事件优先】");
+  for (const topic of errorSummary.activeTopics) {
+    const causes = topic.confirmedRootCauses.map((code) => ROOT_CAUSES[code] ?? code).join("、");
+    line(`· ${topicLabel(topic)}${topic.eventTotal > 1 ? ` ×${topic.eventTotal}` : ""}${topic.eventCounts.absorbed > 0 ? " 🔁曾销账后再错" : ""}${topic.eventTotal >= redline ? " 🔺转专题" : ""}｜事件 open ${topic.eventCounts.open}/absorbed ${topic.eventCounts.absorbed}｜病根 ${causes || "待认领"}｜最近 ${topic.latestOpenDate || "?"}`);
+  }
+  if (!errorSummary.activeTopics.length) line("（没有仍挂 open 事件的法硕主题；可从待冷检池抽查老题）");
+  if (errorSummary.awaitingColdReviewTopics.length) {
+    line(`【待冷检主题：事件已销账但主题未 stable，共 ${errorSummary.awaitingColdReviewTopics.length} 个；最前 10 个】`);
+    for (const topic of errorSummary.awaitingColdReviewTopics.slice(0, 10)) {
+      line(`· ${topicLabel(topic)}｜掌握 ${topic.masteryStatus}｜历史事件 ${topic.eventTotal}｜最近 ${topic.latestEventDate || "?"}`);
+    }
+  }
+  if (errorSummary.unclassifiedEvents.length) {
+    line(`【待归类事件 ${errorSummary.unclassifiedEvents.length} 条】`);
+    for (const event of errorSummary.unclassifiedEvents) line(`· #${event.id}（${event.subject ?? "未分类"}）${event.knowledge.slice(0, 70)}`);
+  }
+
+  line("\n──── 答疑卡点轴（有效 open；普通提问不计）────");
+  for (const r of ask.data ?? []) line(`· A#${r.id} ${r.subject ?? "未分类"}·${String(r.confusion).slice(0, 70)}（${r.created_at ? String(r.created_at).slice(0, 10) : "?"}·${r.source ?? "app"}）`);
   if (!(ask.data ?? []).length) line("（无）");
 
   line("\n──── 关于云·长期记忆（coach_memory 全量）────");
