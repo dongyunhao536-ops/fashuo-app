@@ -321,6 +321,9 @@ async function sinkProposals(args: {
       confusion,
       status: "open",
       ttl_until: bjDateStr(ttl),
+      source: "app",
+      raw_question: question.slice(0, 1000),
+      updated_at: new Date().toISOString(),
     });
     if (error) console.error("[/api/ask] ask_summary 写入失败：", error.message);
   }

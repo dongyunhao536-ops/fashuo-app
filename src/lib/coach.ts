@@ -264,11 +264,11 @@ async function loadLedger(today: Date) {
         .select("id, subject, kp_id, knowledge, log_date, status, absorbed_at")
         .in("status", ["open", "absorbed"])
         .limit(500),
-      // 答疑最近卡点（互通只读：云在答疑里确实卡过的点，ask_summary 指令制严控后噪音低）
+      // 答疑最近卡点（互通只读：只读 TTL 内有效 open；普通提问不计）
       supabaseAdmin
-        .from("ask_summary")
+        .from("ask_point_v2")
         .select("subject, confusion, created_at")
-        .eq("status", "open")
+        .eq("active", true)
         .not("confusion", "is", null)
         .order("created_at", { ascending: false })
         .limit(6),

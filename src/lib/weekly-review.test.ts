@@ -39,7 +39,7 @@ describe("formatWeeklyDataText（喂复盘层的真实数据序列化）", () =>
     };
     const t = formatWeeklyDataText(r);
     expect(t).toContain("刑法：第3章、第4章");
-    expect(t).toContain("答疑 3 次 / 教练打卡 5 条");
+    expect(t).toContain("新增答疑卡点 3 条（不是答疑次数） / 教练打卡 5 条");
     expect(t).toContain("本周吸收错题 1 个：刑法·正当防卫限度");
     expect(t).toContain("刑法·因果关系(×4)");
     expect(t).toContain("民法·善意取得");

@@ -13,7 +13,7 @@ import { getErrorBook, type ErrorItem } from "./errorbook";
 export interface WeeklyReview {
   weekStart: string;
   weekEnd: string;
-  activity: { asks: number; coachLogs: number };
+  activity: { askPointsCreated?: number; asks?: number; coachLogs: number };
   /** 本周学了什么：study_log 按科目聚合的章节 + 活动 */
   studied: { subject: string; chapters: string[]; activities: string[] }[];
   /** 解决了什么：本周吸收的错题 */
@@ -21,6 +21,7 @@ export interface WeeklyReview {
   /** 错题本（=弱项）当前未吸收 Top（与错题页/教练/仪表盘同源聚合） */
   weak: { top: ErrorItem[] };
   askPoints: { subject: string; confusion: string; type: string | null }[];
+  askPointClosure?: { clarified: number; dismissed: number; superseded: number; active: number; expired: number };
   inbox: { createdByType: Record<string, number>; pendingBacklog: number };
   cost: { totalUsd: number; byRoute: { route: string; usd: number }[] };
   /** 带"学习效果"(feeling)的流水——带背/背诵掌握轨迹，喂给复盘层（可选：老数据/单测可无） */
@@ -53,7 +54,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
   const [studyRes, askRes, evCreatedRes, evPendingRes, usageRes, absorbedRes, errorBook, priorReportRes] =
     await Promise.all([
       supabaseAdmin.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart),
-      supabaseAdmin.from("ask_summary").select("subject, confusion, question_type, status").gte("created_at", sinceTs),
+      supabaseAdmin.from("ask_point_v2").select("id, subject, confusion, question_type, status, effective_status, active, created_at, resolved_at").limit(5000),
       supabaseAdmin.from("events").select("type").gte("created_at", sinceTs),
       supabaseAdmin.from("events").select("type").eq("status", "pending"),
       supabaseAdmin.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs),
@@ -71,6 +72,12 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
 
   const study = studyRes.data ?? [];
   const asks = askRes.data ?? [];
+  const inWeek = (value: unknown) => {
+    const date = value == null ? "" : String(value).slice(0, 10);
+    return date >= weekStart && date <= weekEnd;
+  };
+  const askCreated = asks.filter((a) => inWeek(a.created_at));
+  const askResolved = asks.filter((a) => inWeek(a.resolved_at));
 
   // —— 本周学了什么：只取【实打实学习动作 + 真科目 + 有章节】的 study_log ——
   const studyMap = new Map<string, { chapters: Set<string>; activities: Set<string> }>();
@@ -107,9 +114,9 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
     .filter((r) => r.knowledge)
     .map((r) => ({ subject: (r.subject as string | null) ?? "未分类", knowledge: String(r.knowledge) }));
 
-  // —— 答疑未收口卡点：只认 status=open（已收口/被顶掉的不算"需关注"，与首页计数同口径）——
+  // —— 答疑未收口卡点：只认 active=true（TTL 过期退出；普通提问从不进这张表）——
   const askPoints = asks
-    .filter((a) => a.confusion && a.status === "open")
+    .filter((a) => a.confusion && a.active === true)
     .slice(0, 10)
     .map((a) => ({ subject: a.subject, confusion: String(a.confusion), type: a.question_type ?? null }));
 
@@ -129,13 +136,20 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
   return {
     weekStart,
     weekEnd,
-    activity: { asks: asks.length, coachLogs: study.length },
+    activity: { askPointsCreated: askCreated.length, coachLogs: study.length },
     studied,
     effects,
     priorReport,
     solved: { absorbedErrors },
     weak: { top: errorBook.slice(0, 8) },
     askPoints,
+    askPointClosure: {
+      clarified: askResolved.filter((a) => a.status === "clarified").length,
+      dismissed: askResolved.filter((a) => a.status === "dismissed").length,
+      superseded: askResolved.filter((a) => a.status === "superseded").length,
+      active: asks.filter((a) => a.active === true).length,
+      expired: asks.filter((a) => a.effective_status === "expired").length,
+    },
     inbox: { createdByType, pendingBacklog: (evPendingRes.data ?? []).length },
     cost: {
       totalUsd,
@@ -151,7 +165,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
 export function formatWeeklyDataText(r: WeeklyReview): string {
   const L: string[] = [];
   L.push(`【本周真实使用数据 ${r.weekStart} ~ ${r.weekEnd}】`);
-  L.push(`· 活动量：答疑 ${r.activity.asks} 次 / 教练打卡 ${r.activity.coachLogs} 条`);
+  L.push(`· 活动量：新增答疑卡点 ${r.activity.askPointsCreated ?? r.activity.asks ?? 0} 条（不是答疑次数） / 教练打卡 ${r.activity.coachLogs} 条`);
 
   L.push(`· 学了什么：`);
   if (r.studied.length) {
@@ -182,6 +196,7 @@ export function formatWeeklyDataText(r: WeeklyReview): string {
   L.push(`· 需关注：`);
   L.push(`  - 错题本（=弱项，未吸收）：${r.weak.top.map((w) => `${w.subject ?? "未分类"}·${w.knowledge}${w.n > 1 ? `(×${w.n})` : ""}`).join("、") || "（暂无错次记录）"}`);
   L.push(`  - 答疑未收口卡点：${r.askPoints.map((a) => `${a.subject}${a.type ? "·" + a.type : ""} ${a.confusion}`).join("；") || "（无）"}`);
+  if (r.askPointClosure) L.push(`  - 答疑卡点闭环：本周打通 ${r.askPointClosure.clarified} / 移噪 ${r.askPointClosure.dismissed} / 被新卡点顶替 ${r.askPointClosure.superseded}；当前有效 open ${r.askPointClosure.active} / 过期 open ${r.askPointClosure.expired}`);
 
   L.push(`· 待办筐：本周新增 ${Object.entries(r.inbox.createdByType).map(([t, n]) => `${t}${n}`).join("/") || "无"}；待处理积压 ${r.inbox.pendingBacklog} 条`);
 

@@ -18,8 +18,14 @@ const tables = [
   "detection_log",
   "study_log",
   "ask_summary",
+  "ask_point_v2",
   "events",
   "api_usage",
+  "study_error",
+  "error_topic",
+  "study_error_topic",
+  "error_review",
+  "error_book_v2",
 ];
 
 let ok = 0;

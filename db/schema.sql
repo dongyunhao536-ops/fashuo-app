@@ -8,7 +8,7 @@
 -- ---------- A 内容镜像（只读，GitHub Action 从 markdown 同步；供后端 grep）----------
 create table if not exists content_mirror (
   id          bigserial primary key,
-  kind        text not null,              -- textbook / xinde / zhenti / gaopin / yixiao / claudemd
+  kind        text not null,              -- textbook / exam / xinde / zhenti / gaopin / yixiao / claudemd
   path        text not null,              -- 源 markdown 路径
   chunk_no    int  not null default 0,
   start_line  int  not null default 1,    -- 该 chunk 在源文件的起始行号（供 grep 报命中行号）
@@ -122,6 +122,74 @@ create index if not exists idx_study_error_kp on study_error (kp_id);
 create index if not exists idx_study_error_subject on study_error (subject);
 create index if not exists idx_study_error_status on study_error (status);
 
+-- 错题本 v2：事件（study_error）与长期弱项主题分层；旧表/旧入口继续兼容。
+create table if not exists error_topic (
+  id                    bigserial primary key,
+  topic_key             text not null unique,
+  subject               text not null,
+  chapter               text,
+  section               text,
+  kp_id                  text,
+  title                  text not null,
+  classification_status text not null default 'pending'
+    check (classification_status in ('pending', 'confirmed')),
+  mastery_status        text not null default 'open'
+    check (mastery_status in ('open', 'monitoring', 'stable', 'archived')),
+  created_at             timestamptz not null default now(),
+  updated_at             timestamptz not null default now()
+);
+create index if not exists idx_error_topic_subject on error_topic (subject);
+create index if not exists idx_error_topic_kp on error_topic (kp_id);
+create index if not exists idx_error_topic_mastery on error_topic (mastery_status);
+
+create table if not exists study_error_topic (
+  study_error_id    bigint not null references study_error(id) on delete cascade,
+  topic_id          bigint not null references error_topic(id) on delete cascade,
+  role              text not null default 'primary'
+    check (role in ('primary', 'related')),
+  root_cause_code   text not null default 'unclassified'
+    check (root_cause_code in ('unclassified', 'knowledge_gap', 'boundary_miss', 'concept_confusion', 'reasoning_order', 'question_layer', 'fact_misread', 'terminology_drift', 'expression_gap', 'memory_decay')),
+  root_cause_note   text,
+  diagnosis_status text not null default 'pending'
+    check (diagnosis_status in ('pending', 'confirmed', 'rejected')),
+  evidence_anchor   text,
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
+  primary key (study_error_id, topic_id)
+);
+create index if not exists idx_study_error_topic_topic on study_error_topic (topic_id);
+create unique index if not exists uq_study_error_primary_topic on study_error_topic (study_error_id) where role = 'primary';
+
+create table if not exists error_review (
+  id              bigserial primary key,
+  operation_id    text unique,
+  topic_id        bigint not null references error_topic(id) on delete cascade,
+  study_error_id  bigint references study_error(id) on delete set null,
+  review_date     date not null default current_date,
+  result          text not null check (result in ('pass', 'partial', 'fail')),
+  session_key     text,
+  angle           text,
+  evidence_anchor text,
+  note            text,
+  created_at      timestamptz not null default now()
+);
+create index if not exists idx_error_review_topic_date on error_review (topic_id, review_date desc, id desc);
+
+create or replace view error_book_v2 as
+select
+  se.id as study_error_id, se.operation_id, se.log_date,
+  se.subject as event_subject, se.kp_id as event_kp_id,
+  se.knowledge, se.raw_input, se.source, se.status as event_status, se.absorbed_at,
+  setop.role, setop.root_cause_code, setop.root_cause_note,
+  setop.diagnosis_status, setop.evidence_anchor,
+  et.id as topic_id, et.topic_key, et.subject as topic_subject,
+  et.chapter, et.section, et.kp_id as topic_kp_id, et.title as topic_title,
+  coalesce(et.classification_status, 'unclassified') as classification_status,
+  et.mastery_status
+from study_error se
+left join study_error_topic setop on setop.study_error_id = se.id
+left join error_topic et on et.id = setop.topic_id;
+
 -- 教练对话记忆 + 长期记忆（教练重做·迁移005）：对话连续性 + 个性化耐久事实。
 create table if not exists coach_message (
   id          bigserial primary key,
@@ -157,6 +225,7 @@ create index if not exists idx_weekly_report_week on weekly_report (week_start);
 -- 跨会话答疑摘要（12 §五：结构化字段 + TTL，检索式注入，不回 markdown）
 create table if not exists ask_summary (
   id           bigserial primary key,
+  operation_id text,
   subject      text not null,
   kp_id        text,                      -- 关联考点ID（新会话按 subject+kp_id 检索）
   question_type text,                     -- 选择/案例/简答
@@ -164,9 +233,35 @@ create table if not exists ask_summary (
   confusion    text,                      -- 具体混淆点
   status       text not null default 'open', -- open/clarified（云在 /ask/points 点"打通了"）/dismissed（"不算卡点"移噪）/superseded（同考点被更新轮次顶掉）；非 open 不注入
   ttl_until    date,                      -- 时效衰减：过期降权
-  created_at   timestamptz not null default now()
+  source       text not null default 'app', -- app / pc；普通提问不入账，只有真实未收口卡点才写
+  raw_question text,
+  evidence_anchor text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now(),
+  resolved_at  timestamptz,
+  resolution_note text,
+  resolve_operation_id text
 );
 create index if not exists idx_ask_summary_lookup on ask_summary (subject, kp_id, status);
+alter table ask_summary add column if not exists operation_id text;
+alter table ask_summary add column if not exists source text not null default 'app';
+alter table ask_summary add column if not exists raw_question text;
+alter table ask_summary add column if not exists evidence_anchor text;
+alter table ask_summary add column if not exists updated_at timestamptz not null default now();
+alter table ask_summary add column if not exists resolved_at timestamptz;
+alter table ask_summary add column if not exists resolution_note text;
+alter table ask_summary add column if not exists resolve_operation_id text;
+drop index if exists uq_ask_summary_operation_id;
+drop index if exists uq_ask_summary_resolve_operation_id;
+create unique index uq_ask_summary_operation_id on ask_summary (operation_id);
+create unique index uq_ask_summary_resolve_operation_id on ask_summary (resolve_operation_id);
+create index if not exists idx_ask_summary_active_ttl on ask_summary (status, ttl_until, created_at desc);
+
+create or replace view ask_point_v2 as
+select a.*,
+  case when a.status = 'open' and a.ttl_until is not null and a.ttl_until < (timezone('Asia/Shanghai', now()))::date then 'expired' else a.status end as effective_status,
+  (a.status = 'open' and (a.ttl_until is null or a.ttl_until >= (timezone('Asia/Shanghai', now()))::date)) as active
+from ask_summary a;
 
 -- ---------- C 增量提案 = 待办筐（append-only；PC 登记后 consumed）----------
 -- 模块间"显式握手"总线：背诵失败(G1)/答疑澄清(G2)/复盘候选 都往这里发事件

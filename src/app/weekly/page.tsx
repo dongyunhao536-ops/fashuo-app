@@ -47,7 +47,7 @@ export default async function WeeklyPage() {
       {/* 一屏数据条 */}
       <section className="card mx-4 rounded-[14px] p-4">
         <div className="flex justify-around text-center">
-          <Stat n={r.activity.asks} label="答疑" />
+          <Stat n={r.activity.askPointsCreated ?? r.activity.asks ?? 0} label="新增卡点" />
           <Stat n={r.activity.coachLogs} label="教练打卡" />
           <Stat n={r.inbox.pendingBacklog} label="待办积压" />
           <Stat n={yuan(r.cost.totalUsd)} label="本周成本" />

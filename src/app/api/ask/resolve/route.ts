@@ -25,7 +25,12 @@ export async function POST(req: Request) {
 
   const { data, error } = await supabaseAdmin
     .from("ask_summary")
-    .update({ status: action === "clarify" ? "clarified" : "dismissed" })
+    .update({
+      status: action === "clarify" ? "clarified" : "dismissed",
+      resolved_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      resolution_note: action === "clarify" ? "APP 手动确认已打通" : "APP 手动确认不算卡点",
+    })
     .eq("id", id)
     .eq("status", "open")
     .select("id");

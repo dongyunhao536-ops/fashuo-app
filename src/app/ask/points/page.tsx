@@ -6,7 +6,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { AskPointActions } from "@/components/AskPointActions";
 
 /**
- * 答疑未收口卡点（ask_summary status=open）——首页"答疑未收口 N"点进来看的就是这份。
+ * 答疑未收口卡点（ask_point_v2 active=true）——首页"答疑未收口 N"点进来看的就是这份。
  * 每条 = 一次答疑沉淀的具体混淆点。挂着的会持续注入：同科目下次答疑（跨会话记忆）、
  * 教练（互通卡点）、周复盘「需关注」。「打通了」收口退出；「不算卡点」移噪。
  */
@@ -15,9 +15,9 @@ export const dynamic = "force-dynamic";
 
 export default async function AskPointsPage() {
   const { data, error } = await supabaseAdmin
-    .from("ask_summary")
+    .from("ask_point_v2")
     .select("id, subject, confusion, question_type, created_at")
-    .eq("status", "open")
+    .eq("active", true)
     .not("confusion", "is", null)
     .order("created_at", { ascending: false });
   const items = data ?? [];

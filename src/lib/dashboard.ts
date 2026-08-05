@@ -247,8 +247,8 @@ export async function getDashboard(): Promise<DashboardData> {
   const weekStart = bjWeekMonday(now);
 
   const [askLatest, askCount, eventsPending, allLog, allErr, dailyLatest] = await Promise.all([
-    supabaseAdmin.from("ask_summary").select("confusion").eq("status", "open").order("created_at", { ascending: false }).limit(1),
-    supabaseAdmin.from("ask_summary").select("*", { count: "exact", head: true }).eq("status", "open"),
+    supabaseAdmin.from("ask_point_v2").select("confusion").eq("active", true).order("created_at", { ascending: false }).limit(1),
+    supabaseAdmin.from("ask_point_v2").select("*", { count: "exact", head: true }).eq("active", true),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
     supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date, raw_input").order("log_date", { ascending: false }).limit(1000),
     supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).limit(3000),
