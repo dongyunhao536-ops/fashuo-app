@@ -2,15 +2,9 @@
 // 把 mirror-scope 中允许且未封存的档案文本同步进 Supabase content_mirror。
 // 走 PostgREST（443，国内通），不走 5432。每次全量重写命中文件（idempotent）。
 import { readFileSync } from "node:fs";
-import { glob } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
 import { createClient } from "@supabase/supabase-js";
-import {
-  isExcludedArchivePath,
-  isSealedExamArchivePath,
-} from "./lib/knowledge-baseline.mjs";
-import { inferMirrorSourceLevel, prepareMirrorGeneration } from "./lib/mirror-generation.mjs";
-import { verifyMirrorRuleMatches } from "./lib/mirror-integrity.mjs";
+import { prepareMirrorGeneration } from "./lib/mirror-generation.mjs";
+import { expandMirrorScope } from "./lib/mirror-scope.mjs";
 
 /** 重试包装：sb 调用失败时（fetch failed / ETIMEDOUT / ECONNRESET），指数退避重试。
  *  国内家宽 → 阿里云 ECS 偶发 TCP 抖断，这层让幂等同步能扛过去。 */
@@ -43,44 +37,8 @@ const ROOT = process.env.ARCHIVE_DIR || cfg.root;
 // [gpt] 2026-08-10：同时接受常见的 --dry-run，避免把只读预检误当成正式同步。
 const dryRun = process.argv.includes("--dry") || process.argv.includes("--dry-run");
 
-/** 把 Windows 反斜杠路径标准化为正斜杠（schema 里 path 字段一致用 / 分隔） */
-const norm = (p) => p.split(sep).join("/");
-
-/** 展开 rules → [{absPath, relPath, kind}] */
-async function expandRules() {
-  const out = [];
-  const excluded = [];
-  const verified = [];
-  const excludedPatterns = cfg.excludedPatterns ?? [];
-  for (const rule of cfg.rules) {
-    const pattern = norm(rule.pattern);
-    const it = glob(pattern, { cwd: ROOT });
-    const matched = [];
-    for await (const f of it) {
-      const abs = join(ROOT, f);
-      const rel = norm(relative(ROOT, abs));
-      const file = {
-        abs,
-        rel,
-        kind: rule.kind,
-        sourceLevel: inferMirrorSourceLevel(rule.kind, rel, rule.sourceLevel),
-        sourceVersion: rule.sourceVersion ?? null,
-      };
-      matched.push(file);
-      if (
-        isExcludedArchivePath(rel, excludedPatterns) ||
-        (rule.kind === "exam" &&
-          isSealedExamArchivePath(rel, cfg.sealedExamFromYear))
-      ) excluded.push(file);
-      else out.push(file);
-    }
-    const verification = verifyMirrorRuleMatches(rule, matched);
-    if (verification.verified) verified.push(verification);
-  }
-  return { files: out, excluded, verified };
-}
-
-const { files, excluded, verified } = await expandRules();
+// [gpt] 2026-08-11：同步和 PC 检索统一从共享范围展开器取文件，防止两条链路材料集合不一致。
+const { files, excluded, verified } = await expandMirrorScope(cfg, { root: ROOT });
 if (files.length === 0) {
   console.error("No files matched. Check config/mirror-scope.json.");
   process.exit(2);

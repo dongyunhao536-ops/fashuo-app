@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
   KINDS,
+  buildMaterialBatchOutput,
+  buildMaterialOutput,
   clip,
   findNearestPageAnchor,
   formatMaterialBlocks,
   grep,
+  parseMaterialArgs,
+  parseMaterialBatchArgs,
   requireMaterialRows,
 } from "./cuoti.mjs";
 
@@ -78,5 +82,50 @@ describe("cuoti grep", () => {
     expect(() => requireMaterialRows({ data: null, error: { message: "network down" } }, "textbook"))
       .toThrow("读取 material 来源 textbook 失败：network down");
     expect(requireMaterialRows({ data: null, error: null }, "exam")).toEqual([]);
+  });
+});
+
+describe("cuoti material CLI", () => {
+  it("批量参数把 refine 绑定到前一查询，且各概念保持独立", () => {
+    expect(parseMaterialBatchArgs([
+      "--query", "犯罪中止", "--refine", "因果",
+      "--query", "正当防卫", "--refine", "时间条件",
+      "--query", "偶然防卫",
+    ])).toEqual({
+      source: "local",
+      queries: [
+        { keyword: "犯罪中止", refine: "因果" },
+        { keyword: "正当防卫", refine: "时间条件" },
+        { keyword: "偶然防卫", refine: undefined },
+      ],
+    });
+    expect(parseMaterialArgs(["犯罪中止", "因果", "--db"])).toEqual({
+      source: "db",
+      queries: [{ keyword: "犯罪中止", refine: "因果" }],
+    });
+  });
+
+  it("拒绝游离 refine、缺关键词和额外位置参数", () => {
+    expect(() => parseMaterialBatchArgs(["--refine", "因果"])).toThrow("必须跟在对应 --query 后");
+    expect(() => parseMaterialBatchArgs(["--query"])).toThrow("--query 后需要关键词");
+    expect(() => parseMaterialArgs(["甲", "乙", "丙"])).toThrow("最多接收");
+  });
+
+  it("单查与批量中的每一查询复用完全相同的检索和配额输出", () => {
+    const corpus = new Map(KINDS.map(([kind]) => [kind, kind === "textbook" ? [{
+      path: "教材/考试分析_文本.txt",
+      start_line: 100,
+      content: "前文\n犯罪中止的因果关系\n后文",
+    }] : []]));
+    const first = buildMaterialOutput(corpus, "犯罪中止", "因果");
+    const second = buildMaterialOutput(corpus, "正当防卫");
+    const batch = buildMaterialBatchOutput(corpus, [
+      { keyword: "犯罪中止", refine: "因果" },
+      { keyword: "正当防卫" },
+    ]);
+
+    expect(batch).toBe(`${first}\n\n══════════ 下一组独立检索 ══════════\n\n${second}`);
+    expect(first).toContain("教材重排/机构讲义/法律更新混合库");
+    expect(first).toContain("101► 犯罪中止的因果关系");
   });
 });

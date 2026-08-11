@@ -33,6 +33,7 @@ import {
 import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs";
 import { loadEventAbsorptionProofs } from "./lib/error-absorption.mjs";
 import { buildFailurePortrait, formatFailurePortrait } from "./lib/knowledge-state.mjs";
+import { loadLocalMaterialCorpus, sortMaterialRows } from "./lib/material-corpus.mjs";
 import {
   CLASSIFICATION_STATUSES,
   FAILURE_PATTERNS,
@@ -501,30 +502,113 @@ export function formatMaterialBlocks(blocks, budget, maxBlocks = MAX_BLOCKS_PER_
   return { segments, used, shown: segments.length };
 }
 
-async function material(keyword, refine) {
-  if (!keyword) return fail('material 需要关键词，如：material 想象竞合 因果');
-  console.log(`检索「${keyword}${refine ? " + " + refine : ""}」的出题弹药（►=命中行，自动附最近页码/行号锚点）`);
-  if (refine) console.log(`（特征词「${refine}」同时命中的条目已置顶）`);
+// [gpt] 2026-08-11：输出生成保持纯函数，单查与批量查询共用同一质量路径。
+export function buildMaterialOutput(corpus, keyword, refine) {
+  if (!keyword) throw new Error("material 需要关键词，如：material 想象竞合 因果");
+  const output = [
+    `检索「${keyword}${refine ? " + " + refine : ""}」的出题弹药（►=命中行，自动附最近页码/行号锚点）`,
+  ];
+  if (refine) output.push(`（特征词「${refine}」同时命中的条目已置顶）`);
   // 配额制（2026-07-22 修）：原先四个 kind 共享一个 14000 总预算、超了直接 return，
   // 宽词下 xinde 的合并巨块一段就吃光，教材/易混/真题整段不输出 → 预检"教材锚定"写成"无"＝假阴性。
   // 现在每个 kind 有保底额度，且有命中就至少出一块，绝不整段空手。
   let carry = 0;
   for (const [kind, label, quota] of KINDS) {
-    const response = await db.from("content_mirror").select("path, content, start_line").eq("kind", kind);
-    let rows;
-    try {
-      rows = requireMaterialRows(response, kind);
-    } catch (error) {
-      return fail(error.message);
-    }
+    const rows = corpus.get(kind) ?? [];
     const { blocks, totalHits } = grep(rows, keyword, refine);
-    console.log(`\n───── ${label}　命中 ${totalHits} 行 / ${blocks.length} 片段 ─────`);
-    if (!blocks.length) { console.log("（无命中）"); carry += quota; continue; }
+    output.push("", `───── ${label}　命中 ${totalHits} 行 / ${blocks.length} 片段 ─────`);
+    if (!blocks.length) { output.push("（无命中）"); carry += quota; continue; }
     const budget = quota + carry;
     const { segments, used, shown } = formatMaterialBlocks(blocks, budget);
-    for (const segment of segments) console.log(segment);
-    if (shown < blocks.length) console.log(`…（本段还有 ${blocks.length - shown} 个片段未显示，换更具体的关键词或加特征词再查）`);
+    output.push(...segments);
+    if (shown < blocks.length) output.push(`…（本段还有 ${blocks.length - shown} 个片段未显示，换更具体的关键词或加特征词再查）`);
     carry = Math.max(0, budget - used);
+  }
+  return output.join("\n");
+}
+
+export function parseMaterialArgs(args) {
+  const positional = [];
+  let source = "local";
+  for (const arg of args ?? []) {
+    if (arg === "--db") source = "db";
+    else if (String(arg).startsWith("--")) throw new Error(`material 未知参数：${arg}`);
+    else positional.push(arg);
+  }
+  if (!positional[0]) throw new Error("material 需要关键词，如：material 想象竞合 因果");
+  if (positional.length > 2) throw new Error("material 最多接收关键词和一个特征词");
+  return { source, queries: [{ keyword: positional[0], refine: positional[1] }] };
+}
+
+export function parseMaterialBatchArgs(args) {
+  const queries = [];
+  let source = "local";
+  for (let index = 0; index < (args ?? []).length; index += 1) {
+    const arg = args[index];
+    if (arg === "--db") {
+      source = "db";
+      continue;
+    }
+    if (arg === "--query") {
+      const keyword = args[++index];
+      if (!keyword || String(keyword).startsWith("--")) throw new Error("material-batch 的 --query 后需要关键词");
+      queries.push({ keyword, refine: undefined });
+      continue;
+    }
+    if (arg === "--refine") {
+      const refine = args[++index];
+      if (!queries.length) throw new Error("material-batch 的 --refine 必须跟在对应 --query 后");
+      if (!refine || String(refine).startsWith("--")) throw new Error("material-batch 的 --refine 后需要特征词");
+      if (queries.at(-1).refine) throw new Error(`查询「${queries.at(-1).keyword}」只能设置一个 --refine`);
+      queries.at(-1).refine = refine;
+      continue;
+    }
+    throw new Error(`material-batch 未知参数：${arg}`);
+  }
+  if (!queries.length) throw new Error("material-batch 至少需要一个 --query <关键词>");
+  return { source, queries };
+}
+
+export function buildMaterialBatchOutput(corpus, queries) {
+  return queries
+    .map(({ keyword, refine }) => buildMaterialOutput(corpus, keyword, refine))
+    .join("\n\n══════════ 下一组独立检索 ══════════\n\n");
+}
+
+async function loadDbMaterialCorpus() {
+  const entries = await Promise.all(KINDS.map(async ([kind]) => {
+    const response = await db.from("content_mirror").select("path, content, start_line").eq("kind", kind);
+    return [kind, sortMaterialRows(requireMaterialRows(response, kind))];
+  }));
+  return new Map(entries);
+}
+
+async function runMaterialQueries({ source, queries }) {
+  let corpus;
+  try {
+    corpus = source === "db"
+      ? await loadDbMaterialCorpus()
+      : (await loadLocalMaterialCorpus()).corpus;
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+
+  console.log(buildMaterialBatchOutput(corpus, queries));
+}
+
+async function material(args) {
+  try {
+    await runMaterialQueries(parseMaterialArgs(args));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function materialBatch(args) {
+  try {
+    await runMaterialQueries(parseMaterialBatchArgs(args));
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -963,19 +1047,23 @@ async function recheckFail(rest) {
 function fail(msg) { console.error("✗ " + msg); process.exitCode = 1; }
 
 async function main(argv) {
-  db = createClient(
-    process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
-    process.env.SUPABASE_SERVICE_ROLE_KEY,
-    { auth: { persistSession: false } },
-  );
   const [cmd, ...args] = argv;
+  const localMaterial = (cmd === "material" || cmd === "material-batch") && !args.includes("--db");
+  if (!localMaterial) {
+    db = createClient(
+      process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      { auth: { persistSession: false } },
+    );
+  }
   switch (cmd) {
     case "list": await list(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
     case "topics": await topics(args[0] && SUBJECTS.includes(args[0]) ? args[0] : undefined); break;
     case "profile": await profile(args); break;
     case "proof": await proof(args); break;
     case "triage": await triage(args); break;
-    case "material": await material(args[0], args[1]); break;
+    case "material": await material(args); break;
+    case "material-batch": await materialBatch(args); break;
     case "absorb": await absorb(args); break;
     case "reopen": await reopen(args); break;
     case "add": await add(args); break;
@@ -989,7 +1077,8 @@ async function main(argv) {
     case "recheck-fail": await recheckFail(args); break;
     default:
       console.log("用法：node --env-file=.env.local scripts/cuoti.mjs <命令> ...");
-      console.log("  只读：list [科目] / topics [科目] / profile [科目] [--limit 1-20] [--json] / proof [科目] [--topic id] [--limit 1-200] [--json] / triage [科目] [n] / material <词> [特征词]");
+      console.log("  只读：list [科目] / topics [科目] / profile [科目] [--limit 1-20] [--json] / proof [科目] [--topic id] [--limit 1-200] [--json] / triage [科目] [n]");
+      console.log("        material <词> [特征词] [--db] / material-batch --query <词> [--refine <特征词>] ... [--db]");
       console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
       console.log("  写：absorb <id...>|--like <片段>（自动校验至少两轴、两条带依据通过，其中至少一次冷检）");
       console.log("      reopen <id...> --reason <审计原因>（只纠正误销账，不伪造失败）");
