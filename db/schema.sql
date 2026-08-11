@@ -1060,6 +1060,80 @@ select
 from learning_attempt la
 where la.subject in ('刑法', '民法', '法理', '宪法', '法制史') and la.kp_id is null and la.result <> 'void';
 
+-- [gpt] 2026-08-11：PC 学习数据流监控质量门；只报告声明后未落账或状态未流转，不把低使用量当故障。
+create or replace view learning_data_quality_v2 as
+select issue_code, severity, entity_kind, entity_id, detected_at, detail
+from learning_data_quality_v1
+union all
+select
+  'study_log_expected_without_operation_id'::text, 'error'::text,
+  'study_log'::text, sl.id::text, sl.created_at,
+  jsonb_build_object('log_date', sl.log_date, 'subject', sl.subject, 'activity', sl.activity)
+from study_log sl
+where sl.attempt_expected and sl.operation_id is null
+union all
+select
+  'ingest_queued_stale'::text, 'warning'::text,
+  'ingest_operation'::text, io.operation_id, io.updated_at,
+  jsonb_build_object('op_type', io.op_type, 'attempt_count', io.attempt_count, 'first_seen_at', io.first_seen_at)
+from ingest_operation io
+where io.status = 'queued' and io.first_seen_at < now() - interval '15 minutes'
+union all
+select
+  'learning_attempt_missing_projection'::text, 'error'::text,
+  'learning_attempt'::text, la.id::text, la.created_at,
+  jsonb_build_object('operation_id', la.operation_id, 'kp_id', la.kp_id, 'source_kind', la.source_kind, 'source_id', la.source_id)
+from learning_attempt la
+where la.kp_id is not null
+  and coalesce(la.metadata->>'projection_expected', 'false') = 'true'
+  and not exists (
+    select 1 from knowledge_evidence ke
+    where ke.operation_id = la.operation_id || ':knowledge'
+  )
+union all
+select
+  'orphan_learning_attempt_projection'::text, 'error'::text,
+  'knowledge_evidence'::text, ke.id::text, ke.created_at,
+  jsonb_build_object('operation_id', ke.operation_id, 'source_id', ke.source_id, 'kp_id', ke.kp_id)
+from knowledge_evidence ke
+where ke.source_kind = 'learning_attempt'
+  and not exists (
+    select 1 from learning_attempt la
+    where la.id::text = ke.source_id
+  );
+
+create table if not exists learning_flow_snapshot (
+  id             bigserial primary key,
+  observed_at    timestamptz not null,
+  beijing_date   date not null,
+  window_start   date not null,
+  window_end     date not null,
+  status         text not null check (status in ('healthy', 'attention', 'degraded')),
+  source         text not null default 'pc',
+  release_sha    text,
+  schema_version integer not null default 1 check (schema_version > 0),
+  metrics        jsonb not null default '{}'::jsonb,
+  issues         jsonb not null default '[]'::jsonb,
+  created_at     timestamptz not null default now(),
+  constraint chk_learning_flow_window check (window_start <= window_end)
+);
+create index if not exists idx_learning_flow_snapshot_date on learning_flow_snapshot (beijing_date desc, observed_at desc);
+create index if not exists idx_learning_flow_snapshot_status on learning_flow_snapshot (status, observed_at desc);
+
+create table if not exists learning_flow_weekly_review (
+  id             bigserial primary key,
+  week_start     date not null unique,
+  week_end       date not null,
+  status         text not null check (status in ('healthy', 'attention', 'degraded')),
+  content        text not null,
+  data_snapshot  jsonb not null,
+  source         text not null default 'pc-codex',
+  schema_version integer not null default 1 check (schema_version > 0),
+  generated_at   timestamptz not null default now(),
+  constraint chk_learning_flow_week check (week_end = week_start + 6)
+);
+create index if not exists idx_learning_flow_weekly_review_week on learning_flow_weekly_review (week_start desc);
+
 -- 生产/消费约定：
 --   弱项候选＝检测G1/答疑/教练复盘/易混对决投递（投递端 pending 防重统一在 src/lib/events.ts emitEvent）
 --   心得候选＝答疑投递；复验请求＝答疑G2投递、检测完成自动消费（不进 markdown）

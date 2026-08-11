@@ -21,8 +21,9 @@ CONFIRM_STALE_DAYS="${CONFIRM_STALE_DAYS:-7}"  # 弱项/心得/已强化：等�
 ERROR_STALE_DAYS="${ERROR_STALE_DAYS:-21}"     # 教练错题：靠背诵掌握/云说懂了慢慢吸收
 LEDGER_STALE_DAYS="${LEDGER_STALE_DAYS:-${RECITE_STALE_DAYS:-7}}" # 共享学习账本：多久没有新增流水；兼容旧变量名
 MIRROR_STALE_DAYS="${MIRROR_STALE_DAYS:-7}"    # 内容镜像：沉淀进 content_mirror 的新鲜度
+FLOW_WEEKLY_STALE_DAYS="${FLOW_WEEKLY_STALE_DAYS:-8}" # PC 周检：超过 8 天无新周检视为周一自动化断链
 
-# 一次查清所有信号（9 个标量，| 分隔）。age 列：-1=该队列为空（不算异常）；max 列空表 →9999。
+# 一次查清所有信号（13 个标量，| 分隔）。age 列：-1=该队列为空（不算异常）；max 列空表 →9999。
 SQL=$(cat <<'SQL'
 select
   (select coalesce(floor(extract(epoch from (now()-min(created_at)))/86400)::int,-1)
@@ -38,7 +39,11 @@ select
      from study_error where status='open'),
   (select count(*) from study_error where status='open'),
   (select coalesce(floor(extract(epoch from (now()-max(created_at)))/86400)::int,9999) from study_log),
-  (select coalesce(floor(extract(epoch from (now()-max(updated_at)))/86400)::int,9999) from content_mirror)
+  (select coalesce(floor(extract(epoch from (now()-max(updated_at)))/86400)::int,9999) from content_mirror),
+  (select count(*) from learning_data_quality_v2 where severity='error'),
+  (select count(*) from learning_data_quality_v2 where severity='warning'),
+  (select coalesce(floor(extract(epoch from (now()-max(generated_at)))/86400)::int,9999) from learning_flow_weekly_review),
+  (select coalesce((select status from learning_flow_weekly_review order by generated_at desc limit 1),'missing'))
 ;
 SQL
 )
@@ -49,7 +54,7 @@ if [[ -z "$row" ]]; then
   exit 1
 fi
 
-IFS='|' read -r review_age review_badkp confirm_age confirm_cnt drift_cnt err_age err_cnt ledger_age mirror_age <<<"$row"
+IFS='|' read -r review_age review_badkp confirm_age confirm_cnt drift_cnt err_age err_cnt ledger_age mirror_age flow_error_cnt flow_warn_cnt flow_weekly_age flow_status <<<"$row"
 
 issues=()
 
@@ -82,10 +87,18 @@ issues=()
 [[ "$mirror_age" -ge "$MIRROR_STALE_DAYS" ]] && \
   issues+=("content_mirror 已 ${mirror_age} 天未更新（新沉淀没进搜索镜像）")
 
+# [gpt] 2026-08-11：服务器只盯周检是否按期上报和是否出现硬断链；attention 仍由 PC 周检消化，避免 Bark 每天报学习欠账。
+[[ "$flow_error_cnt" -gt 0 ]] && \
+  issues+=("学习数据质量视图发现 ${flow_error_cnt} 个 error 级断链（查 learning_data_quality_v2）")
+[[ "$flow_weekly_age" -ge "$FLOW_WEEKLY_STALE_DAYS" ]] && \
+  issues+=("PC 学习数据流周检已 ${flow_weekly_age} 天没有更新（>${FLOW_WEEKLY_STALE_DAYS}d，周报自动化或 flow:weekly 可能断链）")
+[[ "$flow_status" == "degraded" ]] && \
+  issues+=("最近一次 PC 学习数据流周检为 degraded")
+
 # 友好渲染天龄（-1=空队列显示「无」）
 ageday() { [[ "$1" -lt 0 ]] && echo "无" || echo "${1}d"; }
 
-summary="待收下 ${confirm_cnt} 条/最老 $(ageday "$confirm_age")｜复验最老 $(ageday "$review_age")｜教练错题 ${err_cnt} 条｜账本最近 $(ageday "$ledger_age") 前｜镜像 $(ageday "$mirror_age")"
+summary="待收下 ${confirm_cnt} 条/最老 $(ageday "$confirm_age")｜复验最老 $(ageday "$review_age")｜教练错题 ${err_cnt} 条｜账本最近 $(ageday "$ledger_age") 前｜镜像 $(ageday "$mirror_age")｜数据流周检 ${flow_status}/$(ageday "$flow_weekly_age") 前/error ${flow_error_cnt}/warning ${flow_warn_cnt}"
 
 if [[ ${#issues[@]} -eq 0 ]]; then
   notify ok "数据流闭环正常" "$summary"

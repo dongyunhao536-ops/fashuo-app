@@ -9,7 +9,13 @@ const baseFacts = {
   qualityIssues: [],
   ingestOperations: [],
   localOutbox: { operations: [] },
-  attempts: [{ source_kind: "subjective_answer", result: "pass" }],
+  attempts: [{ attempt_date: "2026-08-11", source_kind: "subjective_answer", result: "pass" }],
+  studyLogs: [{ log_date: "2026-08-11" }],
+  knowledgeEvidence: [{ evidence_date: "2026-08-11" }],
+  knowledgeEvidenceCount: 1,
+  errorEvents: [{ log_date: "2026-08-10" }],
+  reviews: [{ review_date: "2026-08-09" }],
+  ingestHistory: [{ beijing_date: "2026-08-11" }],
   attemptCount: 1,
   validAttemptCount: 1,
   studyLogCount: 1,
@@ -64,17 +70,19 @@ describe("learning flow monitor", () => {
     ]));
   });
 
-  it("周检把监控覆盖不足单列为监控问题并给可执行动作", () => {
+  it("周检直接按七个北京日汇总动作事实，不要求每天运行监控", () => {
     const flowReport = evaluateLearningFlow(baseFacts);
     const weekly = buildWeeklyFlowReview({
       flowReport,
-      snapshots: [{ beijing_date: "2026-08-10", status: "healthy", issues: [] }],
-      weekStart: "2026-08-10",
-      weekEnd: "2026-08-16",
+      weekStart: "2026-08-05",
+      weekEnd: "2026-08-11",
     });
-    expect(weekly.status).toBe("attention");
-    expect(weekly.recommendations[0].code).toBe("monitor_snapshot_coverage_low");
-    expect(weekly.content).toContain("PC 学习数据流周检");
+    expect(weekly.status).toBe("healthy");
+    expect(weekly.activeDays).toBe(3);
+    expect(weekly.dailyRecords).toHaveLength(7);
+    expect(weekly.dailyRecords.at(-1)).toMatchObject({ date: "2026-08-11", studyLogs: 1, learningAttempts: 1, knowledgeEvidence: 1, ingestOperations: 1 });
+    expect(weekly.content).toContain("学习动作发生时实时落账，本监控只在周一分析");
+    expect(weekly.content).not.toContain("monitor_snapshot_coverage_low");
   });
 
   it("质量视图与未决状态命中同一问题时不重复计算", () => {

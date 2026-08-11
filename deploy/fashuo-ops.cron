@@ -8,7 +8,8 @@
 #     NOTIFY_URL=https://api.day.app/<你的key>     # Bark 告警；不设则只记日志
 #     HEARTBEAT_URL=https://hc-ping.com/<uuid>     # 死人开关；healthchecks.io 建 daily 检查给的 ping URL
 #     # 数据流阈值（天）按需覆盖：REVIEW_STALE_DAYS=3 CONFIRM_STALE_DAYS=7 ERROR_STALE_DAYS=21
-#     #                          LEDGER_STALE_DAYS=7 MIRROR_STALE_DAYS=7 ；磁盘：DISK_WARN_PCT=85
+#     #                          LEDGER_STALE_DAYS=7 MIRROR_STALE_DAYS=7 FLOW_WEEKLY_STALE_DAYS=8
+#     #                          磁盘：DISK_WARN_PCT=85
 #
 # 时间错开：03:30 登记同步 → 04:00 备份 → 09:00 基础巡检(打心跳) → 09:10 数据流闭环巡检
 #   （你起床前后能收到当天健康汇总 + 数据流是否在闭环流动）。

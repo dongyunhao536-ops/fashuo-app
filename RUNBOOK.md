@@ -207,16 +207,18 @@ npm run verify-schema
 
 迁移与 schema 校验通过后再跑 `npm run data-health`。它会核对唯一 active 镜像代际及行数、stage 残留、`ingest_operation` 失败/卡住、显式 study_log 缺子尝试和法硕尝试映射债；error 级问题退出 1，warning 保留可行动提示。<!-- [gpt] 2026-08-10 -->
 
-PC 学习数据流监控另跑以下命令；它不重复评价学习效果，而是审计“该写的有没有写、写后有没有按预期流到消费者”：<!-- [gpt] 2026-08-11 -->
+PC 学习数据流监控只按周自动分析；每天的数据由学习动作发生时直接写入各事实表，不依赖每日监控任务。它不重复评价学习效果，而是审计“该写的有没有写、写后有没有按预期流到消费者”：<!-- [gpt] 2026-08-11 -->
 
 ```powershell
-npm.cmd run flow:check                 # 最近 7 个北京日；本地 JSONL + 数据库日快照
-npm.cmd run flow:check -- --no-save    # 只读预览，不保存
-npm.cmd run flow:weekly                # 默认汇总刚结束的上一北京自然周
+npm.cmd run flow:check                 # 仅故障排查时手动跑；保存即时诊断快照
+npm.cmd run flow:check -- --no-save    # 手动只读预览，不保存
+npm.cmd run flow:weekly                # 每周自动；默认汇总刚结束的上一北京自然周
 npm.cmd run flow:weekly -- --current   # 当前周基线/调试，同周覆盖
 ```
 
-日快照本地事实副本在 `.local/system-observability/learning-flow.jsonl`，数据库镜像为 `learning_flow_snapshot`；周检分别写 `.local/system-observability/weekly-<周一>.md` 与 `learning_flow_weekly_review`。`degraded` 表示部分写入、传输或映射硬错误并以退出码 2 结束；`attention` 包括待分类、待接线、排期逾期等流转债务，退出码仍为 0。没有新训练、训练量低或 `learning_attempt` 暂时为空本身不算故障。
+学习流水、尝试、知识证据、错题、复检与 ingest 均在动作发生时带北京时间戳落账；周检直接按这批原始事实生成七天逐日表，不要求每天先跑一次监控。手动诊断快照可写 `.local/system-observability/learning-flow.jsonl` 与 `learning_flow_snapshot`；周检分别写 `.local/system-observability/weekly-<周一>.md` 与 `learning_flow_weekly_review`。`degraded` 表示部分写入、传输或映射硬错误并以退出码 2 结束；`attention` 包括待分类、待接线、排期逾期等流转债务，退出码仍为 0。没有新训练、训练量低或 `learning_attempt` 暂时为空本身不算故障。<!-- [gpt] 2026-08-11 -->
+
+ECS 每日 09:10 的 `11-dataflow-check.sh` 只额外监督 `learning_data_quality_v2` 的 error、最近一次 PC 周检状态及周检新鲜度；`attention` 只进入摘要，不每天推送成系统故障。默认连续 8 天无周检才告警，可通过 `FLOW_WEEKLY_STALE_DAYS` 调整。<!-- [gpt] 2026-08-11 -->
 
 知识系统 v3 的日常只读检查：
 

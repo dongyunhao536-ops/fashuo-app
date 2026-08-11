@@ -1,6 +1,5 @@
 // [gpt] 2026-08-11：PC 主系统学习数据流监控只判断可验证的记录、传输与状态迁移，不把低学习量伪装成系统故障。
 
-const STATUS_WEIGHT = Object.freeze({ healthy: 0, attention: 1, degraded: 2 });
 const SEVERITY_WEIGHT = Object.freeze({ info: 0, warning: 1, error: 2 });
 
 export const DEFAULT_FLOW_THRESHOLDS = Object.freeze({
@@ -9,7 +8,6 @@ export const DEFAULT_FLOW_THRESHOLDS = Object.freeze({
   ingestStaleMinutes: 15,
   reviewRequestStaleDays: 3,
   candidateStaleDays: 7,
-  expectedSnapshotDays: 5,
 });
 
 function number(value) {
@@ -39,12 +37,6 @@ function countBy(rows, field) {
     counts[key] = (counts[key] ?? 0) + 1;
   }
   return Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b)));
-}
-
-function maxStatus(...statuses) {
-  return statuses.reduce((current, status) => (
-    STATUS_WEIGHT[status] > STATUS_WEIGHT[current] ? status : current
-  ), "healthy");
 }
 
 function mergeIssue(map, issue) {
@@ -91,6 +83,33 @@ function oldestAge(rows, field, nowMs, unit) {
   return ages.length ? Math.max(...ages) : null;
 }
 
+function dateRange(start, end) {
+  if (!start || !end || start > end) return [];
+  const rows = [];
+  for (let cursor = start; cursor <= end; cursor = new Date(new Date(`${cursor}T00:00:00Z`).getTime() + 86400000).toISOString().slice(0, 10)) {
+    rows.push(cursor);
+  }
+  return rows;
+}
+
+function dailyRecords(facts) {
+  const studyLogs = facts.studyLogs ?? [];
+  const attempts = facts.attempts ?? [];
+  const evidence = facts.knowledgeEvidence ?? [];
+  const errorEvents = facts.errorEvents ?? [];
+  const reviews = facts.reviews ?? [];
+  const ingestHistory = facts.ingestHistory ?? [];
+  return dateRange(facts.windowStart, facts.windowEnd).map((date) => ({
+    date,
+    studyLogs: studyLogs.filter((row) => row.log_date === date).length,
+    learningAttempts: attempts.filter((row) => row.attempt_date === date).length,
+    knowledgeEvidence: evidence.filter((row) => row.evidence_date === date).length,
+    errorEvents: errorEvents.filter((row) => row.log_date === date).length,
+    errorReviews: reviews.filter((row) => row.review_date === date).length,
+    ingestOperations: ingestHistory.filter((row) => row.beijing_date === date).length,
+  }));
+}
+
 function actionableIssue(code) {
   const actions = {
     study_log_missing_attempt: "按 operation_id 重试本地 outbox，确认父流水与子尝试在同一次重放中共同成功。",
@@ -106,7 +125,6 @@ function actionableIssue(code) {
     unclassified_error_event: "把未归类错题事件并入稳定主题；无法确定时保留 pending，不做猜测映射。",
     learning_schedule_overdue: "交由日报/周报重新安排逾期任务；只记学习执行欠账，不触发系统修复。",
     legacy_missing_date: "给仍需执行的旧排期补明确日期；纯历史散文保留为证据，不强行结构化。",
-    monitor_snapshot_coverage_low: "恢复 PC 每日监控任务；先补监控覆盖，再解释周趋势。",
   };
   return actions[code] ?? `核对 ${code} 的事实源与消费者状态，修复后用同口径复跑监控。`;
 }
@@ -268,7 +286,7 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
   const status = errorCount ? "degraded" : warningCount ? "attention" : "healthy";
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     observedAt: nowIso,
     windowStart: facts.windowStart ?? null,
     windowEnd: facts.windowEnd ?? null,
@@ -283,6 +301,8 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
         attemptsBySource: countBy(attempts, "source_kind"),
         attemptsByResult: countBy(attempts, "result"),
         reviews: number(facts.reviewCount),
+        knowledgeEvidence: number(facts.knowledgeEvidenceCount),
+        daily: dailyRecords(facts),
       },
       transport: {
         localOutboxPending: outboxRows.length,
@@ -333,32 +353,11 @@ export function formatLearningFlowReport(report) {
   return lines.join("\n");
 }
 
-export function buildWeeklyFlowReview({ flowReport, snapshots = [], weekStart, weekEnd, thresholds = {} }) {
-  const config = { ...DEFAULT_FLOW_THRESHOLDS, ...thresholds };
-  const observedDays = [...new Set((snapshots ?? []).map((row) => row.beijing_date).filter(Boolean).map(String))].sort();
-  const snapshotStatuses = countBy(snapshots, "status");
-  const issueFrequency = new Map();
-  for (const snapshot of snapshots ?? []) {
-    const codes = new Set((snapshot.issues ?? []).map((issue) => issue.code));
-    for (const code of codes) issueFrequency.set(code, (issueFrequency.get(code) ?? 0) + 1);
-  }
-  const repeatedIssues = [...issueFrequency.entries()]
-    .map(([code, snapshotCount]) => ({ code, snapshotCount }))
-    .sort((a, b) => b.snapshotCount - a.snapshotCount || a.code.localeCompare(b.code));
-
+export function buildWeeklyFlowReview({ flowReport, weekStart, weekEnd }) {
   const weeklyIssues = [...flowReport.issues];
-  let status = flowReport.status;
-  if (observedDays.length < config.expectedSnapshotDays) {
-    weeklyIssues.push({
-      code: "monitor_snapshot_coverage_low",
-      severity: "warning",
-      domain: "monitoring",
-      count: 1,
-      message: `本周只有 ${observedDays.length}/${config.expectedSnapshotDays} 个监控日，趋势证据不足。`,
-      examples: observedDays,
-    });
-    status = maxStatus(status, "attention");
-  }
+  const status = flowReport.status;
+  const daily = flowReport.metrics.records.daily ?? [];
+  const activeDays = daily.filter((row) => Object.entries(row).some(([key, value]) => key !== "date" && Number(value) > 0)).length;
 
   const priorityIssues = weeklyIssues
     .filter((issue) => issue.severity !== "info")
@@ -374,9 +373,15 @@ export function buildWeeklyFlowReview({ flowReport, snapshots = [], weekStart, w
     "",
     `## 判定：${statusLabel}`,
     "",
-    `- 监控覆盖：${observedDays.length} 个北京日；日快照 healthy ${snapshotStatuses.healthy ?? 0} / attention ${snapshotStatuses.attention ?? 0} / degraded ${snapshotStatuses.degraded ?? 0}`,
+    `- 数据口径：学习动作发生时实时落账，本监控只在周一分析；本周 7 个北京日中 ${activeDays} 天有结构化记录`,
     `- 周内记录：study_log ${flowReport.metrics.records.studyLogs}；声明尝试 ${flowReport.metrics.records.studyLogsExpectingAttempts}；learning_attempt ${flowReport.metrics.records.learningAttempts}`,
     `- 周末状态：本地 outbox ${flowReport.metrics.transport.localOutboxPending}；未决 ingest ${Object.values(flowReport.metrics.transport.ingestUnresolvedByStatus).reduce((sum, value) => sum + value, 0)}；未归类错题事件 ${flowReport.metrics.workflow.unclassifiedErrorEvents}`,
+    "",
+    "## 每日记录",
+    "",
+    "| 北京日 | 学习流水 | 尝试 | 知识证据 | 错题事件 | 复检 | ingest |",
+    "|---|---:|---:|---:|---:|---:|---:|",
+    ...daily.map((row) => `| ${row.date} | ${row.studyLogs} | ${row.learningAttempts} | ${row.knowledgeEvidence} | ${row.errorEvents} | ${row.errorReviews} | ${row.ingestOperations} |`),
     "",
     "## 下周系统动作",
     "",
@@ -388,13 +393,12 @@ export function buildWeeklyFlowReview({ flowReport, snapshots = [], weekStart, w
   ].join("\n");
 
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     weekStart,
     weekEnd,
     status,
-    observedDays,
-    snapshotStatuses,
-    repeatedIssues,
+    activeDays,
+    dailyRecords: daily,
     recommendations,
     flowReport,
     content,

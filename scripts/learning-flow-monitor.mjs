@@ -1,6 +1,6 @@
-// node --env-file=.env.local scripts/learning-flow-monitor.mjs check [--json] [--no-save|--local-only]
-// node --env-file=.env.local scripts/learning-flow-monitor.mjs weekly [--week YYYY-MM-DD] [--json] [--no-save]
-// [gpt] 2026-08-11：PC 本地优先采集学习数据流事实，数据库保存脱敏快照，周检不与学习周报混写。
+// node --env-file=.env.local scripts/learning-flow-monitor.mjs check [--json] [--no-save|--local-only]  # 手动诊断
+// node --env-file=.env.local scripts/learning-flow-monitor.mjs weekly [--week YYYY-MM-DD] [--json] [--no-save] # 周一自动分析
+// [gpt] 2026-08-11：学习数据随动作实时落账；监控只按周分析，手动 check 仅用于即时诊断。
 import { createClient } from "@supabase/supabase-js";
 import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -55,6 +55,11 @@ function beijingWeekMonday(ymd) {
 
 function beijingBoundary(ymd) {
   return new Date(`${ymd}T00:00:00+08:00`).toISOString();
+}
+
+function beijingDateFromTimestamp(value) {
+  const timestamp = new Date(value ?? "").getTime();
+  return Number.isFinite(timestamp) ? new Date(timestamp + 8 * 3600000).toISOString().slice(0, 10) : null;
 }
 
 function releaseSha() {
@@ -128,11 +133,16 @@ function readLocalFacts(referenceDate, windowStart, windowEnd) {
 async function collectFacts(db, { now, windowStart, windowEnd }) {
   const referenceDate = beijingDate(now);
   const local = readLocalFacts(referenceDate, windowStart, windowEnd);
+  const sinceTs = beijingBoundary(windowStart);
+  const untilTs = beijingBoundary(shiftDate(windowEnd, 1));
   const [
     qualityIssues,
     ingestOperations,
+    ingestHistoryRaw,
     attempts,
     studyLogs,
+    knowledgeEvidence,
+    weeklyErrorEvents,
     pendingEvents,
     askPoints,
     errorBook,
@@ -145,11 +155,21 @@ async function collectFacts(db, { now, windowStart, windowEnd }) {
     readAll("unresolved ingest_operation", (from, to) => db.from("ingest_operation")
       .select("operation_id,op_type,status,attempt_count,first_seen_at,last_attempt_at,updated_at")
       .in("status", ["queued", "applying", "failed"]).range(from, to)),
+    readAll("weekly ingest_operation", (from, to) => db.from("ingest_operation")
+      .select("operation_id,op_type,status,attempt_count,first_seen_at,applied_at")
+      .gte("first_seen_at", sinceTs).lt("first_seen_at", untilTs).range(from, to)),
     readAll("learning_attempt", (from, to) => db.from("learning_attempt")
       .select("id,attempt_date,source_kind,result,subject,kp_id,attempt_role")
       .gte("attempt_date", windowStart).lte("attempt_date", windowEnd).range(from, to)),
     readAll("study_log", (from, to) => db.from("study_log")
       .select("id,log_date,operation_id,attempt_expected")
+      .gte("log_date", windowStart).lte("log_date", windowEnd).range(from, to)),
+    readAll("knowledge_evidence", (from, to) => db.from("knowledge_evidence")
+      .select("id,evidence_date,source_kind,result")
+      .gte("evidence_date", windowStart).lte("evidence_date", windowEnd).range(from, to)),
+    // [gpt] 2026-08-11：逐日计数直接读错题事实表，避免 error_book_v2 的一题多主题展开造成重复计数。
+    readAll("weekly study_error", (from, to) => db.from("study_error")
+      .select("id,log_date")
       .gte("log_date", windowStart).lte("log_date", windowEnd).range(from, to)),
     readAll("pending events", (from, to) => db.from("events")
       .select("id,type,kp_id,subject,status,created_at").eq("status", "pending").range(from, to)),
@@ -175,6 +195,10 @@ async function collectFacts(db, { now, windowStart, windowEnd }) {
   const reciteMapping = local.reciteParsed
     ? buildReciteMemoryModel(local.reciteParsed, referenceDate, { objectLinks })
     : { counts: {} };
+  const ingestHistory = ingestHistoryRaw.map((row) => ({
+    ...row,
+    beijing_date: beijingDateFromTimestamp(row.first_seen_at),
+  }));
 
   return {
     nowIso: now.toISOString(),
@@ -182,8 +206,14 @@ async function collectFacts(db, { now, windowStart, windowEnd }) {
     windowEnd,
     qualityIssues,
     ingestOperations,
+    ingestHistory,
     localOutbox: local.localOutbox,
     attempts,
+    studyLogs,
+    knowledgeEvidence,
+    knowledgeEvidenceCount: knowledgeEvidence.length,
+    errorEvents: weeklyErrorEvents,
+    reviews,
     attemptCount: attempts.length,
     validAttemptCount: attempts.filter((row) => row.result !== "void").length,
     studyLogCount: studyLogs.length,
@@ -238,14 +268,6 @@ async function runCheck(db, flags) {
   return report;
 }
 
-async function readWeeklySnapshots(db, weekStart, weekEnd) {
-  const since = beijingBoundary(weekStart);
-  const until = beijingBoundary(shiftDate(weekEnd, 1));
-  return readAll("learning_flow_snapshot", (from, to) => db.from("learning_flow_snapshot")
-    .select("observed_at,beijing_date,status,metrics,issues")
-    .gte("observed_at", since).lt("observed_at", until).range(from, to));
-}
-
 async function runWeekly(db, flags) {
   const now = new Date();
   const today = beijingDate(now);
@@ -253,17 +275,12 @@ async function runWeekly(db, flags) {
   const weekStart = assertDate(flags.week === true ? null : flags.week ?? (flags.current ? currentWeek : shiftDate(currentWeek, -7)), "--week");
   if (beijingWeekMonday(weekStart) !== weekStart) throw new Error("--week 必须是北京自然周周一");
   const weekEnd = shiftDate(weekStart, 6);
-  const [facts, snapshots] = await Promise.all([
-    collectFacts(db, { now, windowStart: weekStart, windowEnd: weekEnd }),
-    readWeeklySnapshots(db, weekStart, weekEnd),
-  ]);
+  const facts = await collectFacts(db, { now, windowStart: weekStart, windowEnd: weekEnd });
   const flowReport = evaluateLearningFlow(facts, { thresholds: thresholds() });
   const weekly = buildWeeklyFlowReview({
     flowReport,
-    snapshots,
     weekStart,
     weekEnd,
-    thresholds: thresholds(),
   });
   if (!flags["no-save"]) {
     mkdirSync(LOCAL_DIR, { recursive: true });
@@ -302,4 +319,3 @@ try {
   console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 }
-

@@ -30,6 +30,7 @@ describe("learning controller", () => {
     ] };
     const result = buildLearningController({ schedule, referenceDate: "2026-08-03" });
     expect(result.mode).toBe("constrained");
+    expect(result.dataQuality.decisionStatus).toBe("evaluated");
     expect(result.policy).toMatchObject({ maxNewDaily: 2, maxP1PerWeek: 1, allowP2: false });
   });
 
@@ -66,10 +67,24 @@ describe("learning controller", () => {
     expect(result.policy.allowP2).toBe(false);
   });
 
-  it("没有归因数据时不把缺数据误判成表现良好", () => {
+  it("没有归因数据时保留安全运行上限，但显式拒绝健康判定", () => {
     const result = buildLearningController({ schedule: { items: [] }, referenceDate: "2026-08-03" });
     expect(result.mode).toBe("normal");
     expect(result.dataQuality.sampleGateMet).toBe(false);
-    expect(result.dataQuality.note).toContain("尚无");
+    expect(result.dataQuality.decisionStatus).toBe("insufficient_data");
+    expect(result.reason).toContain("数据不足");
+    expect(result.policyText).toContain("不解释为执行健康");
+    expect(result.dataQuality.note).toContain("不表示执行良好");
+  });
+
+  it("已有计划归属但不足连续两周时标记 warming_up", () => {
+    const result = buildLearningController({ schedule: { items: [
+      item({ id: "A", week: "2026-07-27", completed: true }),
+    ] }, referenceDate: "2026-08-03" });
+    expect(result).toMatchObject({
+      mode: "normal",
+      reason: "完整 P0 周样本不足，暂不判定连续兑现状态",
+      dataQuality: { decisionStatus: "warming_up", sampleGateMet: false },
+    });
   });
 });

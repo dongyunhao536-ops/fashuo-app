@@ -2,7 +2,7 @@
 
 const DAY = 86400000;
 
-export const LEARNING_CONTROLLER_VERSION = "1.0";
+export const LEARNING_CONTROLLER_VERSION = "1.1";
 export const CONTROLLER_MODES = Object.freeze(["normal", "constrained", "rescue", "recovery"]);
 
 const MODE_POLICY = Object.freeze({
@@ -113,6 +113,29 @@ export function buildLearningController({ schedule, referenceDate, milestoneRisk
 
   const policy = MODE_POLICY[mode];
   const weeksWithP0 = completedWeeks.filter((week) => week.byPriority.P0.plannedWeight > 0).length;
+  const sampleGateMet = last2.length === 2 && last2.every((week) => week.byPriority.P0.plannedWeight > 0);
+  const decisionStatus = planItems.length === 0
+    ? "insufficient_data"
+    : sampleGateMet
+      ? "evaluated"
+      : "warming_up";
+
+  // [gpt] 2026-08-11：normal 是安全运行策略，不等于“执行健康”。没有归属分母时必须显式拒绝健康判定。
+  if (mode === "normal" && decisionStatus === "insufficient_data") {
+    reason = "计划归属数据不足，暂不自动判定执行状态";
+  } else if (mode === "normal" && decisionStatus === "warming_up") {
+    reason = "完整 P0 周样本不足，暂不判定连续兑现状态";
+  }
+
+  const policyText = mode === "normal"
+    ? decisionStatus === "evaluated"
+      ? "正常承载 P0/P1/P2"
+      : "按 normal 安全上限运行，但不解释为执行健康"
+    : mode === "constrained"
+      ? "冻结 P2、P1 每周最多 1 件、每日新增派单最多 2 件"
+      : mode === "rescue"
+        ? "只新增 P0，保留已到期维护义务；每日新增派单最多 1 件"
+        : "继续冻结 P2、限制 P1；连续稳定后再恢复 normal";
   return {
     version: LEARNING_CONTROLLER_VERSION,
     referenceDate,
@@ -135,19 +158,18 @@ export function buildLearningController({ schedule, referenceDate, milestoneRisk
     dataQuality: {
       attributedPlanUnits: planItems.length,
       weeksWithP0,
-      sampleGateMet: last2.length === 2 && last2.every((week) => week.byPriority.P0.plannedWeight > 0),
-      note: planItems.length ? null : "尚无带 plan_id/plan_week/plan_source 的结构化验收单元；控制器保持 normal，不把缺数据当执行良好",
+      sampleGateMet,
+      decisionStatus,
+      note: decisionStatus === "insufficient_data"
+        ? "尚无带 plan_id/plan_week/plan_source 的结构化验收单元；normal 仅表示安全运行策略，不表示执行良好"
+        : decisionStatus === "warming_up"
+          ? "已有计划归属，但尚未形成连续两周完整 P0 样本；暂不评价连续兑现表现"
+          : null,
     },
     weeks,
     current: weeks.at(-1),
     overdueP0: overdueP0.map((item) => ({ id: item.id, planId: item.planId, dueDate: item.dueDate, task: item.task })),
-    policyText: mode === "normal"
-      ? "正常承载 P0/P1/P2"
-      : mode === "constrained"
-        ? "冻结 P2、P1 每周最多 1 件、每日新增派单最多 2 件"
-        : mode === "rescue"
-          ? "只新增 P0，保留已到期维护义务；每日新增派单最多 1 件"
-          : "继续冻结 P2、限制 P1；连续稳定后再恢复 normal",
+    policyText,
   };
 }
 
@@ -156,5 +178,8 @@ export function formatLearningController(controller) {
     const p0 = week.byPriority.P0;
     return `${week.weekStart}:${p0.plannedWeight ? `${Math.round((p0.strictRate ?? 0) * 100)}%(${p0.completedWeight}/${p0.plannedWeight})` : "无P0数据"}`;
   }).join(" / ");
-  return `学习控制器：${controller.mode}｜${controller.reason}｜${controller.policyText}｜近三周P0 ${latest}`;
+  const decision = controller.dataQuality?.decisionStatus === "evaluated"
+    ? controller.mode
+    : `${controller.mode}（${controller.dataQuality?.decisionStatus ?? "unknown"}）`;
+  return `学习控制器：${decision}｜${controller.reason}｜${controller.policyText}｜近三周P0 ${latest}`;
 }
