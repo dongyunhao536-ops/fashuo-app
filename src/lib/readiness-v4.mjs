@@ -1,14 +1,14 @@
 /**
- * [gpt] 2026-08-10：目标达成指数 v4。
+ * [gpt] 2026-08-11：目标达成指数 v4.1。
  *
  * 这个模块只回答一个问题：当前可核验的学习证据，能支撑 378 目标的多少。
  * - 学习流水是模考前的结构先验，不伪装成卷面分预测；
  * - 先按真实试卷聚合，再惩罚最弱卷，不再拿五个内部学科中的最小值冒充“单科线”；
- * - 政治由用户自管且系统没有过程数据，因此在 378 口径中按 0 证据计入；
+ * - 政治仍不伪造过程数据；用户明确给出的暂定分只作为“基线假设”进入主数，并与实测证据分开返回；
  * - 至少 3 次带总分的完整同口径模考后，才让真实卷面分进入主指数。
  */
 
-export const READINESS_V4_VERSION = "4.0";
+export const READINESS_V4_VERSION = "4.1";
 
 export const SUBJECT_MAX_SCORES = Object.freeze({
   刑法: 75,
@@ -261,6 +261,36 @@ function mockCalibration(records, fullTarget, processIndex) {
   };
 }
 
+function baselineAssumptions(input, config) {
+  const politicsScore = Number(input?.politicsScore);
+  if (!Number.isFinite(politicsScore)) return [];
+  const target = config.paperTargets.政治;
+  const score = round1(clamp(politicsScore, 0, 100));
+  return [{
+    subject: "政治",
+    target,
+    score,
+    attainment: Math.round(clamp(100 * score / target)),
+    treatment: "user-baseline",
+  }];
+}
+
+function feasibilityLine(input, fullTarget, records) {
+  const score = Number(input?.score);
+  if (!Number.isFinite(score) || score <= 0) return null;
+  const complete = completeMockTotals(records, fullTarget);
+  const latest = complete.at(-1) ?? null;
+  return {
+    date: validDate(input?.date) ? String(input.date) : null,
+    score: round1(score),
+    // [gpt] 红线是“至少达到”，换算为整数指数时向上取整，320/378 = 84.66，因此显示 85。
+    index: Math.ceil(100 * score / fullTarget),
+    evidence: "complete-mock-only",
+    status: latest == null ? "awaiting-complete-mock" : latest.total >= score ? "met-single-sample" : "below-line",
+    latestCompleteScore: latest?.total ?? null,
+  };
+}
+
 /**
  * @param {{
  *   quantV3: Record<string, any>,
@@ -268,10 +298,21 @@ function mockCalibration(records, fullTarget, processIndex) {
  *   topicRows?: Array<Record<string, any>>,
  *   referenceDate: string,
  *   targets?: Record<string, any>,
- *   mockRecords?: Array<Record<string, any>>
+ *   mockRecords?: Array<Record<string, any>>,
+ *   assumptions?: { politicsScore?: number },
+ *   feasibility?: { date?: string, score?: number }
  * }} input
  */
-export function buildTargetReadinessV4({ quantV3, logs = [], topicRows = [], referenceDate, targets = {}, mockRecords = [] }) {
+export function buildTargetReadinessV4({
+  quantV3,
+  logs = [],
+  topicRows = [],
+  referenceDate,
+  targets = {},
+  mockRecords = [],
+  assumptions = {},
+  feasibility = {},
+}) {
   if (!validDate(referenceDate)) throw new Error("referenceDate 必须是 YYYY-MM-DD");
   if (!quantV3?.subjects || !quantV3?.overall?.english) throw new Error("quantV3 快照不完整");
 
@@ -316,14 +357,30 @@ export function buildTargetReadinessV4({ quantV3, logs = [], topicRows = [], ref
   });
 
   const trackedTargetPoints = papers.reduce((sum, paper) => sum + paper.targetScore, 0);
-  const supportedPoints = round1(papers.reduce((sum, paper) => sum + Math.min(paper.targetScore, paper.estimatedScore), 0));
-  const pointAttainment = Math.round(clamp(100 * supportedPoints / trackedTargetPoints));
-  const weakestPaper = papers.reduce((weakest, paper) => paper.attainment < weakest.attainment ? paper : weakest, papers[0]);
+  const trackedSupportedPoints = round1(papers.reduce((sum, paper) => sum + Math.min(paper.targetScore, paper.estimatedScore), 0));
+  const trackedPointAttainment = Math.round(clamp(100 * trackedSupportedPoints / trackedTargetPoints));
+  const weakestTrackedPaper = papers.reduce((weakest, paper) => paper.attainment < weakest.attainment ? paper : weakest, papers[0]);
   // 80% 看目标分已被多少证据支撑，20% 看真实最弱卷；内部五科不再直接充当资格线。
-  const trackedIndex = Math.round(0.8 * pointAttainment + 0.2 * weakestPaper.attainment);
-  const processIndex = Math.round(trackedIndex * trackedTargetPoints / config.fullTarget);
+  const trackedIndex = Math.round(0.8 * trackedPointAttainment + 0.2 * weakestTrackedPaper.attainment);
+  const declaredAssumptions = baselineAssumptions(assumptions, config);
+  const assumedTargetPoints = declaredAssumptions.reduce((sum, item) => sum + item.target, 0);
+  const assumedSupportedPoints = round1(declaredAssumptions.reduce((sum, item) => sum + Math.min(item.target, item.score), 0));
+  const coveredTargetPoints = Math.min(config.fullTarget, trackedTargetPoints + assumedTargetPoints);
+  const supportedPoints = round1(trackedSupportedPoints + assumedSupportedPoints);
+  const pointAttainment = Math.round(clamp(100 * supportedPoints / config.fullTarget));
+  const coveredPapers = [...papers, ...declaredAssumptions.map((item) => ({
+    paper: item.subject,
+    attainment: item.attainment,
+  }))];
+  const weakestPaper = coveredPapers.reduce((weakest, paper) => paper.attainment < weakest.attainment ? paper : weakest, coveredPapers[0]);
+  // [gpt] 最弱卷维度也受“已覆盖目标分”约束：政治无假设时沿用原 313/378 缩放；有 65 基线后才恢复完整四卷口径。
+  const paperBalance = Math.round(weakestPaper.attainment * coveredTargetPoints / config.fullTarget);
+  const processIndex = Math.round(0.8 * pointAttainment + 0.2 * paperBalance);
+  const evidenceOnlyPointAttainment = Math.round(clamp(100 * trackedSupportedPoints / config.fullTarget));
+  const evidenceOnlyPaperBalance = Math.round(weakestTrackedPaper.attainment * trackedTargetPoints / config.fullTarget);
+  const evidenceOnlyIndex = Math.round(0.8 * evidenceOnlyPointAttainment + 0.2 * evidenceOnlyPaperBalance);
   const calibration = mockCalibration(mockRecords, config.fullTarget, processIndex);
-  const untrackedTargetPoints = Math.max(0, config.fullTarget - trackedTargetPoints);
+  const untrackedTargetPoints = Math.max(0, config.fullTarget - coveredTargetPoints);
 
   return {
     version: READINESS_V4_VERSION,
@@ -334,15 +391,22 @@ export function buildTargetReadinessV4({ quantV3, logs = [], topicRows = [], ref
     overall: {
       index: calibration.index,
       processIndex,
+      evidenceOnlyIndex,
       trackedIndex,
       pointAttainment,
-      paperBalance: weakestPaper.attainment,
+      trackedPointAttainment,
+      paperBalance,
       weakestPaper: { paper: weakestPaper.paper, attainment: weakestPaper.attainment },
       supportedPoints,
+      trackedSupportedPoints,
       trackedTargetPoints,
+      assumedTargetPoints,
+      coveredTargetPoints,
       fullTarget: config.fullTarget,
       untrackedTargetPoints,
       untrackedSubjects: untrackedTargetPoints > 0 ? [{ subject: "政治", target: untrackedTargetPoints, treatment: "zero-evidence" }] : [],
+      assumptions: declaredAssumptions,
+      feasibility: feasibilityLine(feasibility, config.fullTarget, mockRecords),
       notStarted: subjects.filter((subject) => subject.covered === 0 && subject.open === 0 && subject.absorbed === 0).length,
       calibration,
     },

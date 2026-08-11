@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildTargetReadinessV4 } from "../../src/lib/readiness-v4.mjs";
 
-// [gpt] 2026-08-10：v4 测试钉住“目标分、真实卷、零证据政治、三次模考闸门”四条新不变量。
+// [gpt] 2026-08-11：v4.1 测试钉住“目标分、政治基线与实测分离、真实卷、三次模考闸门”四条不变量。
 const lawNames = ["刑法", "民法", "法理", "宪法", "法制史"];
 
 function law(subject, overrides = {}) {
@@ -42,12 +42,14 @@ function quant(subjectOverrides = {}, englishOverrides = {}) {
   };
 }
 
-function build({ snapshot = quant(), logs = [], topicRows = [], mockRecords = [] } = {}) {
+function build({ snapshot = quant(), logs = [], topicRows = [], mockRecords = [], politicsScore, feasibility = { date: "2026-09-26", score: 320 } } = {}) {
   return buildTargetReadinessV4({
     quantV3: snapshot,
     logs,
     topicRows,
     mockRecords,
+    assumptions: politicsScore == null ? {} : { politicsScore },
+    feasibility,
     referenceDate: "2026-08-10",
     targets: {
       总分: 378,
@@ -74,6 +76,31 @@ describe("目标达成指数 v4", () => {
     const result = build({ snapshot: quant(full, { papers14d: 4, essays30d: 2 }), logs });
     expect(result.overall.index).toBe(83);
     expect(result.overall.trackedIndex).toBe(100);
+  });
+
+  it("政治 65 只作为显式基线抬升主数，证据口径与假设口径可以分别审计", () => {
+    const full = Object.fromEntries(lawNames.map((subject) => [subject, { covered: 99, progress: 100, depth: 100, recitePct: 100 }]));
+    const logs = lawNames.flatMap((subject) => accuracyLogs(subject, Array(8).fill(100))).concat(accuracyLogs("英语", Array(8).fill(100)));
+    const result = build({ snapshot: quant(full, { papers14d: 4, essays30d: 2 }), logs, politicsScore: 65 });
+    expect(result.overall).toMatchObject({
+      index: 100,
+      evidenceOnlyIndex: 83,
+      assumedTargetPoints: 65,
+      coveredTargetPoints: 378,
+      untrackedTargetPoints: 0,
+    });
+    expect(result.overall.assumptions).toEqual([{ subject: "政治", target: 65, score: 65, attainment: 100, treatment: "user-baseline" }]);
+  });
+
+  it("320 分首模红线只换算为完整模考可行线 85，不把过程指数冒充首模成绩", () => {
+    const result = build({ politicsScore: 65 });
+    expect(result.overall.feasibility).toMatchObject({
+      date: "2026-09-26",
+      score: 320,
+      index: 85,
+      evidence: "complete-mock-only",
+      status: "awaiting-complete-mock",
+    });
   });
 
   it("销账只消除风险，不会比从未出现错题的同一学习证据获得额外奖励", () => {
@@ -167,9 +194,11 @@ describe("目标达成指数 v4", () => {
       ...accuracyLogs("法制史", Array(3).fill(84)),
       ...accuracyLogs("英语", Array(4).fill(75)),
     ];
-    const result = build({ snapshot, logs });
-    expect(result.overall.index).toBeGreaterThanOrEqual(35);
-    expect(result.overall.index).toBeLessThanOrEqual(45);
+    const result = build({ snapshot, logs, politicsScore: 65 });
+    expect(result.overall.evidenceOnlyIndex).toBeGreaterThanOrEqual(35);
+    expect(result.overall.evidenceOnlyIndex).toBeLessThanOrEqual(45);
+    expect(result.overall.index).toBeGreaterThanOrEqual(50);
+    expect(result.overall.index).toBeLessThanOrEqual(60);
     expect(result.overall.weakestPaper.paper).toBe("专业综合");
   });
 });

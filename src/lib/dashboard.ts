@@ -7,9 +7,9 @@ import { buildTargetReadinessV4 } from "./readiness-v4.mjs";
 import coachConfig from "../../config/coach.json";
 
 /**
- * [gpt] 2026-08-10：今日页主量化升级到“目标达成指数 v4”。
+ * [gpt] 2026-08-11：今日页主量化升级到“目标达成指数 v4.1”。
  * v3.1 继续负责把历史流水压成覆盖/深度/背诵等基础证据，v4 再按 378 目标、真实三张已追踪试卷、
- * 训练正确率、错题风险和模考闸门合成唯一主数；政治自管且无过程证据，按 0 证据显式进入 378 分母。
+ * 训练正确率、错题风险和模考闸门合成唯一主数；政治 65 只按用户暂定基线计入，绝不冒充实测能力。
  */
 
 /**
@@ -142,14 +142,28 @@ export interface DashboardData {
   overall: {
     index: number;
     processIndex: number;
+    evidenceOnlyIndex: number;
     trackedIndex: number;
     pointAttainment: number;
+    trackedPointAttainment: number;
     paperBalance: number;
     supportedPoints: number;
+    trackedSupportedPoints: number;
     trackedTargetPoints: number;
+    assumedTargetPoints: number;
+    coveredTargetPoints: number;
     fullTarget: number;
     untrackedTargetPoints: number;
     weakestPaper: { paper: string; attainment: number };
+    assumptions: Array<{ subject: string; target: number; score: number; attainment: number; treatment: string }>;
+    feasibility: null | {
+      date: string | null;
+      score: number;
+      index: number;
+      evidence: string;
+      status: string;
+      latestCompleteScore: number | null;
+    };
     calibration: {
       tier: string;
       label: string;
@@ -260,6 +274,12 @@ export async function getDashboard(): Promise<DashboardData> {
     referenceDate: todayStr,
     targets: coachConfig["目标分"],
     mockRecords: coachConfig["模拟分记录"]?.["记录"] ?? [],
+    // [gpt] 云明确要求政治暂按 65；作为显式可撤销假设传入，不回填学习事实。
+    assumptions: { politicsScore: coachConfig["目标分"]["拆分"]["政治"] },
+    feasibility: {
+      date: coachConfig["首次模拟"],
+      score: coachConfig["红线"]["9月底模拟分下限"],
+    },
   });
   const subjects = readiness.subjects as SubjectStat[];
   const english = readiness.english as EnglishStat;

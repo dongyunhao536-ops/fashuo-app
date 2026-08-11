@@ -48,7 +48,7 @@ export default async function DashboardPage() {
             </div>
             <div className="mt-1 text-[10.5px] leading-tight text-label3">
               378 目标 · {d.overall.calibration.label}
-              <br />已追踪 {d.overall.trackedTargetPoints} 分 · 政治 {d.overall.untrackedTargetPoints} 分按 0 证据
+              <br />证据追踪 {d.overall.trackedTargetPoints} 分 · 政治 {d.overall.assumptions[0]?.score ?? 0} 分为基线假设
             </div>
           </div>
           <div className="text-right text-[11px] leading-relaxed text-label3">
@@ -115,10 +115,15 @@ export default async function DashboardPage() {
           </div>
         </div>
         <div className="mt-2.5 rounded-[10px] bg-orange/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-orange">
-          目标诊断：当前最弱卷「{d.overall.weakestPaper.paper}」达成 {d.overall.weakestPaper.attainment}%。政治由你自管、没有过程数据，主指数已按 0 证据处理；完整模考 {d.overall.calibration.completeMocks}/{d.overall.calibration.requiredMocks}，到闸后自动校准。
+          目标诊断：当前最弱卷「{d.overall.weakestPaper.paper}」达成 {d.overall.weakestPaper.attainment}%。政治按 {d.overall.assumptions[0]?.score ?? 0} 分计入，但它是你的管理假设、不是实测；完整模考 {d.overall.calibration.completeMocks}/{d.overall.calibration.requiredMocks}，到闸后自动校准。
         </div>
+        {d.overall.feasibility && (
+          <div className="mt-2 rounded-[10px] border border-hairline px-2.5 py-1.5 text-[11px] leading-relaxed text-label2">
+            {d.overall.feasibility.date?.slice(5).replace("-", "·")} 可行线：完整模考 <b className="text-accent-soft tabular-nums">{d.overall.feasibility.score}</b> 分，对应指数至少 <b className="text-accent-soft tabular-nums">{d.overall.feasibility.index}</b>；过程指数单独过线不算。
+          </div>
+        )}
         <div className="mt-2 text-[10px] leading-relaxed text-label3">
-          v4：五法用覆盖25% + 深度35% + 背诵40%形成先验，再由近8次训练正确率校准，扣未闭环、重犯和久未触达；英语看阅读、近14天节奏与近30天作文。已追踪部分按“目标分支撑80% + 最弱真实试卷20%”合成，再按313/378计入政治缺口。过程估计，不等同卷面预测。
+          v4.1：五法用覆盖25% + 深度35% + 背诵40%形成先验，再由近8次训练正确率校准，扣未闭环、重犯和久未触达；英语看阅读、近14天节奏与近30天作文。主数按“378目标分支撑80% + 最弱真实试卷20%”合成，政治65仅作显式基线。过程估计，不等同卷面预测。
         </div>
       </section>
 
