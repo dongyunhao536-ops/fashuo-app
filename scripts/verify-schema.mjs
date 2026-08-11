@@ -40,6 +40,10 @@ const tables = [
   "learning_attempt",
   "learning_attempt_rollup_v1",
   "learning_data_quality_v1",
+  // [gpt] 2026-08-11：PC 学习数据流监控的质量视图、日快照与独立周检。
+  "learning_data_quality_v2",
+  "learning_flow_snapshot",
+  "learning_flow_weekly_review",
 ];
 
 let ok = 0;
@@ -68,6 +72,9 @@ const columnProbes = [
   { label: "learning_attempt.v2", table: "learning_attempt", columns: "operation_id,ingest_operation_id,attempt_date,kp_id,question_ref,source_kind,source_id,attempt_role,dimension,result,score,max_score,cold,prompt_integrity,variant_kind,transfer_level,probe_axis,assessment_context,duration_seconds" },
   { label: "learning_attempt_rollup.v1", table: "learning_attempt_rollup_v1", columns: "attempt_date,subject,source_kind,attempt_role,dimension,assessment_context,attempt_count,valid_attempt_count,score_sum,max_score_sum,score_rate" },
   { label: "learning_data_quality.v1", table: "learning_data_quality_v1", columns: "issue_code,severity,entity_kind,entity_id,detected_at,detail" },
+  { label: "learning_data_quality.v2", table: "learning_data_quality_v2", columns: "issue_code,severity,entity_kind,entity_id,detected_at,detail" },
+  { label: "learning_flow_snapshot.v1", table: "learning_flow_snapshot", columns: "observed_at,beijing_date,window_start,window_end,status,source,release_sha,schema_version,metrics,issues" },
+  { label: "learning_flow_weekly.v1", table: "learning_flow_weekly_review", columns: "week_start,week_end,status,content,data_snapshot,source,schema_version,generated_at" },
 ];
 for (const probe of columnProbes) {
   const { error } = await sb.from(probe.table).select(probe.columns).limit(1);

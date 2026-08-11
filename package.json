@@ -19,6 +19,8 @@
     "cost": "node --env-file=.env.local scripts/cost-report.mjs",
     "verify-schema": "node --env-file=.env.local scripts/verify-schema.mjs",
     "data-health": "node --env-file=.env.local scripts/data-health.mjs",
+    "flow:check": "node --env-file=.env.local scripts/learning-flow-monitor.mjs check",
+    "flow:weekly": "node --env-file=.env.local scripts/learning-flow-monitor.mjs weekly",
     "knowledge": "node --env-file=.env.local scripts/knowledge.mjs",
     "forecast": "node scripts/forecast.mjs",
     "migration:selfhosted": "node --env-file=.env.local scripts/apply-selfhosted-migration.mjs",

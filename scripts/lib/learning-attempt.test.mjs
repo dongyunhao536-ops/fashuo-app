@@ -32,6 +32,7 @@ describe("learning attempt", () => {
       max_score: 1,
       transfer_level: 3,
       attempt_role: "primary",
+      metadata: { projection_expected: true },
       project_evidence: true,
     });
   });
@@ -43,6 +44,19 @@ describe("learning attempt", () => {
     expect(() => normalizeLearningAttempt({ ...base, protocol: "x" }, "2026-08-10")).toThrow(/必须成组/);
     expect(() => normalizeLearningAttempt({ ...base, sourceKind: "objective_question", questionRef: "Q1", score: 1, maxScore: 1 }, "2026-08-10")).toThrow(/sourceId/);
     expect(() => normalizeLearningAttempt({ ...base, attemptRole: "guess" }, "2026-08-10")).toThrow(/角色不合法/);
+  });
+
+  it("显式不投影时把声明写入 metadata，供监控区分合法跳过与部分成功", () => {
+    // [gpt] 2026-08-11：监控不能仅凭 kp_id 猜是否应有 knowledge_evidence。
+    const payload = normalizeLearningAttempt({
+      operation_id: "attempt-no-projection",
+      sourceKind: "manual",
+      kpId: "XF-0001",
+      dimension: "understanding",
+      result: "pass",
+      projectEvidence: false,
+    }, "2026-08-11");
+    expect(payload).toMatchObject({ project_evidence: false, metadata: { projection_expected: false } });
   });
 
   it("通过单个 RPC 写 attempt，并由数据库同事务投影 knowledge_evidence", async () => {

@@ -1,0 +1,9 @@
+{
+  "_来源": "[gpt] 2026-08-11：PC 学习数据流监控阈值；学习低频不是故障，只有声明后未落账或状态长期不流转才告警。",
+  "localOutboxWarnMinutes": 15,
+  "localOutboxErrorMinutes": 1440,
+  "ingestStaleMinutes": 15,
+  "reviewRequestStaleDays": 3,
+  "candidateStaleDays": 7,
+  "expectedSnapshotDays": 5
+}

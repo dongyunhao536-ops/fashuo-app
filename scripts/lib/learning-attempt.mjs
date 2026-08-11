@@ -104,7 +104,11 @@ export function normalizeLearningAttempt(operation, today) {
     evidence_anchor: operation.evidenceAnchor ?? null,
     response_excerpt: operation.responseExcerpt ?? null,
     note: operation.note ?? null,
-    metadata: operation.metadata ?? {},
+    // [gpt] 2026-08-11：显式保存“是否应投影知识证据”，监控只据声明查部分成功，不从 kp_id 猜生产意图。
+    metadata: {
+      ...(operation.metadata ?? {}),
+      projection_expected: operation.projectEvidence ?? true,
+    },
     project_evidence: operation.projectEvidence ?? true,
   };
 }

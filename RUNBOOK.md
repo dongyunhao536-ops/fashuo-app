@@ -140,7 +140,7 @@ npm.cmd run verify-schema
 <!-- [gpt] 2026-08-10：数据基础层迁移纪律。 -->
 `020_migration_ledger.sql` 已把 002-017 的现状冻结为一个历史 baseline；迁移器会把每个精确文件的 `version + filename + SHA-256` 与执行结果放在同一个数据库事务中登记。相同版本若文件名或内容发生漂移，会在业务 SQL 执行前硬失败。020 之后新增迁移必须逐文件执行并以 `verify-schema` 的 checksum 审计收尾，禁止只改 `schema.sql` 后假定线上已同步。
 
-当前数据基础层顺序为 `020_migration_ledger.sql → 021_content_mirror_generation.sql → 022_ingest_learning_attempt.sql → 101_learning_attempt_analytics.sql`；101 增加显式分母角色、质量视图和 `study_log` 子尝试完整性门。迁移已上线时可重复 dry-run，但不要改写已登记文件，应另建新版本修正。<!-- [gpt] 2026-08-10 -->
+当前数据基础层顺序为 `020_migration_ledger.sql → 021_content_mirror_generation.sql → 022_ingest_learning_attempt.sql → 101_learning_attempt_analytics.sql → 102_learning_flow_observability.sql`；101 增加显式分母与质量门，102 增加 PC 学习数据流质量视图、日快照和独立周检。迁移已上线时可重复 dry-run，但不要改写已登记文件，应另建新版本修正。<!-- [gpt] 2026-08-11 -->
 
 `scripts/apply-schema.mjs` 只保留给 Supabase Cloud 灾备；检测到当前自建 PostgREST URL 时会拒绝误连 Cloud 候选。
 
@@ -206,6 +206,17 @@ npm run verify-schema
 会探测现役 PostgREST/Postgres 的关键表和列，并核对本地历史 baseline 与逐文件迁移 SHA-256。**不会自动迁移**——发现缺表、缺列、未入账或 checksum 漂移后，用 §3.2 的精确迁移入口处理；不要覆盖旧迁移来消除告警。<!-- [gpt] 2026-08-10 -->
 
 迁移与 schema 校验通过后再跑 `npm run data-health`。它会核对唯一 active 镜像代际及行数、stage 残留、`ingest_operation` 失败/卡住、显式 study_log 缺子尝试和法硕尝试映射债；error 级问题退出 1，warning 保留可行动提示。<!-- [gpt] 2026-08-10 -->
+
+PC 学习数据流监控另跑以下命令；它不重复评价学习效果，而是审计“该写的有没有写、写后有没有按预期流到消费者”：<!-- [gpt] 2026-08-11 -->
+
+```powershell
+npm.cmd run flow:check                 # 最近 7 个北京日；本地 JSONL + 数据库日快照
+npm.cmd run flow:check -- --no-save    # 只读预览，不保存
+npm.cmd run flow:weekly                # 默认汇总刚结束的上一北京自然周
+npm.cmd run flow:weekly -- --current   # 当前周基线/调试，同周覆盖
+```
+
+日快照本地事实副本在 `.local/system-observability/learning-flow.jsonl`，数据库镜像为 `learning_flow_snapshot`；周检分别写 `.local/system-observability/weekly-<周一>.md` 与 `learning_flow_weekly_review`。`degraded` 表示部分写入、传输或映射硬错误并以退出码 2 结束；`attention` 包括待分类、待接线、排期逾期等流转债务，退出码仍为 0。没有新训练、训练量低或 `learning_attempt` 暂时为空本身不算故障。
 
 知识系统 v3 的日常只读检查：
 
