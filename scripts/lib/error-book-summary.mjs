@@ -9,6 +9,7 @@ function eventFromRow(row) {
   return {
     id: asId(row.study_error_id),
     subject: row.event_subject ?? null,
+    kpId: row.event_kp_id ?? null,
     knowledge: String(row.knowledge ?? ""),
     logDate: row.log_date == null ? "" : String(row.log_date),
     status: row.event_status ?? "unknown",
@@ -46,15 +47,22 @@ export function summarizeErrorBookRows(rows = []) {
       section: row.section ?? null,
       classificationStatus: row.classification_status ?? "pending",
       masteryStatus: row.mastery_status ?? "open",
+      kpId: row.topic_kp_id ?? null,
+      linkedKpIds: new Set(),
       events: new Map(),
       confirmedRootCauses: new Set(),
+      confirmedFailurePatterns: new Set(),
+      pendingFailurePatterns: new Set(),
       primaryEventIds: new Set(),
     };
     topic.events.set(event.id, event);
+    if (event.kpId) topic.linkedKpIds.add(String(event.kpId));
     if (row.role === "primary") topic.primaryEventIds.add(event.id);
     if (row.diagnosis_status === "confirmed" && row.root_cause_code && row.root_cause_code !== "unclassified") {
       topic.confirmedRootCauses.add(String(row.root_cause_code));
     }
+    if (row.failure_pattern_code && row.diagnosis_status === "confirmed") topic.confirmedFailurePatterns.add(String(row.failure_pattern_code));
+    if (row.failure_pattern_code && row.diagnosis_status === "pending") topic.pendingFailurePatterns.add(String(row.failure_pattern_code));
     topics.set(topicId, topic);
   }
 
@@ -71,12 +79,16 @@ export function summarizeErrorBookRows(rows = []) {
       title: topic.title,
       chapter: topic.chapter,
       section: topic.section,
+      kpId: topic.kpId ?? (topic.linkedKpIds.size === 1 ? [...topic.linkedKpIds][0] : null),
+      linkedKpIds: [...topic.linkedKpIds],
       classificationStatus: topic.classificationStatus,
       masteryStatus: topic.masteryStatus,
       eventCounts,
       eventTotal: linkedEvents.length,
       primaryEventCount: topic.primaryEventIds.size,
       confirmedRootCauses: [...topic.confirmedRootCauses],
+      confirmedFailurePatterns: [...topic.confirmedFailurePatterns],
+      pendingFailurePatterns: [...topic.pendingFailurePatterns],
       latestEventDate: latestDate(linkedEvents),
       latestOpenDate: latestDate(linkedEvents.filter((event) => event.status === "open")),
       active,
@@ -95,6 +107,7 @@ export function summarizeErrorBookRows(rows = []) {
   const eventRows = [...events.values()].map((event) => ({
     id: event.id,
     subject: event.subject,
+    kpId: event.kpId,
     knowledge: event.knowledge,
     logDate: event.logDate,
     status: event.status,

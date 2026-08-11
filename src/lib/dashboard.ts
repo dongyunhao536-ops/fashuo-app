@@ -3,9 +3,17 @@ import type { ErrorItem } from "./errorbook";
 import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
 import { EXAM_OUTLINE } from "./exam-outline.gen";
 import { buildQuantV3, scoreEnglishV3, scoreSubjectV3 } from "./quant-v3.mjs";
+import { buildTargetReadinessV4 } from "./readiness-v4.mjs";
+import coachConfig from "../../config/coach.json";
 
 /**
- * 今日页数据聚合（RSC 直接调）。量化 v3.1（2026-07-26 口径重订·变更日志见文末）：
+ * [gpt] 2026-08-10：今日页主量化升级到“目标达成指数 v4”。
+ * v3.1 继续负责把历史流水压成覆盖/深度/背诵等基础证据，v4 再按 378 目标、真实三张已追踪试卷、
+ * 训练正确率、错题风险和模考闸门合成唯一主数；政治自管且无过程证据，按 0 证据显式进入 378 分母。
+ */
+
+/**
+ * 历史量化 v3.1 兼容层（保留给 PC 快照与性质测试，不再直接作为首页主指数）：
  * 全部落真实数据、透明标注依据，不编分。核心理念——"覆盖≠掌握，北大区分度在深度与均衡"：
  *   - 章节识别：优先按《考试分析》官方【章节标题】匹配官方章号（治"云的章号≠官方章号"），退回解析"第X章"数字（封顶总章数）。
  *   - 能力台阶：每章按经历的台阶累积——听课=输入(in) / 做题·复盘=检验(test) / 背诵·带背=输出(out)。
@@ -64,7 +72,7 @@ import { buildQuantV3, scoreEnglishV3, scoreSubjectV3 } from "./quant-v3.mjs";
  *     ③ 英语读准加样本闸。原口径下第 1 篇阅读拿 80%，英语能力当场 41 分。
  */
 
-export interface SubjectStat {
+export interface SubjectStatV3 {
   subject: string;
   weight: number;      // 分值权重（占比越高越重要）
   total: number;       // 官方总章数
@@ -80,7 +88,23 @@ export interface SubjectStat {
   ability: number;     // 各科能力分 0-100 = 实体分 × 质量系数
 }
 
-export interface EnglishStat {
+export interface SubjectStat extends SubjectStatV3 {
+  target: number;
+  maximum: number;
+  stock: number;              // 广度/深度/背诵形成的过程存量 0-100
+  performance: number | null; // 最近 8 条训练正确率均值
+  performanceSamples: number;
+  performanceConfidence: number;
+  riskPenalty: number;
+  stalenessPenalty: number;
+  lastEvidenceDate: string | null;
+  mastery: { total: number; open: number; monitoring: number; stable: number; recurrent: number };
+  readiness: number;          // 当前结构证据折算的满分能力 0-100
+  estimatedScore: number;
+  targetAttainment: number;   // 对该科目标分的达成 0-100
+}
+
+export interface EnglishStatV3 {
   ability: number;          // 英语能力 0-100（读准0.45+节奏0.20+作文0.20+闭环0.15）
   reading: number | null;   // 近8篇阅读 accuracy 均值，无篇=null
   papers14d: number;        // 近14天英语打卡条数（节奏分母4）
@@ -90,9 +114,56 @@ export interface EnglishStat {
   closure: number | null;
 }
 
+export interface EnglishStat extends EnglishStatV3 {
+  target: number;
+  maximum: number;
+  performance: number | null;
+  performanceSamples: number;
+  stock: number;
+  riskPenalty: number;
+  stalenessPenalty: number;
+  lastEvidenceDate: string | null;
+  mastery: { total: number; open: number; monitoring: number; stable: number; recurrent: number };
+  readiness: number;
+  estimatedScore: number;
+  targetAttainment: number;
+}
+
+export interface PaperReadiness {
+  paper: string;
+  targetScore: number;
+  estimatedScore: number;
+  attainment: number;
+  subjects: string[];
+}
+
 export interface DashboardData {
-  hero: { examDate: string; daysLeft: number; daysToBase: number };
-  overall: { index: number; proIndex: number; balanced: number; weakest: { subject: string; ability: number }; notStarted: number; english: EnglishStat };
+  hero: { today: string; examDate: string; daysLeft: number; daysToBase: number };
+  overall: {
+    index: number;
+    processIndex: number;
+    trackedIndex: number;
+    pointAttainment: number;
+    paperBalance: number;
+    supportedPoints: number;
+    trackedTargetPoints: number;
+    fullTarget: number;
+    untrackedTargetPoints: number;
+    weakestPaper: { paper: string; attainment: number };
+    calibration: {
+      tier: string;
+      label: string;
+      completeMocks: number;
+      requiredMocks: number;
+      mockIndex: number | null;
+      mockWeight: number;
+    };
+    papers: PaperReadiness[];
+    notStarted: number;
+    english: EnglishStat;
+    /** v3.1 兼容诊断；不再参与首页主指数。 */
+    legacy: { proIndex: number; balanced: number; weakest: { subject: string; ability: number } };
+  };
   subjects: SubjectStat[];
   ask: { openCount: number; lastConfusion: string | null };
   coach: { openErrors: number };
@@ -121,8 +192,8 @@ export function scoreSubject(ev: {
   open: number;
   absorbed: number;
   repeat: number;
-}): Omit<SubjectStat, "subject" | "weight" | "total"> {
-  return scoreSubjectV3(ev) as Omit<SubjectStat, "subject" | "weight" | "total">;
+}): Omit<SubjectStatV3, "subject" | "weight" | "total"> {
+  return scoreSubjectV3(ev) as Omit<SubjectStatV3, "subject" | "weight" | "total">;
 }
 
 /** 英语能力打分（纯函数）。无覆盖底座 → 仍是加权四维，但读准过样本闸、闭环用同一条保守平滑。 */
@@ -133,8 +204,8 @@ export function scoreEnglish(ev: {
   open: number;
   absorbed: number;
   repeat: number;
-}): EnglishStat {
-  return scoreEnglishV3(ev) as EnglishStat;
+}): EnglishStatV3 {
+  return scoreEnglishV3(ev) as EnglishStatV3;
 }
 
 export async function getDashboard(): Promise<DashboardData> {
@@ -142,12 +213,14 @@ export async function getDashboard(): Promise<DashboardData> {
   const todayStr = bjDateStr(now);
   const weekStart = bjWeekMonday(now);
 
-  const [askLatest, askCount, eventsPending, allLog, allErr, dailyLatest] = await Promise.all([
+  const [askLatest, askCount, eventsPending, allLog, allErr, errorBook, dailyLatest] = await Promise.all([
     supabaseAdmin.from("ask_point_v2").select("confusion").eq("active", true).order("created_at", { ascending: false }).limit(1),
     supabaseAdmin.from("ask_point_v2").select("*", { count: "exact", head: true }).eq("active", true),
     supabaseAdmin.from("events").select("type").eq("status", "pending"),
     supabaseAdmin.from("study_log").select("subject, chapter, activity, accuracy, log_date, raw_input").order("log_date", { ascending: false }).limit(1000),
     supabaseAdmin.from("study_error").select("subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).limit(3000),
+    // [gpt] v4 只读主题掌握态，用 stable/monitoring 抵消对应错题风险；查询失败不冒充“已稳定”。
+    supabaseAdmin.from("error_book_v2").select("study_error_id, log_date, event_subject, event_status, topic_id, topic_subject, mastery_status").limit(5000),
     // 日报只取最新一条的靶心句/派单，给首页「日报」栏当摘要行（2026-07-28）。
     // 不参与任何量化计算——量化 v3 的口径别因为加了个展示字段被动过（见记忆 today-quant-v3-beida）。
     supabaseAdmin.from("daily_report").select("report_date, headline, dispatch").order("report_date", { ascending: false }).limit(1),
@@ -163,8 +236,10 @@ export async function getDashboard(): Promise<DashboardData> {
   // 这与本文件"不编分"的原则冲突：读不到数据就该喊，而不是渲染一个假的零。
   if (allLog.error) console.error("[dashboard] study_log 查询失败（能力分会偏低）:", allLog.error.message);
   if (allErr.error) console.error("[dashboard] study_error 查询失败（闭环质量会偏低）:", allErr.error.message);
+  if (errorBook.error) console.error("[dashboard] error_book_v2 查询失败（错题风险按未获冷复检抵消处理）:", errorBook.error.message);
   const logs = allLog.data ?? [];
   const errs = allErr.data ?? [];
+  const topicRows = errorBook.data ?? [];
 
   const studied = logs.filter((r) => r.log_date === todayStr).map((r) => ({
     subject: (r.subject as string | null) ?? "未识别",
@@ -176,11 +251,18 @@ export async function getDashboard(): Promise<DashboardData> {
   const todayAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= todayTs).length;
   const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
-  // 量化 v3 的纯算法与 PC 评估快照共用同一模块，避免两套公式漂移。
+  // v3 只生成基础证据；首页唯一主数由 v4 按目标分与真实试卷重新聚合。
   const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE });
-  const subjects = quant.subjects as SubjectStat[];
-  const { index, proIndex, balanced, notStarted, english } = quant.overall;
-  const weakestSub = quant.overall.weakest;
+  const readiness = buildTargetReadinessV4({
+    quantV3: quant,
+    logs,
+    topicRows,
+    referenceDate: todayStr,
+    targets: coachConfig["目标分"],
+    mockRecords: coachConfig["模拟分记录"]?.["记录"] ?? [],
+  });
+  const subjects = readiness.subjects as SubjectStat[];
+  const english = readiness.english as EnglishStat;
 
   const openAgg = new Map<string, ErrorItem>();
   for (const r of errs) {
@@ -196,8 +278,17 @@ export async function getDashboard(): Promise<DashboardData> {
   const openItems = [...openAgg.values()].sort((a, b) => b.n - a.n || (a.last < b.last ? 1 : -1));
 
   return {
-    hero: { examDate: EXAM_DATE, daysLeft, daysToBase },
-    overall: { index, proIndex, balanced, weakest: { subject: weakestSub.subject, ability: weakestSub.ability }, notStarted, english },
+    hero: { today: todayStr, examDate: EXAM_DATE, daysLeft, daysToBase },
+    overall: {
+      ...readiness.overall,
+      papers: readiness.papers as PaperReadiness[],
+      english,
+      legacy: {
+        proIndex: quant.overall.proIndex,
+        balanced: quant.overall.balanced,
+        weakest: quant.overall.weakest,
+      },
+    },
     subjects,
     ask: { openCount: askCount.count ?? 0, lastConfusion: askLatest.data?.[0]?.confusion ?? null },
     coach: { openErrors: openAgg.size },

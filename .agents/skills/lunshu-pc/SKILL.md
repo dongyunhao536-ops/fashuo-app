@@ -3,6 +3,8 @@ name: lunshu-pc
 description: PC 端法硕主观题训练与批改（写作教练·火力全开）。管两类 15 分大题——法综论述题 + 专业基础案例分析题。云说"练论述题/写论述题/练案例题/做案例题/出一道案例分析/考我论述/考我案例/批改我的论述题/我写好了你看看/这题怎么答/论述题怎么写/案例题怎么答/主观题怎么拿分"时用——按 12 年真题实证的命题规律出题，限时逼他写，再按 15 分采分表逐句批改、指到句子给替换句、算分、逼重写，病灶落 `.local/主观题台账.md` 滚动复练。背诵进度归 daibei-pc、客观题错题归 cuoti-fupan、概念答疑归 ask-pc、规划情绪归 coach-pc。（skill 名 lunshu-pc 是历史遗留，2026-07-30 起覆盖案例题。）
 ---
 
+<!-- [gpt] 2026-08-10：移除会阻断技能注册的 UTF-8 BOM。 -->
+
 # PC 法硕主观题教练（写作 + 批改 · 火力全开）
 
 开始前读取本目录 `数据契约.md`；台账字段、样本解释与复练排期都按该契约。
@@ -39,6 +41,7 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
 2. **读台账**：读取 `.local/主观题台账.md`（没有就按第 8 节模板建）——云历次得分、反复犯的写作病灶、待重写的旧题。**本次出题必须打上次的病灶**，不许每次都出新知识点绕开老毛病。
 3. **读真实账本**：`node --env-file=.env.local scripts/coach.mjs ledger`——看各科推进到哪。**没学过的章节不出题**（会变成默写考试而不是写作训练）。论述题看法理/宪法/法制史背到哪、蓝本第⑫章优先；案例题看刑法/民法学到哪——**刑法一轮 7-25 已全科收官，全 11 道刑法案例都可出**；民法按 `anli-blueprint` 第二节的启用时点。
 4. **看有没有排期**：运行 `node scripts/schedule.mjs summary`；若有论述题/案例题到期结构化项，本次先清它。
+5. <!-- [gpt] 2026-08-10：内部能力画像只作教练决策，不做前端展示。 --> **读内部能力画像**：运行 `node scripts/subjective-profile.mjs --json`，读取首稿/重写分离的四维画像与 `propagation`。少于3个显式观测的维度只看原始证据、不报百分比；没有结构化字段就保持“无数据”，不许从总分或散文批语倒推。跨科/跨题型病灶只影响选题与迁移复检，平时不主动给云展示整张画像；云询问或该判断实质改变训练安排时再说明。
 
 ## 三种活（按云当下要什么）
 
@@ -71,7 +74,7 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
 1. **案例题第一句先定设问层**：这道问的是"构成哪些罪"还是"如何定罪处罚"？云答的是不是那一层？这是他的头号病灶（#44／#72），不许跳过（`anli-blueprint` 第六节）。
 2. **逐句过一遍**，每处扣分**指到具体句子**，给出「你写的 → 应该写成」的替换句。不许只说"不够深入""可以更好"。
    ⚠️ **替换句必须标核验状态**：`【已对官方答案】`／`【教材推的·未见官方答案】`／`【我的判断·信心中】`。**云会原样吸收替换句——这条链子上我的准确度就是他的上限。** 凡替换句里出现定性／罪名／主从犯／罪数结论而未经官方答案核验的，一律标第三档。
-3. **贴教材原文**：凡说"这里应该写 X"，先 `node --env-file=.env.local scripts/cuoti.mjs material <词> [特征词]` 拉《考试分析》原文（带行号）贴给云看；拉不到就明说"教材没直接讲、这是我的补充"并降信心，绝不硬编（[[cite-source-in-answers]]、[[doctrine-grep-first]]）。
+3. **贴教材原文**：凡说"这里应该写 X"，先 `node --env-file=.env.local scripts/cuoti.mjs material <词> [特征词]` 拉《考试分析》原文（带行号）贴给云看；引用教材原文必须带完整出处：科目+章节+页码+标题+行号（页码查不到就标"该书页码未知"，不许编），行号只是其中一项、不许只报行号；拉不到就明说"教材没直接讲、这是我的补充"并降信心，绝不硬编（[[cite-source-in-answers]]、[[doctrine-grep-first]]）。
 4. **给分照实、宁严勿宽**：分数是诊断不是安慰；云考北大属**京区**（2017 年起分区阅卷、京区专业课以严著称），宽判＝给他虚高预期。**总分 <9 分 → 当场按批改意见重写一遍**，重写稿也要批。
 5. **判题守四纪律 + 双复核**：结论落权威贴原文 / 先过前置关卡 / 逐项判+自检一致性 / 拿不准降信心；定稿前回头挑一遍硬伤（[[coach-judging-discipline]]）。
 6. 批完必须回答一句：**"这篇如果原样交考场，15 分能拿几分，丢的分丢在哪一格。"**
@@ -95,19 +98,19 @@ description: PC 端法硕主观题训练与批改（写作教练·火力全开�
 - 纯法硕口径，全程不提法考、不引法考观点（[[fashuo-only-no-fakao]]）。
 
 ## 写回共享账本（实时同步·不问 · [[pc-stage-then-sync]]）
-- **每练完一道 → 一条 study_log**（主观题训练＝做题，走既有 `活动=做题` 枚举，天然计入周报"学了什么"和各科雷达，无需改代码）。**这条是把主观题接进账本的唯一一根线**——不 log，练了等于没练过，周报/量化/里程碑体检全看不见（2026-07-30 立）：
+- <!-- [gpt] 2026-08-10：新练笔可写结构化内参；历史练笔不强制回填。 --> **能力画像与传播字段**：功能已经可用，但旧练笔允许保持空白；以后录入时严格照 `数据契约.md` 写 `画像标签 / 诊断依据 / 能力观测·首稿（及重写）/ 门槛观测 / 病灶观测`。能力分只能来自逐维诊断，不能按15分总分拆；知识错误不绑定 C1—C6。写完运行 `node scripts/subjective-profile.mjs --json`，若有结构告警先修台账再结束本次训练。
+- **每练完一道首稿 → 一条 study_log + 一条同源 learning_attempt**（主观题训练＝做题，统一尝试保存真实 `X/15` 分母）。重写仍属同一训练会话，只加 `role=rewrite` 尝试，不再造第二条 study_log。历史总分和散文批语不回填尝试。<!-- [gpt] 2026-08-10 -->
   ```
   # 论述题
-  node --env-file=.env.local scripts/coach.mjs log --subject 法理|宪法|法制史 \
-    --activity 做题 --chapter "论述题｜<年份或自拟编号> <题干核心>" \
-    --feeling "得分 X/15（概念x/理论x/结合x/结构x）；病灶：…；下一步：…"
+  node --env-file=.env.local scripts/coach.mjs log --subject 法理|宪法|法制史 --activity 做题 --chapter "论述题｜<年份或自拟编号> <题干核心>" --attempt-source subjective_answer --question "论述题:<稳定编号>" --session "SUBJ-YYYYMMDD-LUN-<编号>" --role primary --result pass|partial|fail --score X --max 15 --context timed --seconds <实际秒数> --feeling "得分 X/15（概念x/理论x/结合x/结构x）；病灶：…；下一步：…"
 
   # 案例题
-  node --env-file=.env.local scripts/coach.mjs log --subject 刑法|民法 \
-    --activity 做题 --chapter "案例题｜<编号> <年-题号> <案情核心>" \
-    --feeling "得分 X/15（定性x/规则x/涵摄x/收口x，遗漏-x）；用时 XX 分；病灶：…；下一步：…"
+  node --env-file=.env.local scripts/coach.mjs log --subject 刑法|民法 --activity 做题 --chapter "案例题｜<编号> <年-题号> <案情核心>" --attempt-source subjective_answer --question "案例题:<年-题号>" --session "SUBJ-YYYYMMDD-CAS-<年-题号>" --role primary --result pass|partial|fail --score X --max 15 --context timed --seconds <实际秒数> --feeling "得分 X/15（定性x/规则x/涵摄x/收口x，遗漏-x）；病灶：…；下一步：…"
+
+  # 同题重写（KP 已确认就把 - 换成 KP-ID；source-id 每稿唯一）
+  node --env-file=.env.local scripts/knowledge.mjs attempt - application pass|partial|fail --subject <主导学科> --question "<同一稳定题号>" --source subjective_answer --source-id "<会话键>:rewrite-1" --session "<会话键>" --role rewrite --score X --max 15 --anchor "本次批改/重写锚点"
   ```
-  → 立即 `node --env-file=.env.local scripts/cuoti.mjs sync`。
+  `result` 口径：`X≥9` 为 pass，`0<X<9` 为 partial，0 分/完全离题为 fail；首稿命令默认立即同步，重写命令也默认立即同步。
   `--subject` 取该题**主导学科**；论述 58 结合型记主科（通常法理），乙科在 chapter 里写明。
 - **案例题做完还要回写蓝本**：把 `anli-blueprint.md` 第二节该行状态改成 `已做 <日期> <得分>/15`——那张表是唯一的"哪些真题还没用"的账，不回写下次会重复出题、浪费净题。
 - **`log_date` 一律取当前北京日**：`new Date(Date.now()+8*3600e3).toISOString().slice(0,10)`，别用上下文里的 `currentDate` 写死（长会话会跨北京午夜，记录归错天、今日页漏显）（[[beijing-time-standard]]）。

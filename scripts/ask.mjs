@@ -1,16 +1,31 @@
 // PC 答疑卡点轴：普通提问不记；只有确认“跨会话仍未收口的真实理解卡点”才 add。
 // node --env-file=.env.local scripts/ask.mjs list [--subject 刑法] [--all] [--json]
-// node --env-file=.env.local scripts/ask.mjs add --subject 刑法 --confusion "..." [--type 案例 --step 3 --kp ... --question "..." --anchor "..."] [--stage]
-// node --env-file=.env.local scripts/ask.mjs resolve <id> --action clarified|dismissed|superseded [--note "..."] [--stage]
+// node --env-file=.env.local scripts/ask.mjs add --subject 刑法 --confusion "..." [--type 案例 --step 3 --kp XF-0001 --evidence partial|fail --question "..." --anchor "..."] [--stage]
+// node --env-file=.env.local scripts/ask.mjs verify <id> <pass|partial|fail|void> [--kp XF-0001 --anchor "..." --note "..."] [--cold --cued|--invalid-prompt --schedule ID]
+// node --env-file=.env.local scripts/ask.mjs resolve <id> --action dismissed|superseded [--note "..."] [--stage]
 // node --env-file=.env.local scripts/ask.mjs <pending|sync>
 import { createClient } from "@supabase/supabase-js";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs";
 import { appendOutbox, readOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { askPointLabel, summarizeAskPoints } from "./lib/ask-point-summary.mjs";
 
-const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
+let database = null;
+function db() {
+  if (database) return database;
+  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!url || !key) throw new Error("Missing env: SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY");
+  // [gpt] 2026-08-10：延迟建客户端，让纯本地 --stage 与参数预检不依赖远端密钥。
+  database = createClient(url, key, { auth: { persistSession: false } });
+  return database;
+}
 const OUTBOX = ".local/cuoti-pending.jsonl";
 const SUBJECTS = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
 const ACTIONS = new Set(["clarified", "dismissed", "superseded"]);
+const VERIFY_RESULTS = new Set(["pass", "partial", "fail", "void"]);
+const INITIAL_EVIDENCE = new Set(["partial", "fail"]);
+const KP_ID = /^[A-Z]{2,4}-\d{4}$/;
 const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 
 function flags(args) {
@@ -30,15 +45,19 @@ function fail(message) {
 
 async function sync() {
   const pending = readOutbox(OUTBOX);
-  if (!pending.length) return console.log("outbox 为空，没有要同步的。");
+  if (!pending.length) {
+    console.log("outbox 为空，没有要同步的。");
+    return { total: 0, succeeded: [], failed: [] };
+  }
   let report;
   try {
-    report = await syncStudyOutbox({ db, path: OUTBOX, today });
+    report = await syncStudyOutbox({ db: db(), path: OUTBOX, today });
   } catch (error) {
-    return fail(`outbox 同步前检查/重写失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
+    fail(`outbox 同步前检查/重写失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
+    return null;
   }
   const count = (kind) => report.succeeded.filter(({ result }) => result.kind === kind).reduce((sum, { result }) => sum + result.affected, 0);
-  console.log(`✅ 已确认同步：新增答疑卡点 ${count("ask_point")} 条、收口 ${count("resolve_ask_point")} 条；错题 ${count("new_error")} 条、错题归类 ${count("classify_error")} 条、冷复检 ${count("error_review")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条、错题销账 ${count("absorb")} 条。`);
+  console.log(`✅ 已确认同步：新增答疑卡点 ${count("ask_point")} 条、验证 ${count("ask_verification")} 条、管理收口 ${count("resolve_ask_point")} 条；错题 ${count("new_error")} 条、错题归类 ${count("classify_error")} 条、冷复检 ${count("error_review")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条、错题销账 ${count("absorb")} 条。`);
   if (report.failed.length) {
     for (const { op, error } of report.failed) console.error(`   · ${op.operation_id} (${op.op})：${error}`);
     console.error(`⚠️ ${report.failed.length} 项失败，已保留在 outbox。`);
@@ -46,10 +65,11 @@ async function sync() {
   } else {
     console.log("outbox 已清空；operation_id 保证重试不重复。");
   }
+  return report;
 }
 
 async function list(options) {
-  let query = db.from("ask_point_v2").select("id, subject, kp_id, question_type, step_stuck, confusion, status, effective_status, active, ttl_until, source, created_at, updated_at, resolved_at, resolution_note").order("created_at", { ascending: false }).limit(5000);
+  let query = db().from("ask_point_v2").select("id, subject, kp_id, question_type, step_stuck, confusion, status, effective_status, active, ttl_until, source, created_at, updated_at, resolved_at, resolution_note").order("created_at", { ascending: false }).limit(5000);
   if (options.subject && options.subject !== true) query = query.eq("subject", options.subject);
   if (!options.all) query = query.eq("active", true);
   const response = await query;
@@ -71,13 +91,19 @@ async function add(options) {
   if (step != null && (!Number.isInteger(step) || step < 1)) return fail("--step 必须是正整数");
   const ttlDays = options.ttl && options.ttl !== true ? Number(options.ttl) : 90;
   if (!Number.isInteger(ttlDays) || ttlDays < 1 || ttlDays > 365) return fail("--ttl 必须是 1~365 的整数天");
+  const kpId = options.kp && options.kp !== true ? String(options.kp).trim().toUpperCase() : null;
+  if (kpId && !KP_ID.test(kpId)) return fail("--kp 必须是合法 KP-ID（如 XF-0054）");
+  const initialUnderstanding = options.evidence && options.evidence !== true ? String(options.evidence) : "partial";
+  if (kpId && !INITIAL_EVIDENCE.has(initialUnderstanding)) return fail("add 的 --evidence 只能是 partial 或 fail；通过必须走 verify");
+  if (!kpId && options.evidence) return fail("--evidence 需要同时提供 --kp");
   const op = appendOutbox(OUTBOX, {
     op: "ask_point",
     subject: options.subject,
     confusion: String(options.confusion).trim(),
     questionType: options.type && options.type !== true ? options.type : null,
     stepStuck: step,
-    kpId: options.kp && options.kp !== true ? options.kp : null,
+    kpId,
+    initialUnderstanding: kpId ? initialUnderstanding : null,
     rawQuestion: options.question && options.question !== true ? options.question : null,
     evidenceAnchor: options.anchor && options.anchor !== true ? options.anchor : null,
     date: options.date && options.date !== true ? options.date : today,
@@ -91,7 +117,8 @@ async function add(options) {
 async function resolve(options) {
   const id = Number(options._[0]);
   if (!Number.isInteger(id) || id <= 0) return fail("resolve 需要合法卡点 id");
-  if (!ACTIONS.has(options.action)) return fail("resolve 需要 --action clarified|dismissed|superseded");
+  if (!ACTIONS.has(options.action)) return fail("resolve 需要 --action dismissed|superseded（clarified 请走 verify）");
+  if (options.action === "clarified") return fail("clarified 不能直接管理收口；请用 verify 写入 understanding 证据后自动销疑");
   appendOutbox(OUTBOX, {
     op: "resolve_ask_point",
     pointId: id,
@@ -103,12 +130,97 @@ async function resolve(options) {
   await sync();
 }
 
+async function askPointKp(pointId) {
+  const response = await db().from("ask_point_v2").select("id, kp_id, status, effective_status").eq("id", pointId).maybeSingle();
+  if (response.error) throw new Error(`读取答疑卡点失败：${response.error.message}`);
+  if (!response.data) throw new Error(`答疑卡点 A#${pointId} 不存在`);
+  if (!response.data.kp_id) throw new Error(`答疑卡点 A#${pointId} 尚未关联知识点；请显式提供 --kp KP-ID`);
+  return String(response.data.kp_id).trim().toUpperCase();
+}
+
+async function verify(options) {
+  const id = Number(options._[0]);
+  const result = String(options._[1] ?? "");
+  if (!Number.isInteger(id) || id <= 0) return fail("verify 需要合法卡点 id");
+  if (!VERIFY_RESULTS.has(result)) return fail("verify 结果只能是 pass|partial|fail|void");
+  const promptFlags = [options.cued ? "cued" : null, options["invalid-prompt"] ? "invalid" : null].filter(Boolean);
+  if (promptFlags.length > 1) return fail("--cued 与 --invalid-prompt 不能同时使用");
+  const promptIntegrity = promptFlags[0] ?? "clean";
+  if (promptIntegrity === "invalid" && result !== "void") return fail("--invalid-prompt 必须配合 void");
+  if (result === "void" && promptIntegrity !== "invalid") return fail("void 必须配合 --invalid-prompt");
+  const evidenceAnchor = options.anchor && options.anchor !== true ? String(options.anchor).trim() : "";
+  const note = options.note && options.note !== true ? String(options.note).trim() : "";
+  if (!evidenceAnchor) return fail('verify 需要 --anchor "检验题/教材锚点"');
+  if (!note) return fail('verify 需要 --note "作答表现与判定理由"');
+  let kpId = options.kp && options.kp !== true ? String(options.kp).trim().toUpperCase() : null;
+  if (!kpId) {
+    try {
+      kpId = await askPointKp(id);
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (!KP_ID.test(kpId)) return fail("--kp 必须是合法 KP-ID（如 XF-0054）");
+  const date = options.date && options.date !== true ? String(options.date) : today;
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date)) return fail("--date 必须是 YYYY-MM-DD");
+  const scheduleId = options.schedule && options.schedule !== true ? String(options.schedule) : null;
+  const scheduleFile = options["schedule-file"] && options["schedule-file"] !== true ? String(options["schedule-file"]) : ".local/复盘排期.md";
+  if (options.stage && scheduleId) return fail("--stage 不能与 --schedule 同用；排期联动需要本次同步后立即结案");
+  if (scheduleId) {
+    if (!existsSync(scheduleFile)) return fail(`排期文件不存在：${scheduleFile}`);
+    try {
+      assertScheduleLink(readFileSync(scheduleFile, "utf8"), scheduleId, {
+        kind: "knowledge", targetId: kpId, referenceDate: date, route: "ask-pc", dimension: "understanding",
+      });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
+  // [gpt] 2026-08-10：验证结果由复合 outbox 保证“先证据、后销疑”；cued pass 只留证据不收口。
+  const op = appendOutbox(OUTBOX, {
+    op: "ask_verification",
+    pointId: id,
+    kpId,
+    date,
+    result,
+    cold: Boolean(options.cold),
+    promptIntegrity,
+    evidenceAnchor,
+    note,
+  });
+  console.log(`⏳ 已暂存答疑验证：A#${id} → ${kpId} understanding/${result}${promptIntegrity === "clean" ? "" : `｜${promptIntegrity}`}`);
+  if (options.stage) return console.log("（已按 --stage 仅暂存；稍后运行 ask.mjs sync。）");
+  const report = await sync();
+  const succeeded = report?.succeeded.find(({ op: item }) => item.operation_id === op.operation_id);
+  if (!succeeded) return;
+  if (scheduleId) {
+    const markdown = readFileSync(scheduleFile, "utf8");
+    assertScheduleLink(markdown, scheduleId, {
+      kind: "knowledge", targetId: kpId, referenceDate: date, route: "ask-pc", dimension: "understanding",
+    });
+    const closed = closeScheduleItem(markdown, scheduleId, {
+      date,
+      result: `understanding/${result}${promptIntegrity === "clean" ? "" : `｜${promptIntegrity}`}`,
+      // [gpt] 2026-08-10：结构化保存干预响应条件，提示后通过不再混入 clean pass。
+      outcome: result,
+      cold: Boolean(options.cold),
+      promptIntegrity,
+    });
+    writeFileSync(scheduleFile, closed, "utf8");
+    console.log(`✅ 已结案答疑检验排期：${scheduleId}`);
+  }
+  console.log(succeeded.result.clarified
+    ? `✅ A#${id} 已有 clean pass 理解证据，状态已收口为 clarified。`
+    : `↩ A#${id} 已记理解证据但继续保持 open；下一轮仍需无提示通过。`);
+}
+
 function pending() {
-  const operations = readOutbox(OUTBOX).filter((op) => op.op === "ask_point" || op.op === "resolve_ask_point");
+  const operations = readOutbox(OUTBOX).filter((op) => ["ask_point", "ask_verification", "resolve_ask_point"].includes(op.op));
   if (!operations.length) return console.log("没有待同步的答疑卡点操作。");
   for (const [index, op] of operations.entries()) {
     if (op.op === "ask_point") console.log(`${index + 1}. 新卡点 [${op.subject}] ${op.confusion}`);
-    else console.log(`${index + 1}. 收口 A#${op.pointId} → ${op.action}`);
+    else if (op.op === "ask_verification") console.log(`${index + 1}. 验证 A#${op.pointId} → ${op.kpId} understanding/${op.result}`);
+    else console.log(`${index + 1}. 管理收口 A#${op.pointId} → ${op.action}`);
   }
 }
 
@@ -116,7 +228,8 @@ const command = process.argv[2] ?? "list";
 const options = flags(process.argv.slice(3));
 if (command === "list") await list(options);
 else if (command === "add") await add(options);
+else if (command === "verify") await verify(options);
 else if (command === "resolve") await resolve(options);
 else if (command === "pending") pending();
 else if (command === "sync") await sync();
-else console.log("用法：node --env-file=.env.local scripts/ask.mjs <list|add|resolve|pending|sync> ...");
+else console.log("用法：node --env-file=.env.local scripts/ask.mjs <list|add|verify|resolve|pending|sync> ...");

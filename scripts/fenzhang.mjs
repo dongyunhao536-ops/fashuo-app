@@ -3,10 +3,13 @@
 // 2026-08-03 建。口径与失真清单见 .local/夜班/提案/分章频次-统计结果-2026-08-03.md
 // 用法：node scripts/fenzhang.mjs [--dump 民法]
 import fs from 'node:fs';
+import { loadExamPaper } from './lib/exam-corpus.mjs';
 
 const 教材 = 'D:\\fashuo\\教材\\';
 const 真题 = 'D:\\fashuo\\真题\\_文本\\';
+const 封卷起始年 = 2025;
 const read = (p) => fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '').replace(/\r/g, '');
+const 文件年份 = (fileName) => Number((String(fileName).match(/(20\d{2})/) || [])[1]) || null;
 
 const SUBJ = {
   刑法: ['考试分析_文本.txt', 21], // 考试分析_文本.txt 只有刑法，三科不能用它当域
@@ -70,54 +73,6 @@ function chapterTerms(chText) {
     for (const m of line.matchAll(/▶([^▶【\n]{2,30}?)(?:【分析】|▶|$)/g)) splitCompound(m[1]).forEach(add);
   }
   return set;
-}
-
-// ---------- 真题切题 ----------
-const NOISE = /^(公众号[:：]|--\s*\d+\s*of\s*\d+\s*--|\d+\s*$|第\s*\d+\s*页)/;
-function loadPaper(file) {
-  const rawLines = read(真题 + file).split('\n');
-  const head = rawLines.slice(0, 8).join('');
-  // 2023 两卷内容互换：按卷头判，不信文件名
-  const 卷 = head.includes('综合') ? '综合' : head.includes('专业基础') ? '专业基础' : null;
-  if (!卷) throw new Error('判不出卷种：' + file);
-  const year = Number(file.slice(0, 4));
-
-  let end = rawLines.length;
-  for (let i = 3; i < rawLines.length; i++) {
-    const l = rawLines[i].replace(/\t/g, '').trim();
-    if (/【答案】/.test(l) || /^(参考答案(与|及)?(解析)?|答案(与|及)解析)$/.test(l)) { end = i; break; }
-  }
-  const lines = rawLines.slice(0, end).map((l) => l.replace(/\t/g, '')).filter((l) => !NOISE.test(l.trim()));
-
-  const questions = [];
-  let cur = null, 题型 = '单选', lastNo = 0;
-  for (const raw of lines) {
-    const line = raw.trim();
-    const mt = line.match(/^[一二三四五六七八九十]+、\s*(单项选择题|多项选择题|简答题|辨析题|法条分析题|案例分析题|分析题|论述题)/);
-    if (mt) { 题型 = mt[1].replace('项选择题', '选'); if (cur) { questions.push(cur); cur = null; } continue; }
-    const mq = line.match(/^(\d{1,2})[.．、]\s*(.*)$/);
-    if (mq && Number(mq[1]) === lastNo + 1) { // 题号全卷连续递增，大题标题不重置
-      if (cur) questions.push(cur);
-      lastNo = Number(mq[1]);
-      cur = { no: lastNo, 题型, text: mq[2] };
-      continue;
-    }
-    if (cur) cur.text += line;
-  }
-  if (cur) questions.push(cur);
-
-  const 解析 = new Map();
-  let k = 0, buf = [];
-  for (let i = end; i < rawLines.length; i++) {
-    const l = rawLines[i].replace(/\t/g, '').trim();
-    if (NOISE.test(l)) continue;
-    const m = l.match(/^(\d{1,2})[.．、]\s*【答案】/);
-    if (m && Number(m[1]) === k + 1) { if (k) 解析.set(k, buf.join('')); k = Number(m[1]); buf = [l]; }
-    else if (k) buf.push(l);
-  }
-  if (k) 解析.set(k, buf.join(''));
-  for (const q of questions) q.解析 = 解析.get(q.no) || '';
-  return { file, year, 卷, questions };
 }
 
 // ---------- 建库 ----------
@@ -201,11 +156,25 @@ const FIX = [
   ['综合', 2025, 56, '4.隋唐宋法律制度', '唐宪宗梁悦复仇案'],
   ['综合', 2021, 37, '5.元明清法律制度', '《大明律》与《大清律例》篇目'],
 ];
+// 2015 综合单选的语义分段曾把 #15/#16 两道宪法题错切进法理；真边界为 14|29。
+// 这两项在章节打分前订正科目，不能只在最终表面改标签。
+const SUBJECT_FIX = [
+  ['综合', 2015, 15, '宪法'],
+  ['综合', 2015, 16, '宪法'],
+];
 
 // ---------- 跑 ----------
 const all = [];
-for (const f of fs.readdirSync(真题).filter((x) => x.endsWith('.txt'))) {
-  const p = loadPaper(f);
+const 真题文件 = fs.readdirSync(真题)
+  .filter((x) => x.endsWith('.txt'))
+  // 封卷必须在 loadExamPaper 前排除，避免 --dump、统计或解析日志接触净卷正文。
+  .filter((x) => {
+    const year = 文件年份(x);
+    if (year === null) throw new Error(`真题文件名缺年份，按封卷规则拒绝读取：${x}`);
+    return year < 封卷起始年;
+  });
+for (const f of 真题文件) {
+  const p = loadExamPaper(f, 真题);
   const byType = {};
   for (const q of p.questions) (byType[q.题型] ||= []).push(q);
   for (const [题型, qs] of Object.entries(byType)) {
@@ -217,6 +186,8 @@ for (const f of fs.readdirSync(真题).filter((x) => x.endsWith('.txt'))) {
     } else segment(qs, 卷科目[p.卷]);
   }
   for (const q of p.questions) {
+    const subjectFix = SUBJECT_FIX.find(([卷, year, no]) => 卷 === p.卷 && year === p.year && no === q.no);
+    if (subjectFix) { q.subj = subjectFix[3]; q.科目订正 = true; }
     const mask = chapters.map((c) => c.subj === q.subj);
     const 考 = (q.解析.match(/本题考[查察](的是)?([^。，,；;]{2,40})/) || [])[2] || '';
     const a = norm(scoreVec(q.text), mask);
@@ -232,6 +203,7 @@ for (const f of fs.readdirSync(真题).filter((x) => x.endsWith('.txt'))) {
   }
 }
 for (const [卷, y, no, ch] of FIX) {
+  if (y >= 封卷起始年) continue;
   const q = all.find((x) => x.卷 === 卷 && x.year === y && x.no === no);
   if (!q) throw new Error(`订正未命中 ${y}#${no}`);
   q.原判 = q.章; q.章 = ch; q.订正 = true;
@@ -246,18 +218,29 @@ if (dump) {
 }
 for (const subj of 目标科目) {
   const qs = all.filter((q) => q.subj === subj);
+  const 可用年份 = [...new Set(qs.map((q) => q.year))].sort((a, b) => a - b);
+  const 八年口径年份 = 可用年份.filter((year) => year >= 2018);
+  const 五年口径年份 = 可用年份.filter((year) => year >= 2021);
+  const 八年口径数 = 八年口径年份.length;
+  const 五年口径数 = 五年口径年份.length;
+  const 年份标签 = (years) => years.length ? `${years[0]}–${years[years.length - 1]}` : '无可用年份';
+  const 八年口径标签 = 年份标签(八年口径年份);
+  const 五年口径标签 = 年份标签(五年口径年份);
   const P8 = qs.filter((q) => q.year >= 2018).reduce((a, q) => a + q.分, 0);
   const 总篇幅 = chapters.filter((c) => c.subj === subj).reduce((a, c) => a + c.篇幅, 0);
   const rows = chapters.filter((c) => c.subj === subj).map((c) => {
     const sel = (from) => qs.filter((q) => q.章 === c.名 && q.year >= from);
-    const p8 = sel(2018).reduce((a, q) => a + q.分, 0) / 8, p5 = sel(2021).reduce((a, q) => a + q.分, 0) / 5;
-    const pw = (c.篇幅 / 总篇幅) * 100, ps = ((p8 * 8) / P8) * 100;
+    const p8 = 八年口径数 ? sel(2018).reduce((a, q) => a + q.分, 0) / 八年口径数 : 0;
+    const p5 = 五年口径数 ? sel(2021).reduce((a, q) => a + q.分, 0) / 五年口径数 : 0;
+    const pw = (c.篇幅 / 总篇幅) * 100;
+    const ps = P8 ? ((p8 * 八年口径数) / P8) * 100 : 0;
     return { 名: c.名, p8, p5, 综合: (p8 + p5) / 2, ps, pw, 篇: Math.round(c.篇幅 / 1000), roi: ps / pw,
-      客: sel(2018).filter((q) => ['单选', '多选'].includes(q.题型)).length / 8,
+      客: 八年口径数 ? sel(2018).filter((q) => ['单选', '多选'].includes(q.题型)).length / 八年口径数 : 0,
       弱: qs.filter((q) => q.章 === c.名 && q.margin < 1.15).length };
   });
-  console.log(`\n## ${subj}（2018+ ${(P8 / 8).toFixed(1)} 分/年 · ${Math.round(总篇幅 / 1000)}k 字 · ${qs.length} 题）`);
-  console.log('| 排 | 章 | 2018+年均 | 近5年均 | 综合 | 分值占比 | 客观题/年 | 篇幅k | 性价比 | 弱判定 |');
+  const 年均总分 = 八年口径数 ? P8 / 八年口径数 : 0;
+  console.log(`\n## ${subj}（${八年口径标签} ${年均总分.toFixed(1)} 分/年 · ${Math.round(总篇幅 / 1000)}k 字 · ${qs.length} 题）`);
+  console.log(`| 排 | 章 | ${八年口径标签}年均 | ${五年口径标签}年均 | 综合 | 分值占比 | 客观题/年 | 篇幅k | 性价比 | 弱判定 |`);
   console.log('|---|---|---|---|---|---|---|---|---|---|');
   rows.sort((a, b) => b.综合 - a.综合).forEach((r, i) =>
     console.log(`| ${i + 1} | ${r.名} | ${r.p8.toFixed(1)} | ${r.p5.toFixed(1)} | ${r.综合.toFixed(1)} | ${r.ps.toFixed(1)}% | ${r.客.toFixed(1)} | ${r.篇} | ${r.roi.toFixed(2)} | ${r.弱} |`));

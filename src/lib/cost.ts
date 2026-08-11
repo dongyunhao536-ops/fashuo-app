@@ -29,6 +29,7 @@ type Price = { input: number; cache_write: number; cache_read: number; output: n
 
 function priceFor(model: string): Price {
   const m = model.toLowerCase();
+  if (m.includes("deepseek")) return { input: 0.14, cache_write: 0, cache_read: 0.0028, output: 0.28 };
   if (m.includes("haiku")) return pricing.haiku;
   if (m.includes("sonnet")) return pricing.sonnet;
   if (m.includes("opus")) return pricing.opus;

@@ -8,24 +8,26 @@ import remarkGfm from "remark-gfm";
  * 用项目 design token（label/label2/label3/accent/hairline/...），不引 prose 插件。
  * 保留换行（GFM `remark-breaks` 行为内嵌——单换行也成段，匹配 Opus 输出习惯）。
  */
-export function Markdown({ children }: { children: string }) {
+// [gpt] 2026-08-10：报告页可选紧凑密度，避免长报告沿用答疑正文的大字号与大间距。
+export function Markdown({ children, density = "default" }: { children: string; density?: "default" | "compact" }) {
+  const compact = density === "compact";
   return (
-    <div className="text-[16px] leading-[1.7] text-label">
+    <div className={compact ? "text-[14px] leading-[1.65] text-label" : "text-[16px] leading-[1.7] text-label"}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           h1: ({ children }) => (
-            <h1 className="mt-4 mb-2 text-[20px] font-bold tracking-tight first:mt-0">
+            <h1 className={`${compact ? "mt-3 text-[18px]" : "mt-4 text-[20px]"} mb-2 font-bold tracking-tight first:mt-0`}>
               {children}
             </h1>
           ),
           h2: ({ children }) => (
-            <h2 className="mt-4 mb-2 text-[17.5px] font-bold first:mt-0">
+            <h2 className={`${compact ? "mt-3 text-[16px]" : "mt-4 text-[17.5px]"} mb-2 font-bold first:mt-0`}>
               {children}
             </h2>
           ),
           h3: ({ children }) => (
-            <h3 className="mt-3.5 mb-1.5 text-[16px] font-semibold text-label first:mt-0">
+            <h3 className={`${compact ? "mt-3 text-[14.5px]" : "mt-3.5 text-[16px]"} mb-1.5 font-semibold text-label first:mt-0`}>
               {children}
             </h3>
           ),
@@ -35,7 +37,7 @@ export function Markdown({ children }: { children: string }) {
             </h4>
           ),
           p: ({ children }) => (
-            <p className="my-2.5 leading-[1.7] first:mt-0 last:mb-0">{children}</p>
+            <p className={`${compact ? "my-2 leading-[1.65]" : "my-2.5 leading-[1.7]"} first:mt-0 last:mb-0`}>{children}</p>
           ),
           strong: ({ children }) => (
             <strong className="font-semibold text-label">{children}</strong>
@@ -47,16 +49,16 @@ export function Markdown({ children }: { children: string }) {
             </a>
           ),
           ul: ({ children }) => (
-            <ul className="my-2 list-disc space-y-1 pl-5 marker:text-label3">
+            <ul className={`${compact ? "my-1.5 space-y-0.5" : "my-2 space-y-1"} list-disc pl-5 marker:text-label3`}>
               {children}
             </ul>
           ),
           ol: ({ children }) => (
-            <ol className="my-2 list-decimal space-y-1 pl-5 marker:text-label3">
+            <ol className={`${compact ? "my-1.5 space-y-0.5" : "my-2 space-y-1"} list-decimal pl-5 marker:text-label3`}>
               {children}
             </ol>
           ),
-          li: ({ children }) => <li className="pl-1 leading-[1.7]">{children}</li>,
+          li: ({ children }) => <li className={`pl-1 ${compact ? "leading-[1.6]" : "leading-[1.7]"}`}>{children}</li>,
           blockquote: ({ children }) => (
             <blockquote className="my-2.5 rounded-r-[8px] border-l-[3px] border-accent/60 bg-card2/70 px-3.5 py-2 text-label2 [&>p]:my-0.5">
               {children}

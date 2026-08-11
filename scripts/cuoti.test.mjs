@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { KINDS, clip, formatMaterialBlocks, grep } from "./cuoti.mjs";
+import {
+  KINDS,
+  clip,
+  findNearestPageAnchor,
+  formatMaterialBlocks,
+  grep,
+  requireMaterialRows,
+} from "./cuoti.mjs";
 
 describe("cuoti material sources", () => {
   it("给每类来源独立正配额，并把原始真题与二次总结分开", () => {
@@ -39,6 +46,24 @@ describe("cuoti grep", () => {
     expect(clip(`${prefix}想象竞合${suffix}`, "想象竞合")).toMatch(/^….*想象竞合.*…$/);
   });
 
+  it("为命中片段附上最近的页码锚点", () => {
+    const content = [
+      "===== 第4页 =====",
+      "上一点",
+      "正反结合是背诵方法",
+      "补充说明",
+      "===== 第5页 =====",
+      "下一页",
+    ].join("\n");
+
+    const { blocks } = grep([{ path: "教材/带背/法理.txt", start_line: 50, content }], "正反结合");
+    const { segments } = formatMaterialBlocks(blocks, 1000);
+
+    expect(blocks[0].pageAnchor).toEqual({ page: 4, line: 50 });
+    expect(segments[0]).toContain("最近页码：第4页（页码锚点行 50）");
+    expect(findNearestPageAnchor(content.split("\n"), 5, 50)).toEqual({ page: 5, line: 54 });
+  });
+
   it("有命中时即使首片段超出配额也至少输出一块", () => {
     const blocks = [{ path: "真题/_文本/2024.txt", text: "命中内容".repeat(1000) }];
     const { segments, shown } = formatMaterialBlocks(blocks, 100);
@@ -47,5 +72,11 @@ describe("cuoti grep", () => {
     expect(segments).toHaveLength(1);
     expect(segments[0]).toContain("真题/_文本/2024.txt");
     expect(segments[0]).toContain("本片段过长已截断");
+  });
+
+  it("数据库读取失败时中止，而不是伪装成零命中", () => {
+    expect(() => requireMaterialRows({ data: null, error: { message: "network down" } }, "textbook"))
+      .toThrow("读取 material 来源 textbook 失败：network down");
+    expect(requireMaterialRows({ data: null, error: null }, "exam")).toEqual([]);
   });
 });

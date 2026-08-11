@@ -1,43 +1,161 @@
 {
   "_comment": "content_mirror 同步范围；路径相对 ROOT（D:\\fashuo）。kind 决定 grep 工具命中。",
   "root": "D:\\fashuo",
+  "sealedExamFromYear": 2025,
   "rules": [
-    { "pattern": "教材/考试分析_文本.txt",       "kind": "textbook" },
-    { "pattern": "教材/刑法讲义_文本.txt",       "kind": "textbook" },
-    { "pattern": "教材/民法讲义_文本.txt",       "kind": "textbook" },
-    { "pattern": "教材/法理讲义_文本.txt",       "kind": "textbook" },
-    { "pattern": "教材/法制史讲义_文本.txt",     "kind": "textbook" },
-    { "pattern": "教材/民法学_文本.txt",         "kind": "textbook" },
-    { "pattern": "教材/法理学_文本.txt",         "kind": "textbook" },
-    { "pattern": "教材/宪法学_文本.txt",         "kind": "textbook" },
-    { "pattern": "教材/法制史_文本.txt",         "kind": "textbook" },
-
-    { "pattern": "真题分析/_刑法做题心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_刑法讲义心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_民法讲义心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_法理讲义心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_法制史讲义心得.md",   "kind": "xinde" },
-    { "pattern": "真题分析/_民法做题心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_法理做题心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_宪法做题心得.md",     "kind": "xinde" },
-    { "pattern": "真题分析/_法制史做题心得.md",   "kind": "xinde" },
-
-    { "pattern": "真题分析/00_真题学习总结.md",       "kind": "zhenti" },
-    { "pattern": "真题分析/01_题型结构与命题趋势.md", "kind": "zhenti" },
-    { "pattern": "真题分析/02_刑法高频考点.md",       "kind": "zhenti" },
-    { "pattern": "真题分析/03_民法高频考点.md",       "kind": "zhenti" },
-    { "pattern": "真题分析/04_法理学高频考点.md",     "kind": "zhenti" },
-    { "pattern": "真题分析/05_宪法高频考点.md",       "kind": "zhenti" },
-    { "pattern": "真题分析/06_法制史高频考点.md",     "kind": "zhenti" },
-    { "pattern": "真题分析/_主观题汇总.md",           "kind": "zhenti" },
-
-    { "pattern": "易混概念库/刑法-*.md", "kind": "yixiao" },
-    { "pattern": "易混概念库/民法-*.md", "kind": "yixiao" },
-    { "pattern": "易混概念库/法理-*.md", "kind": "yixiao" },
-    { "pattern": "易混概念库/宪法-*.md", "kind": "yixiao" },
-    { "pattern": "易混概念库/法制史-*.md", "kind": "yixiao" },
-
-    { "pattern": "法律更新档案/01_刑法相关更新.md", "kind": "textbook" },
-    { "pattern": "法律更新档案/02_民法相关更新.md", "kind": "textbook" }
+    {
+      "pattern": "教材/考试分析_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/刑法讲义_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/民法讲义_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/法理讲义_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/法制史讲义_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/民法学_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/法理学_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/宪法学_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/法制史_文本.txt",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "真题分析/_刑法做题心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_刑法讲义心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_民法讲义心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_法理讲义心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_法制史讲义心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_民法做题心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_法理做题心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_宪法做题心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_法制史做题心得.md",
+      "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/00_真题学习总结.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/01_题型结构与命题趋势.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/02_刑法高频考点.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/03_民法高频考点.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/04_法理学高频考点.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/05_宪法高频考点.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/06_法制史高频考点.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题分析/_主观题汇总.md",
+      "kind": "zhenti"
+    },
+    {
+      "pattern": "真题/_文本/*.txt",
+      "kind": "exam"
+    },
+    {
+      "pattern": "易混概念库/刑法-*.md",
+      "kind": "yixiao"
+    },
+    {
+      "pattern": "易混概念库/民法-*.md",
+      "kind": "yixiao"
+    },
+    {
+      "pattern": "易混概念库/法理-*.md",
+      "kind": "yixiao"
+    },
+    {
+      "pattern": "易混概念库/宪法-*.md",
+      "kind": "yixiao"
+    },
+    {
+      "pattern": "易混概念库/法制史-*.md",
+      "kind": "yixiao"
+    },
+    {
+      "pattern": "法律更新档案/01_刑法相关更新.md",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "法律更新档案/02_民法相关更新.md",
+      "kind": "textbook"
+    },
+    {
+      "pattern": "教材/带背/_文本/法理学_带背_文本.txt",
+      "kind": "textbook",
+      "required": true,
+      "sha256": "39543882374b83251c170d2b1577730ba3f1dec1a433d84a4374438fca199233"
+    },
+    {
+      "pattern": "教材/带背/_文本/法制史_带背_文本.txt",
+      "kind": "textbook",
+      "required": true,
+      "sha256": "48bc1941c7a4a081b9ffdeebf6648d5106b5d18522750b3d08c69599028e9ba0"
+    },
+    {
+      "pattern": "教材/带背/_文本/刑法_带背_文本.txt",
+      "kind": "textbook",
+      "required": true,
+      "sha256": "ffcf76ab3b6884e7ecfc9e807462bb587ce009e68c087de48fa087cd204be0c2"
+    }
   ]
 }

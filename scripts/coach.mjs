@@ -9,6 +9,7 @@ import { summarizeErrorBookRows, topicLabel } from "./lib/error-book-summary.mjs
 import { ROOT_CAUSES } from "./lib/error-taxonomy.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
+import { buildStudyLogAttemptConfig } from "./lib/attempt-producers.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
@@ -47,15 +48,25 @@ async function flushOutbox() {
 async function log(args) {
   const f = parseFlags(args);
   if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw）");
+  const date = (f.date && f.date !== true) ? f.date : ymd;
+  let attempt = null;
+  try {
+    attempt = buildStudyLogAttemptConfig(f, { date, subject: f.subject, chapter: f.chapter || null });
+  } catch (error) {
+    console.error(`❌ 尝试元数据不合法：${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
   const op = {
     op: "study_log", subject: f.subject, chapter: f.chapter || null,
     activity: ACTIVITIES.includes(f.activity) ? f.activity : (f.activity ? "其他" : "其他"),
     accuracy: f.accuracy != null && f.accuracy !== true ? Number(f.accuracy) : null,
     feeling: f.feeling && f.feeling !== true ? f.feeling : null,
-    raw: f.raw && f.raw !== true ? f.raw : null, date: (f.date && f.date !== true) ? f.date : ymd,
+    raw: f.raw && f.raw !== true ? f.raw : null, date,
+    ...(attempt ? { attempt } : {}),
   };
   stage(op);
-  console.log(`⏳ 已暂存待同步·学习日志：${op.date} ${op.subject}${op.chapter ? " " + op.chapter : ""} ${op.activity}${op.accuracy != null ? " " + op.accuracy + "%" : ""}${op.feeling ? "（" + op.feeling + "）" : ""}`);
+  console.log(`⏳ 已暂存待同步·学习日志：${op.date} ${op.subject}${op.chapter ? " " + op.chapter : ""} ${op.activity}${op.accuracy != null ? " " + op.accuracy + "%" : ""}${op.feeling ? "（" + op.feeling + "）" : ""}${attempt ? " + 统一尝试分母" : ""}`);
   if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
   await flushOutbox();
 }
@@ -210,6 +221,8 @@ else {
   console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|remember>");
   console.log("  ledger                                     读完整共享账本");
   console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD]  记录学习日志');
+  console.log('      显式尝试：--attempt-source objective_question|subjective_answer --question "稳定题号" --result pass|partial|fail|void --score N --max N');
+  console.log('      可选尝试字段：--session KEY --kp KP-ID --role primary|rewrite|recheck|followup --dimension application --context timed --seconds N --cold');
   console.log('  remember --fact "..." [--category 画像|倾向|里程碑|约定]  记录长期记忆 → coach_memory');
   console.log("（写操作默认立即同步；显式 --stage 才延后，cuoti.mjs sync 可重试 outbox）");
 }

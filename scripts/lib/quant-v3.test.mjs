@@ -32,6 +32,15 @@ describe("quant v3 shared core", () => {
     expect([...detect("刑法", "第三章", "")]).toEqual([3]);
   });
 
+  // [gpt] 2026-08-10：短标题包含关系与历史节级标签不能再制造错章。
+  it("章节识别保留更具体的语义标题，并让语义优先于错误数字", () => {
+    const richerOutline = `${outline}\n\n◆ 民法（测试）\n第四章 法人\n第五章 非法人组织`;
+    const detect = createChapterDetector(richerOutline);
+    expect([...detect("民法", "第五章 非法人组织", "")]).toEqual([5]);
+    expect([...detect("刑法", "犯罪主观方面", "")]).toEqual([3]);
+    expect([...detect("刑法", "第七章 犯罪主观方面", "")]).toEqual([3]);
+  });
+
   it("从同一组流水和错题生成稳定快照", () => {
     const snapshot = buildQuantV3({
       referenceDate: "2026-08-05",

@@ -77,7 +77,8 @@ npm run register -- --dry-run
 
 ```powershell
 cd D:\fashuo-app
-npm run sync          # 把改动灌进 content_mirror
+npm run sync -- --dry-run  # 只读：核验范围、封存排除项与完整世代指纹
+npm run sync              # staging 完整后单事务切换 active content_mirror
 
 cd D:\fashuo
 git add .
@@ -118,7 +119,32 @@ cd /opt/fashuo-app && git pull --ff-only      # 取到含新 schema.sql 的版�
 bash deploy/02-postgres-setup.sh              # 应用 schema.sql + migrations + 重授权 + NOTIFY pgrst 重读
 ```
 
-CD 推代码与这步互不依赖，先后都行；新列缺失时应用侧已设计为优雅降级，不会崩。
+只落一个已经审查过的迁移时，也可在 PC 端把该文件经 SSH stdin 交给服务器本机 `psql`；脚本限制目标必须位于 `db/migrations/`，并强制单事务 + `ON_ERROR_STOP`：
+
+```powershell
+cd D:\fashuo-app
+npm.cmd run migration:selfhosted -- db/migrations/012_knowledge_point_state_v2.sql --dry-run
+npm.cmd run migration:selfhosted -- db/migrations/012_knowledge_point_state_v2.sql
+
+# [gpt] 知识系统 v3：先落图谱事实，再补复检验证轴；每个文件各自单事务
+npm.cmd run migration:selfhosted -- db/migrations/014_knowledge_decay_graph_forecast.sql --dry-run
+npm.cmd run migration:selfhosted -- db/migrations/014_knowledge_decay_graph_forecast.sql
+npm.cmd run migration:selfhosted -- db/migrations/015_error_review_probe_axis.sql --dry-run
+npm.cmd run migration:selfhosted -- db/migrations/015_error_review_probe_axis.sql
+# [gpt] 2026-08-10：统一知识证据的迁移等级与限时/成套模考环境。
+npm.cmd run migration:selfhosted -- db/migrations/018_knowledge_transfer_context.sql --dry-run
+npm.cmd run migration:selfhosted -- db/migrations/018_knowledge_transfer_context.sql
+npm.cmd run verify-schema
+```
+
+<!-- [gpt] 2026-08-10：数据基础层迁移纪律。 -->
+`020_migration_ledger.sql` 已把 002-017 的现状冻结为一个历史 baseline；迁移器会把每个精确文件的 `version + filename + SHA-256` 与执行结果放在同一个数据库事务中登记。相同版本若文件名或内容发生漂移，会在业务 SQL 执行前硬失败。020 之后新增迁移必须逐文件执行并以 `verify-schema` 的 checksum 审计收尾，禁止只改 `schema.sql` 后假定线上已同步。
+
+当前数据基础层顺序为 `020_migration_ledger.sql → 021_content_mirror_generation.sql → 022_ingest_learning_attempt.sql → 101_learning_attempt_analytics.sql`；101 增加显式分母角色、质量视图和 `study_log` 子尝试完整性门。迁移已上线时可重复 dry-run，但不要改写已登记文件，应另建新版本修正。<!-- [gpt] 2026-08-10 -->
+
+`scripts/apply-schema.mjs` 只保留给 Supabase Cloud 灾备；检测到当前自建 PostgREST URL 时会拒绝误连 Cloud 候选。
+
+启用新英语/主观题显式尝试前必须先上线 101；普通、不带 attempt 元数据的旧 study_log 仍兼容，但不能据此跳过迁移。<!-- [gpt] 2026-08-10 -->
 
 ### 3.3 烟测（CD 自检已跑过，这里二次确认）
 
@@ -177,7 +203,27 @@ cd D:\fashuo-app
 npm run verify-schema
 ```
 
-会对比 Supabase 实际表结构 vs 本地 `db/schema.sql`，列出 diff。**不会自动迁移**——发现差异手工到 Supabase SQL editor 执行迁移。
+会探测现役 PostgREST/Postgres 的关键表和列，并核对本地历史 baseline 与逐文件迁移 SHA-256。**不会自动迁移**——发现缺表、缺列、未入账或 checksum 漂移后，用 §3.2 的精确迁移入口处理；不要覆盖旧迁移来消除告警。<!-- [gpt] 2026-08-10 -->
+
+迁移与 schema 校验通过后再跑 `npm run data-health`。它会核对唯一 active 镜像代际及行数、stage 残留、`ingest_operation` 失败/卡住、显式 study_log 缺子尝试和法硕尝试映射债；error 级问题退出 1，warning 保留可行动提示。<!-- [gpt] 2026-08-10 -->
+
+知识系统 v3 的日常只读检查：
+
+```powershell
+npm.cmd run knowledge -- stats
+npm.cmd run knowledge -- graph
+npm.cmd run knowledge -- graph XF-0041
+npm.cmd run knowledge -- forecast
+npm.cmd run knowledge -- mapping-audit 刑法
+npm.cmd run knowledge -- suggest-asks 刑法 --all
+npm.cmd run knowledge -- backfill-direct 刑法
+```
+
+`knowledge stats` 会同时显示 `learning_attempt` 的尝试分母；通用真实作答可用 `knowledge attempt <KP-ID|-> <dimension> <result> --source ... --source-id ...` 入可靠 outbox，`--role` 区分首稿/重写/复检/跟进。错题、答疑和带背复检由各自入口自动投影；英语/主观题首稿由带显式尝试元数据的 `coach.mjs log` 同源生成。历史 accuracy/批语禁止回填。<!-- [gpt] 2026-08-10 -->
+
+新增关系用 `knowledge relate <前置KP-ID> <目标KP-ID> ...`。模型/目录推断只能写 pending；confirmed 必须使用 `--source manual|textbook --anchor <证据锚>`，CLI 与数据库都会拒绝自环和前置环。<!-- [gpt] 2026-08-10 -->
+
+`mapping-audit` 是四类学习对象的主点覆盖账；`suggest-*` 全部零写入。`backfill-direct` 默认预览且只接受来源表已有稳定 `kp_id`，不会把文本候选自动确认；批量执行前先确认 outbox 无其他待同步操作。<!-- [gpt] 2026-08-10 -->
 
 ---
 

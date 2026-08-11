@@ -20,28 +20,32 @@ description: 云在电脑端说“复盘错题”“销账错题”“考我错�
 ## 开场
 
 1. 运行 `coach.mjs ledger`，读取当前进度、轮次和本周流水。
-2. 运行 `node --env-file=.env.local scripts/coach-engine.mjs snapshot` 与 `node scripts/schedule.mjs summary`；前者给七阶段、到期日与风险排序，后者是唯一行动队列。再看 `.local/weekly-draft.md` 的 P0/P1，只用于宏观优先级。
-3. 运行 `cuoti.mjs topics [科目]` 和 `cuoti.mjs list [科目]`。未指定科目时，按“已到期强化/冷却主题 > 复发主题 > 同主题高频 > 真题核心”选；不得把风险分当掌握概率。
-4. 英语事件跳过并转 `yingyu-pc`；背诵栽点转 `daibei-pc`。
+2. 运行 `node --env-file=.env.local scripts/coach-engine.mjs snapshot` 与 `node scripts/schedule.mjs summary`；前者给七阶段、到期日与风险排序，后者是唯一行动队列。自动排期只有 `route=cuoti-fupan + dimension=application` 才由本 skill 执行；旧行缺字段可兼容，字段声明冲突必须拒绝。再看 `.local/weekly-draft.md` 的 P0/P1，只用于宏观优先级。<!-- [gpt] 2026-08-10 -->
+3. 运行 `cuoti.mjs topics [科目]`、`cuoti.mjs list [科目]`、`cuoti.mjs profile [科目]` 和 `cuoti.mjs proof [科目]`。`proof` 是主题 stable 的可重算审计视图，并给出下一探针的最早日期、变式、迁移等级与结构化验证轴；它是命题处方，不是现成题目或掌握概率。若显示库内状态偏差，以证据重算结果为准并先修数据链。画像只据已记录证据派生：`pending` 只作候选，单个已确认个案不叫习惯性；未指定科目时，按“已到期强化/冷却主题 > 复发主题 > 同主题高频 > 真题核心”选。若画像显示未映射证据，再运行 `node --env-file=.env.local scripts/knowledge.mjs suggest-errors [科目]`：它只做候选预览，必须先 `show <KP-ID>` 核对；跨科做题方法、目录外科目和多义候选允许保留未映射，绝不为清零硬连。<!-- [gpt] 2026-08-10 -->
+4. **读取教练分科校准（[gpt] 2026-08-10）**：运行 `node scripts/judgment-ledger.mjs calibration`。相关科目栽点预测少于 5 条时不调策略；样本足够但兑现偏低时，降低诊断置信度、扩大互斥候选，不得在作答前提示预测内容。
+5. 英语事件跳过并转 `yingyu-pc`；背诵栽点转 `daibei-pc`。风险分、画像分布和预测兑现率都不是掌握概率。
 
 如果 P0 科目本周仍零动作，开场只提醒一句最小启动动作，不阻塞本次复盘。
 
 ## 工作流
 
-1. 选一个 T#主题或同病根小窝，先读每条事件的原始栽点。
+1. 选一个 T#主题或同病根小窝，先读每条事件的原始栽点；画像中的“习惯性”可决定优先训练角度，“已确认个案”只作局部证据，“候选待认领”必须在本题重新验证。优先遵守 `proof.nextProbe` 的变式、验证轴与冷却日；若材料证据表明处方不适用，说明理由后重算，不可静默改轴。<!-- [gpt] 2026-08-10 -->
 2. 对核心术语运行 1–3 次 `material`，取得教材、真题或讲义锚点。
-3. 按《命题判题规范》出递进题，一次给 1–2 道；第一题必须正中原始错因。
+3. 按《命题判题规范》出递进题，一次给 1–2 道；第一题必须正中原始错因。把验证轴落实为题目中主动改变的变量，但不得把轴名、病根预测或规则结论写进题面。<!-- [gpt] 2026-08-10 -->
+   - **出题后、云作答前落一条预测（2026-08-07 判断台账；[gpt] 2026-08-10 分科校准）**：`node scripts/judgment-ledger.mjs add --type 栽点 --prediction "他会栽在 X" --subject 科目 --ref T#id --verify-date 当日 --basis "依据"`；判分时 `resolve <id> hit|miss`。判对的没人记＝分母永远不存在，所以**对错都记**；预测只在教练侧静默保存。
 4. 云作答后，先保留原答与依据，再逐项判。答错时给 2–4 条互斥病根候选，由云认领。
 5. 新错误用带 `--topic` 的 `add` 入账；旧事件用 `classify` 补主题。主题拿不准时标 `--classification pending`；病根未认领一律 `--diagnosis pending`，认领后才 confirmed。
-6. 每个真实冷复检都用 `review T# pass|partial|fail` 留证。同日订正不记 pass。
-7. 达到事件销账门槛后运行 `absorb #id...`；写操作自动进入可靠 outbox 并立即同步。成功前不要说已入库。
+6. 每个真实复检都按《数据契约》用 `review T# pass|partial|fail|void --variant ... --axis ... --angle ... --anchor ...` 留完整证据。<!-- [gpt] 2026-08-10 --> `--axis` 是受控的主动变量，`--angle` 是本题可读细节；改写 angle 不能伪造第二个轴。变式决定维度和迁移等级，禁止自由打分；同日订正、提示通过、原题复现、规则复述与 teach-back 都不能凑主题 stable，坏题干记 `void --variant invalid --invalid-prompt`，内部轴自动记 `invalid`。
+7. 达到事件销账门槛后运行 `absorb #id...`；<!-- [gpt] 2026-08-10 --> CLI 与 outbox 落库前都会重验：最近失败后至少两条带原答/依据的 clean L3+ application 通过、覆盖两个结构化验证轴，且至少一条是跨会话冷检；当日新错直接拒绝。只改写 angle 不算第二轴，禁止手改 outbox 绕过。写操作自动进入可靠 outbox 并立即同步，成功前不要说已入库。误销账只用 `reopen #id --reason "..."` 行政恢复，不得用 `recheck-fail` 伪造失败或复发。
 8. 用 `schedule.mjs done <ID> --result "..."` 回写完成项；未过则保留并用 `schedule.mjs add` 排下一次，会话里新定日期当场落账。
 
 ## 特殊路径
 
-- 云说“抽查老题/复盘老错题”：运行 `recheck`，最久未碰优先。通过后 `pass #id` 维护全覆盖轮换；若有 T#，同时写 `review T# pass`。失败用 `recheck-fail #id` 重挂并写 `review T# fail`。
-- 当日新错：只讲解、认领、`add`、排冷考；当天不重考、不销账。
-- 复发主题：至少跨两个会话各稳定一次才销；第一次通过只进入 monitoring。
+- 云说“抽查老题/复盘老错题”：运行 `recheck`，最久未碰优先。通过后 `pass #id` 维护全覆盖轮换；若有 T#，同时按真实题型写完整 `review` 证据。失败用 `recheck-fail #id` 重挂并写完整 `review T# fail --variant ... --axis ... --angle ... --anchor ...`，不得再写裸 pass/fail。
+- 当日新错：只讲解、认领、`add`、排冷考；当天不重考、不销账。**讲解不另记 study_log 流水（2026-08-07 云定）**：错题讲解只在会话里讲透，错题本身以 `add` 入账即算记录，不再为讲解单独开一条学习日志。
+- **复盘活动落流水（2026-08-09 云定·口径修正）**：周三轻滚、周日冷启动等整场复盘活动结束，按科目各记一条 `activity=复盘` 的 study_log（`coach.mjs log --subject X --activity 复盘 --chapter "周日错题复盘·..." --feeling "验了哪些主题、pass/fail、病根认领、排期回写"`），`log_date` 用当天北京日。复盘活动与“记录错题后的逐题讲解”是两件事：前者落流水、后者不落。
+- **周三轻滚强度（2026-08-09 云定·加量；[gpt] 2026-08-10 门槛固化）**：原“20 分钟维护性·不销账”改为 **30–40 分钟·允许销账**——从本周目标窝里抽 3–5 条验证；旧事件至少先有一条跨会话冷检，再补无提示 clean 角度，累计覆盖两个结构化验证轴且都能讲出依据，才当场 `absorb`。当日新错仍不当天销。
+- 复发主题：只认结构化迁移门槛；第一次合格 L3+ 通过只进入 monitoring，第二次还必须跨至少 7 天、换结构化验证轴且含一次 L4 才可能 stable。
 - 主观题需要 15 分逐句批改时转 `lunshu-pc`；本 Skill 继续保存客观题式错因和表达漏点主题。
 
 ## 红线
@@ -50,6 +54,9 @@ description: 云在电脑端说“复盘错题”“销账错题”“考我错�
 - 引用编号必须带内容摘要，如 `T#12（监护人顺位）`。
 - 判题前必须取证；材料没讲就说不确定并降信心。
 - 云未认领前，不把教练推断写成 confirmed。
-- `absorb` 只销事件；主题是否 stable 只认跨日 `error_review`。
+- 知识点相似度只缩小检索范围，不是映射事实；`suggest-errors` 的全部候选都保持 pending。只有人工核对源对象、目标 KP 与材料锚点后，才可显式 `link ... --status confirmed --method manual --anchor ...`。<!-- [gpt] 2026-08-10 -->
+- 不把画像样本占比、预测兑现率或任何调度分写成掌握率；低样本不得自动改训练策略。
+- `pending` 栽点可以帮助设计验证题，但不得驱动下一探针；处方只采用 confirmed 栽点，缺 confirmed 时走中性验证轴。<!-- [gpt] 2026-08-10 -->
+- `absorb` 只销事件，且必须通过自动证据门槛；一次通过最多让主题进入 monitoring，不能销事件。主题是否 stable 只认满足结构化迁移门槛的跨日 `error_review`，旧裸 pass 最多 monitoring。<!-- [gpt] 2026-08-10 -->
 - 不改 `kp_state`、`detection_log` 或背诵台账状态。
 - 全程按法硕口径，不引法考通说替代考试分析。

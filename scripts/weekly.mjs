@@ -5,10 +5,15 @@
 // 学习流水与事件窗口沿用 src/lib/weekly-review.ts；PC 端额外读取 v2 主题/冷复检证据，
 // 避免把“销账一次事件”误写成“解决一个长期弱项”。叙事零编造，只据真实数据。
 import { createClient } from "@supabase/supabase-js";
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { summarizeErrorBookRows } from "./lib/error-book-summary.mjs";
+import { normalizeReviewEvidence } from "./lib/error-taxonomy.mjs";
 import { parseReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
 import { summarizeAskPoints } from "./lib/ask-point-summary.mjs";
+import { parseReviewSchedule, summarizeScheduleExecution } from "./lib/assessment-ledgers.mjs";
+import { reciteEvidenceFromLinks, summarizeKnowledgeEvidence } from "./lib/knowledge-state.mjs";
+import { buildReciteMemoryModel } from "./lib/learning-coach.mjs";
+import { buildLearningController } from "./lib/learning-controller.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAY = 86400000;
@@ -32,14 +37,20 @@ function parseFlags(args) { const o = {}; for (let i = 0; i < args.length; i++) 
 // 与 buildWeeklyReview 同口径聚合本周真实数据
 async function buildReview(weekStart) {
   const weekEnd = weekEndOf(weekStart);
-  const reciteParsed = parseReciteLedger(readFileSync(".local/带背挂账.md", "utf8"));
+  const reciteParsed = parseReciteLedger(readFileSync(".local/带背挂账.md", "utf8"), { referenceDate: weekEnd });
   const reciteSummary = summarizeReciteLedger(reciteParsed);
-  const reciteFlow = summarizeReciteTransitions(reciteParsed, { start: weekStart, end: weekEndOf(weekStart) });
+  const reciteFlow = summarizeReciteTransitions(reciteParsed, { start: weekStart, end: weekEnd });
   if (reciteSummary.counts.errors) throw new Error(`周报事实源读取失败：带背账本有 ${reciteSummary.counts.errors} 个结构错误；先运行 node scripts/daibei-ledger.mjs audit`);
+  const scheduleFile = ".local/复盘排期.md";
+  if (!existsSync(scheduleFile)) throw new Error(`周报事实源读取失败：缺 ${scheduleFile}`);
+  const schedule = parseReviewSchedule(readFileSync(scheduleFile, "utf8"), { referenceDate: weekEnd });
+  if (schedule.counts.errors) throw new Error(`周报事实源读取失败：复盘排期有 ${schedule.counts.errors} 个结构错误；先运行 node scripts/schedule.mjs check --today ${weekEnd}`);
+  const scheduleExecution = summarizeScheduleExecution(schedule, { start: weekStart, end: weekEnd });
+  const controller = buildLearningController({ schedule, referenceDate: weekEnd });
   const sinceTs = bjDayStartTs(weekStart);
   // 上界=下周一0点（北京时）：查当前周不影响（未来无数据），查历史周（pinggu-pc 逐周趋势）必须封顶，否则把之后的数据全卷进来
   const untilTs = bjDayStartTs(new Date(new Date(weekStart + "T00:00:00Z").getTime() + 7 * DAY).toISOString().slice(0, 10));
-  const [study, ask, evC, evP, usage, absorbed, errorBook, reviews, prior] = await Promise.all([
+  const [study, ask, evC, evP, usage, absorbed, errorBook, reviews, prior, knowledgeEvidence, knowledgeLinks] = await Promise.all([
     db.from("study_log").select("subject, chapter, activity, feeling").gte("log_date", weekStart).lte("log_date", weekEnd),
     db.from("ask_point_v2").select("id, subject, kp_id, question_type, step_stuck, confusion, status, effective_status, ttl_until, source, created_at, updated_at, resolved_at, resolution_note").limit(5000),
     db.from("events").select("type").gte("created_at", sinceTs).lt("created_at", untilTs),
@@ -47,11 +58,13 @@ async function buildReview(weekStart) {
     db.from("api_usage").select("route, est_cost_usd").gte("ts", sinceTs).lt("ts", untilTs),
     db.from("study_error").select("subject, knowledge, absorbed_at").eq("status", "absorbed").gte("absorbed_at", sinceTs).lt("absorbed_at", untilTs),
     db.from("error_book_v2").select("study_error_id, log_date, event_subject, knowledge, event_status, absorbed_at, role, root_cause_code, diagnosis_status, topic_id, topic_subject, chapter, section, topic_title, classification_status, mastery_status").limit(5000),
-    db.from("error_review").select("topic_id, review_date, result").gte("review_date", weekStart).lte("review_date", weekEnd).limit(5000),
+    db.from("error_review").select("topic_id, review_date, result, dimension, cold, prompt_integrity, variant_kind, transfer_level, probe_axis, assessment_context, duration_seconds, angle, evidence_anchor").gte("review_date", weekStart).lte("review_date", weekEnd).limit(5000),
     db.from("weekly_report").select("week_start, content").lt("week_start", weekStart).order("week_start", { ascending: false }).limit(1),
+    db.from("knowledge_evidence").select("operation_id, kp_id, evidence_date, dimension, result, source_kind, source_id, cold, prompt_integrity, variant_kind, transfer_level, assessment_context, duration_seconds, failure_pattern_code, diagnosis_status, evidence_anchor, note").gte("evidence_date", weekStart).lte("evidence_date", weekEnd).limit(5000),
+    db.from("knowledge_object_link").select("source_kind, source_id, kp_id, role, link_status, confidence, evidence_anchor").eq("source_kind", "recite_ledger").eq("link_status", "confirmed").limit(5000),
   ]);
 
-  const probes = { 学习流水: study, 答疑: ask, 本周事件: evC, 待办: evP, 成本: usage, 销账事件: absorbed, 错题主题: errorBook, 冷复检: reviews, 上周周报: prior };
+  const probes = { 学习流水: study, 答疑: ask, 本周事件: evC, 待办: evP, 成本: usage, 销账事件: absorbed, 错题主题: errorBook, 冷复检: reviews, 上周周报: prior, 知识证据: knowledgeEvidence, 带背知识接线: knowledgeLinks };
   const broken = Object.entries(probes).filter(([, response]) => response.error);
   if (broken.length) throw new Error(`周报事实源读取失败：${broken.map(([name, response]) => `${name}=${response.error.message}`).join("；")}`);
 
@@ -89,14 +102,27 @@ async function buildReview(weekStart) {
     [...new Set(errorSummary.unclassifiedEvents.map((event) => event.subject ?? "未分类"))]
       .map((subject) => [subject, errorSummary.unclassifiedEvents.filter((event) => (event.subject ?? "未分类") === subject).length]),
   );
-  const reviewEvidence = (reviews.data ?? []).map((review) => ({
-    topicId: review.topic_id,
-    title: topicById.get(review.topic_id)?.title ?? `T#${review.topic_id}`,
-    subject: topicById.get(review.topic_id)?.subject ?? null,
-    date: String(review.review_date),
-    result: review.result,
-    masteryStatus: topicById.get(review.topic_id)?.masteryStatus ?? null,
-  }));
+  const reviewEvidence = (reviews.data ?? []).map((review, sequence) => {
+    const normalized = normalizeReviewEvidence(review, sequence);
+    return {
+      topicId: review.topic_id,
+      title: topicById.get(review.topic_id)?.title ?? `T#${review.topic_id}`,
+      subject: topicById.get(review.topic_id)?.subject ?? null,
+      date: String(review.review_date),
+      result: review.result,
+      dimension: normalized.dimension,
+      cold: normalized.cold,
+      promptIntegrity: normalized.promptIntegrity,
+      variantKind: normalized.variantKind,
+      transferLevel: normalized.transferLevel,
+      assessmentContext: normalized.assessmentContext,
+      durationSeconds: normalized.durationSeconds,
+      qualifyingTransferPass: normalized.qualifyingTransferPass,
+      angle: normalized.angle,
+      evidenceAnchor: normalized.evidenceAnchor,
+      masteryStatus: topicById.get(review.topic_id)?.masteryStatus ?? null,
+    };
+  });
 
   const askSummary = summarizeAskPoints(ask.data ?? [], { referenceDate: reciteSummary.referenceDate, periodStart: weekStart, periodEnd: weekEnd });
   const askPoints = askSummary.activePoints.slice(0, 10)
@@ -107,6 +133,14 @@ async function buildReview(weekStart) {
 
   let totalUsd = 0; const routeUsd = new Map();
   for (const u of usage.data ?? []) { const c = Number(u.est_cost_usd ?? 0); totalUsd += c; routeUsd.set(u.route, (routeUsd.get(u.route) ?? 0) + c); }
+
+  // [gpt] 2026-08-10：带背证据只有唯一 confirmed KP 才进入知识层；零/多映射只报债务，不自动猜。
+  const reciteMemory = buildReciteMemoryModel(reciteParsed, weekEnd, { objectLinks: knowledgeLinks.data ?? [] });
+  const reciteKnowledgeEvidence = reciteEvidenceFromLinks(reciteMemory, knowledgeLinks.data ?? []);
+  const knowledgeEvidenceSummary = summarizeKnowledgeEvidence(
+    [...(knowledgeEvidence.data ?? []), ...reciteKnowledgeEvidence],
+    { start: weekStart, end: weekEnd },
+  );
 
   return {
     weekStart, weekEnd,
@@ -119,7 +153,13 @@ async function buildReview(weekStart) {
       oldestActive: reciteSummary.oldestActive.map((entry) => ({ id: entry.id, subject: entry.subject, title: cut(entry.title), lastTouchedOn: entry.lastTouchedOn, ageDays: entry.ageDays })),
       withdrawnReviewCandidates: reciteSummary.withdrawnReviewCandidates.map((entry) => ({ id: entry.id, subject: entry.subject, title: cut(entry.title), lastTouchedOn: entry.lastTouchedOn })),
       flow: reciteFlow,
+      mapping: {
+        counts: reciteMemory.counts,
+        debtPreview: reciteMemory.linkDebt.slice(0, 12),
+      },
     },
+    scheduleExecution, controller,
+    knowledgeEvidence: knowledgeEvidenceSummary,
     solved: { absorbedErrors },
     weak: {
       top: weakTop,
@@ -148,8 +188,23 @@ function formatData(r) {
   L.push(`  - 分科可复检：${Object.entries(r.reciteLedger.bySubject).filter(([, n]) => n).map(([subject, n]) => `${subject}${n}`).join("/") || "无"}；最久未碰：${r.reciteLedger.oldestActive.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}`);
   L.push(`  - 已撤池轮抽候选：${r.reciteLedger.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}${r.reciteLedger.counts.warnings ? `；格式警告 ${r.reciteLedger.counts.warnings}` : ""}`);
   L.push(`  - 本周迁移流水：新挂 ${r.reciteLedger.flow.byEvent.new} / 撤池 ${r.reciteLedger.flow.byEvent.withdraw} / 重挂 ${r.reciteLedger.flow.byEvent.rehang} / 移交 ${r.reciteLedger.flow.byEvent.transfer} / 转 Anki ${r.reciteLedger.flow.byEvent["route-anki"]}（只认 append-only 流水；未留流水不倒推）`);
+  const mapping = r.reciteLedger.mapping.counts;
+  L.push(`  - 带背接线：唯一主链接 ${mapping.linked}/${mapping.items} / 零链接 ${mapping.unlinked} / 主链接歧义 ${mapping.ambiguousLinks}（未接入且有证据 ${mapping.evidenceUnlinked}、在挂 ${mapping.actionableUnlinked}）/ 多链接记录 ${mapping.multiLinked}；无唯一 primary 的证据仍留本地，补映射后再接入知识层`);
+  const se = r.scheduleExecution;
+  L.push(`· 学习控制器：${r.controller.mode}（${r.controller.reason}）｜${r.controller.policyText}`);
+  L.push(`· 结构化排期履约（结案≠掌握）：本周应验收 ${se.counts.planned} / 周末前完成 ${se.counts.completedByEnd} / 周末前未完成 ${se.counts.notCompletedByEnd}；本周实际结案 ${se.counts.completedDuring} / 周末仍压着旧欠账 ${se.counts.backlogOpenAtEnd}`);
+  for (const group of se.byRouteDimension.filter((item) => item.planned || item.completedDuring || item.backlogOpenAtEnd)) {
+    L.push(`  - ${group.route}/${group.dimension}：应验收 ${group.planned} / 截周完成 ${group.completedByEnd} / 未完成 ${group.notCompletedByEnd} / 本周结案 ${group.completedDuring} / 旧欠账 ${group.backlogOpenAtEnd}`);
+  }
+  const ke = r.knowledgeEvidence;
+  L.push(`· 三维结构化证据（只报事实，不折算掌握率）：观察 ${ke.counts.observed} / 合法 ${ke.counts.valid} / 干净通过 ${ke.counts.cleanPass}（冷检 ${ke.counts.coldCleanPass}）/ 半对或失败 ${ke.counts.setbacks} / 提示后通过 ${ke.counts.cuedPass} / 作废题干 ${ke.counts.voidOrInvalidPrompt}`);
+  for (const [dimension, label] of [["understanding", "理解"], ["recall", "复述"], ["application", "应用"]]) {
+    const bucket = ke.byDimension[dimension];
+    L.push(`  - ${label}：证据 ${bucket.observed} / 干净通过 ${bucket.cleanPass}（冷检 ${bucket.coldCleanPass}）/ 半对或失败 ${bucket.setbacks} / 提示通过 ${bucket.cuedPass}`);
+  }
+  L.push(`  - 考场迁移证据：L4 干净通过 ${ke.byTransferLevel[4].cleanPass}（冷检 ${ke.byTransferLevel[4].coldCleanPass}）/ 限时干净通过 ${ke.byAssessmentContext.timed.cleanPass} / 成套模考干净通过 ${ke.byAssessmentContext.full_mock.cleanPass}；这是证据计数，不是达成概率`);
   L.push(`· 错题事件闭环：本周销账 ${r.solved.absorbedErrors.length} 条${r.solved.absorbedErrors.length ? "：" + r.solved.absorbedErrors.map((e) => `${e.subject}·${e.knowledge}`).join("、") : ""}（销事件≠主题 stable）`);
-  L.push(`· 主题冷复检：本周 ${r.review.evidence.length} 次${r.review.evidence.length ? "：" + r.review.evidence.map((e) => `${e.subject ?? "未分类"}·${e.title}=${e.result}→${e.masteryStatus ?? "?"}`).join("、") : ""}`);
+  L.push(`· 主题复检：本周 ${r.review.evidence.length} 次${r.review.evidence.length ? "：" + r.review.evidence.map((e) => `${e.subject ?? "未分类"}·${e.title}=${e.result}${e.variantKind ? `/${e.variantKind}/L${e.transferLevel}` : "/legacy"}[${e.qualifyingTransferPass ? "合格迁移" : "留证不升级"}]→${e.masteryStatus ?? "?"}`).join("、") : ""}`);
   L.push(`· 需关注：`);
   L.push(`  - 活跃弱项主题 ${r.weak.activeTopics} 个：${r.weak.top.map((w) => `T#${w.topicId} ${w.subject ?? "未分类"}·${w.knowledge}${w.n > 1 ? `(事件×${w.n})` : ""}${w.absorbedEvents > 0 ? "[复发]" : ""}`).join("、") || "（暂无）"}`);
   const unclassifiedText = Object.entries(r.weak.unclassifiedBySubject ?? {}).map(([subject, count]) => `${subject}${count}`).join("/") || "无";

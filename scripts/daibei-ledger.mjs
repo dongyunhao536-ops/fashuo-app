@@ -1,9 +1,14 @@
 // node scripts/daibei-ledger.mjs summary [--json] [--today YYYY-MM-DD] [--file .local/带背挂账.md]
 // node scripts/daibei-ledger.mjs audit [--json] [--today YYYY-MM-DD]
 // node scripts/daibei-ledger.mjs check [--today YYYY-MM-DD]  # 有 error 时退出 1
-import { randomUUID } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { formatReciteLedgerSummary, parseReciteLedger, readReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
+// node scripts/daibei-ledger.mjs evidence <ID> --result fail --pattern degree_strength --diagnosis pending --anchor "教材/题目锚点"
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { applyEvidenceEvent, applyTransition, formatReciteLedgerSummary, parseReciteLedger, readReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
+import { appendOutboxText, buildReciteAttemptOperation } from "./lib/attempt-producers.mjs";
+import { commitLinkedTextFiles } from "./lib/linked-file-transaction.mjs";
+
+const LIVE_LEDGER = ".local/带背挂账.md";
+const DEFAULT_OUTBOX = ".local/cuoti-pending.jsonl";
 
 function flags(args) {
   const out = {};
@@ -28,87 +33,70 @@ function requireOption(options, key) {
   return clean(options[key]);
 }
 
-function applyTransition(markdown, parsed, { id, event, date, evidence, note }) {
-  const entry = parsed.records.find((record) => record.id === id);
-  if (!entry) throw new Error(`未找到带背条目：${id}`);
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
-  const headingIndex = entry.line - 1;
-  let end = headingIndex + 1;
-  while (end < lines.length && !/^#{1,3}\s+/.test(lines[end])) end += 1;
-  const fieldIndex = lines.findIndex((line, index) => index > headingIndex && index < end && /^-\s*挂(?:\s|\*)/.test(line));
-  if (fieldIndex < 0 && event !== "new") throw new Error(`${id} 缺状态字段行，不能安全迁移`);
-  const mmdd = date.slice(5);
-  const fromStatus = event === "new" ? null : entry.status;
-  const fromRoute = event === "new" ? null : entry.route;
-  let toStatus = entry.status;
-  let toRoute = entry.route;
-  let statusText = null;
-  let headingMarker = "";
-
-  if (event === "new") {
-    if (entry.status !== "active") throw new Error(`new 事件只适用于新建的 active 条目，当前为 ${entry.status}`);
-  } else if (event === "withdraw") {
-    if (entry.status !== "active") throw new Error(`withdraw 要求当前 active，${id} 当前为 ${entry.status}`);
-    toStatus = "withdrawn";
-    statusText = `撤 ${mmdd}${note ? `（${note}）` : ""}`;
-    headingMarker = ` → 撤 ${mmdd}`;
-  } else if (event === "rehang") {
-    if (entry.status !== "withdrawn") throw new Error(`rehang 要求当前 withdrawn，${id} 当前为 ${entry.status}`);
-    toStatus = "active";
-    toRoute = "daibei";
-    statusText = `重挂 ${mmdd}${note ? `（${note}）` : ""}`;
-    headingMarker = ` → ${mmdd} 重挂`;
-  } else if (event === "transfer") {
-    if (entry.status === "transferred") throw new Error(`${id} 已是 transferred`);
-    if (!note) throw new Error("transfer 必须用 --note 写明接收轨");
-    toStatus = "transferred";
-    toRoute = "transferred";
-    statusText = `带背侧结案·移交${note}`;
-    headingMarker = " → 带背侧结案";
-  } else if (event === "route-anki") {
-    if (entry.status !== "active" || entry.route !== "daibei") throw new Error(`route-anki 要求 active:daibei，${id} 当前为 ${entry.status}:${entry.route}`);
-    toRoute = "anki";
-    statusText = `挂（转 Anki 轨${note ? `：${note}` : ""}）`;
-    headingMarker = " → 转 Anki 轨";
-  } else {
-    throw new Error(`未知 event：${event}`);
-  }
-
-  if (headingMarker) lines[headingIndex] = `${lines[headingIndex]}${headingMarker}`;
-  if (statusText) {
-    let field = lines[fieldIndex];
-    if (/最后碰\s+[*]*(?:20\d{2}-)?\d{2}-\d{2}[*]*/.test(field)) field = field.replace(/最后碰\s+[*]*(?:20\d{2}-)?\d{2}-\d{2}[*]*/, `最后碰 **${mmdd}**`);
-    else field = `${field.trimEnd()} ｜ 最后碰 **${mmdd}**`;
-    if (/状态[：:]\s*[^｜|]+/.test(field)) field = field.replace(/状态[：:]\s*[^｜|]+/, `状态：${statusText}`);
-    else field = `${field.trimEnd()} ｜ 状态：${statusText}`;
-    lines[fieldIndex] = field;
-  }
-
-  const transition = {
-    operationId: randomUUID(),
-    date,
-    event,
-    entryId: id,
-    fromStatus,
-    toStatus,
-    fromRoute,
-    toRoute,
-    evidence,
-    note: note || null,
-  };
-  const hasSection = lines.some((line) => /^##\s+迁移流水（机器读取/.test(line));
-  const suffix = `${hasSection ? "" : "\n## 迁移流水（机器读取·append-only）\n\n> 这里只记流量审计；条目当前状态仍是唯一状态事实。已有事件不得改写或删除。\n"}\n<!-- recite-transition-v1 ${JSON.stringify(transition)} -->`;
-  return { markdown: `${lines.join("\n").trimEnd()}${suffix}\n`, transition };
+function booleanOption(options, key, fallback = false) {
+  const value = options[key];
+  if (value == null) return fallback;
+  if (value === true || value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`--${key} 只接受 true 或 false`);
 }
 
 const command = process.argv[2] ?? "summary";
 const options = flags(process.argv.slice(3));
-const file = options.file && options.file !== true ? options.file : ".local/带背挂账.md";
+const file = options.file && options.file !== true ? options.file : LIVE_LEDGER;
 const today = options.today && options.today !== true ? String(options.today) : undefined;
 const parsed = readReciteLedger(file, today ? { referenceDate: today } : {});
 const summary = summarizeReciteLedger(parsed);
 
-if (command === "transition") {
+if (command === "evidence") {
+  if (summary.counts.errors) throw new Error(`写证据前账本已有 ${summary.counts.errors} 个结构错误，请先 audit 修复`);
+  const id = process.argv[3] && !process.argv[3].startsWith("--") ? clean(process.argv[3]) : requireOption(options, "id");
+  const dimension = options.dimension && options.dimension !== true ? clean(options.dimension) : "recall";
+  const result = requireOption(options, "result");
+  const promptIntegrity = options.prompt && options.prompt !== true ? clean(options.prompt) : "clean";
+  const failurePatternCode = options.pattern && options.pattern !== true ? clean(options.pattern) : null;
+  const diagnosisStatus = options.diagnosis && options.diagnosis !== true ? clean(options.diagnosis) : null;
+  const evidenceAnchor = requireOption(options, "anchor");
+  const note = options.note && options.note !== true ? clean(options.note) : null;
+  const backfill = booleanOption(options, "backfill");
+  const markdown = readFileSync(file, "utf8");
+  const applied = applyEvidenceEvent(markdown, parsed, {
+    id,
+    date: today ?? parsed.referenceDate,
+    dimension,
+    result,
+    cold: booleanOption(options, "cold"),
+    promptIntegrity,
+    failurePatternCode,
+    diagnosisStatus,
+    evidenceAnchor,
+    note,
+    backfill,
+  });
+  const checked = parseReciteLedger(applied.markdown, { referenceDate: today ?? parsed.referenceDate });
+  const errors = checked.issues.filter((issue) => issue.severity === "error");
+  if (errors.length) throw new Error(`复检证据未写入：${errors.map((issue) => issue.message).join("；")}`);
+  if (options.outbox === true) throw new Error("--outbox 必须提供文件路径");
+  const explicitOutbox = options.outbox && options.outbox !== true ? String(options.outbox) : null;
+  const shouldStageAttempt = !backfill && (file === LIVE_LEDGER || explicitOutbox != null);
+  if (shouldStageAttempt) {
+    const entry = parsed.records.find((record) => record.id === id);
+    const operation = buildReciteAttemptOperation(applied.event, entry);
+    const outbox = explicitOutbox ?? DEFAULT_OUTBOX;
+    const previousOutbox = existsSync(outbox) ? readFileSync(outbox, "utf8") : "";
+    const staged = appendOutboxText(previousOutbox, operation);
+    // [gpt] 人读账本与机器尝试共用一次联动提交，避免只写一边造成隐性漏数。
+    commitLinkedTextFiles([
+      { path: file, previous: markdown, next: applied.markdown },
+      { path: outbox, previous: previousOutbox, next: staged.text },
+    ]);
+    console.log(`⏳ 已同步暂存统一尝试：${operation.operation_id}（运行 node --env-file=.env.local scripts/cuoti.mjs sync 入库）`);
+  } else {
+    writeFileSync(file, applied.markdown, "utf8");
+    if (backfill && file === LIVE_LEDGER) console.log("ℹ️ backfill 仅补账本结构，不制造历史 learning_attempt。");
+  }
+  console.log(`✓ 已记录带背证据：${id} ${applied.event.date} ${dimension}/${result}${failurePatternCode ? ` · ${failurePatternCode}(${applied.event.diagnosisStatus})` : ""}`);
+} else if (command === "transition") {
   if (summary.counts.errors) throw new Error(`迁移前账本已有 ${summary.counts.errors} 个结构错误，先 audit 修复`);
   const id = process.argv[3] && !process.argv[3].startsWith("--") ? clean(process.argv[3]) : requireOption(options, "id");
   const event = requireOption(options, "event");
@@ -140,9 +128,10 @@ if (command === "transition") {
   console.log(`带背账本审计：${parsed.records.length} 个唯一条目，错误 ${summary.counts.errors} / 警告 ${summary.counts.warnings}`);
   for (const issue of parsed.issues) console.log(issueLine(issue));
 } else {
-  console.error("用法：node scripts/daibei-ledger.mjs <summary|audit|check|flow|transition> [--json] [--today YYYY-MM-DD] [--file 路径]");
+  console.error("用法：node scripts/daibei-ledger.mjs <summary|audit|check|flow|transition|evidence> [--json] [--today YYYY-MM-DD] [--file 路径]");
   console.error("  flow --from YYYY-MM-DD --to YYYY-MM-DD");
   console.error("  transition <ID> --event new|withdraw|rehang|transfer|route-anki --evidence \"教材/复检锚点\" [--note \"接收轨/说明\"]");
+  console.error("  evidence <ID> --result pass|partial|fail|void --anchor \"教材/题目锚点\" [--dimension understanding|recall] [--cold true|false] [--prompt clean|cued|invalid] [--pattern code --diagnosis pending|confirmed|rejected] [--note \"诊断\"] [--backfill] [--outbox 路径]");
   process.exitCode = 2;
 }
 

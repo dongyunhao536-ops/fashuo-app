@@ -16,3 +16,30 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - Treat `D:\fashuo` as the separate content/archive repository. Its `CLAUDE.md` is legacy background, while this repository's `.agents/skills/`, live `.local` ledgers, and Supabase data are the current operational truth. Do not edit or commit the archive merely because it was read as evidence.
 - Never print `.env` values, PM2 environment objects, service-role tokens, API keys, passwords, or notification secrets during diagnostics; select only the non-secret fields needed for the check.
 <!-- END:claude-to-codex-compat -->
+
+<!-- BEGIN:fashuo-answering-preference -->
+# 法硕答疑检索偏好
+
+- 法硕答题与答疑必须完整执行对应 PC skill 规定的检索、预检、证据链、涵摄与证据卡流程；不得因为中途已搜到一个看似可用的结论就提前停止检索或直接作答。
+- 对题目中的每个核心概念、罪名和争点都要完成本地检索与相互核对，完整走完流程后才能形成最终结论。
+- 法硕答题与答疑默认禁止自行联网搜索，优先使用本地心得、《考试分析》、讲义、法硕真题及法条，并以法硕考试通说和命题口径组织答案。
+- 对观点或定性存在差异时，最终考试口径按《考试分析》观点为准；《考试分析》没有明确论述时，以讲义观点为准；讲义仍未明确时，再以法硕真题体现的观点为准。心得用于提示争点和辅助检索，不得越过该最终裁判顺序。
+- 只有在观点存在争议、现有本地资料互相冲突，或对关键结论确实不能确定时，才可联网核验；联网前应明确告知用户原因，联网后须区分法硕口径与实务、学理观点。
+- 用户明确要求联网或明确要求不联网时，以当次指令为准。
+
+## 主观题训练专用口径
+
+<!-- [gpt] 2026-08-10：区分“待批改作答”和“参考答案”，避免循环评分。 -->
+- 法综论述题、专业基础案例分析题等主观题训练与批改，必须以用户当次上传或明确指定的**参考答案、评分标准或采分表**为采分、核对和定性基准。用户自己的待批改作答不属于“答案基准”，不得拿它给自己背书。
+- 《考试分析》和讲义仅用于补充说明、解释理由、补足知识背景及帮助理解，不得取代、改写或凌驾于用户指定的参考答案或评分标准。
+- 若用户指定的参考答案与《考试分析》、讲义或其他本地材料出现差异，应明确标出差异，但评分和作答校正仍以该参考答案为准，除非用户另行指定。用户没有提供参考答案时，按对应 PC skill 的本地真题答案检索与证据降级规则处理。
+- 主观题训练同样默认禁止主动联网搜索；只有用户明确要求联网时才可联网，不得以“补充资料”或“核验观点”为由自行联网。
+<!-- END:fashuo-answering-preference -->
+<!-- BEGIN:change-source-marker -->
+# 改动来源标记（2026-08-07 云定）
+
+- 用 DeepSeek API 完成的代码/skill/文档改动，必须在改动处或提交信息中标注 [deepseek]；原生 GPT（Codex 原生模型）改动标 [gpt]；无法判定时标 [unknown] 并在最终答复中说明。
+- 每次 DeepSeek 会话结束时，在 docs/改动来源记录.md 追加一行记录（日期、会话主题、改动文件清单、来源判定依据）。原生 GPT 会话做代码改动时同样追加，来源标 gpt。
+- 来源判定以会话的 model_provider 为准（deepseek_local → deepseek；openai → gpt）；同一会话内的所有改动视为同一来源。
+- 本规则对仓库内所有文件生效（含 docs/、.agents/skills/、scripts/、src/）。
+<!-- END:change-source-marker -->

@@ -3,12 +3,14 @@ import { TabBar } from "@/components/TabBar";
 import { PageNav } from "@/components/PageNav";
 import { Markdown } from "@/components/Markdown";
 import { bjDateStr } from "@/lib/dates";
+import { splitDispatchItems, type ReportPriority } from "@/lib/report-presentation";
 
 /**
  * 日报（RSC）· 2026-07-28 云要求「APP 加日报栏」。
  * 与周报同架构：【PC 生产（ribao-pc skill 每天北京 17:20）· APP 只展示】——本页纯读 daily_report，
- * 不生成、不重算（见记忆 pc-primary-two-systems）。事实源仍是 PC 的 .local/日报台账.md。
+ * 不生成、不重算。事实源仍是 PC 的 .local/日报台账.md。
  * 版面按"手机上 10 秒扫完"排：靶心句 → 今晚派单（唯一要行动的东西）→ 昨日结算/断档 → 全文 → 近 7 天执行链。
+ * [gpt] 2026-08-10：长正文默认折叠，摘要字段不再与完整报告同屏重复。
  */
 
 export const dynamic = "force-dynamic";
@@ -25,6 +27,8 @@ export default async function DailyPage() {
 
   const r = rows?.[0] ?? null;
   const stale = r ? r.report_date !== today : false;
+  const dispatchItems = splitDispatchItems(r?.dispatch);
+  const hasGap = Boolean(r?.gap && !/^(无|暂无|—)$/.test(String(r.gap).trim()));
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-md md:max-w-3xl flex-col pb-28 pt-4">
@@ -58,38 +62,50 @@ export default async function DailyPage() {
             )}
           </section>
 
-          {/* 今晚派单 —— 全页唯一要「做」的东西，放最前 */}
-          {r.dispatch && (
+          {/* [gpt] 2026-08-10：长派单拆成独立行动卡，避免 P0/P1 挤在一段里。 */}
+          {dispatchItems.length > 0 && (
             <>
-              <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">今晚派单</h2>
-              <section className="card mx-4 rounded-[14px] border-accent/25 p-4">
-                <p className="text-[14.5px] leading-[1.7] text-label">{r.dispatch}</p>
-                <p className="mt-2 border-t border-hairline pt-2 text-[11px] text-label3">
-                  只从当周周报的 P0/P1 与到期排期派生 · 明天 17:20 逐条结算
-                </p>
-              </section>
+              <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">下一步</h2>
+              <div className="mx-4 flex flex-col gap-2">
+                {dispatchItems.map((item, index) => (
+                  <section key={index} className={`card flex gap-2.5 rounded-[13px] border-l-[3px] p-3.5 ${priorityBorder(item.priority)}`}>
+                    <PriorityBadge priority={item.priority} />
+                    <p className="text-[14px] leading-[1.65] text-label">{item.text}</p>
+                  </section>
+                ))}
+              </div>
+              <p className="mx-5 mt-2 text-[10.5px] text-label3">明天 17:20 按验收证据逐条结算</p>
             </>
           )}
 
-          {/* 昨日结算 / 今日流水 / 断档 */}
-          <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">账面</h2>
-          <section className="card mx-4 flex flex-col gap-2.5 rounded-[14px] p-4">
-            <Row label="昨日结算" value={r.settle} />
-            <Row label="今日流水" value={r.flow} />
-            <Row label="断档" value={r.gap} tone="warn" />
+          <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">昨日对账</h2>
+          <section className="card mx-4 rounded-[14px] p-4">
+            <p className="text-[13.5px] leading-[1.7] text-label">{r.settle ?? "暂无可判结算"}</p>
           </section>
 
-          {/* 全文 */}
-          <h2 className="sec-title mt-5 px-5 pb-2 text-[13px] font-medium text-label2">日报全文</h2>
-          <section className="card mx-4 rounded-[14px] p-4">
-            <Markdown>{r.content}</Markdown>
-            <div className="mt-3 border-t border-hairline pt-2 text-[11px] text-label3">
-              {r.generated_at
-                ? `生成于 ${new Date(r.generated_at).toLocaleString("zh-CN", { hour12: false }).slice(5, 16)}`
-                : ""}{" "}
-              · 电脑端（Opus 火力全开）生产
+          {hasGap && (
+            <section className="mx-4 mt-3 rounded-[13px] border border-orange/35 bg-orange/10 p-3.5">
+              <p className="mb-1 text-[10.5px] font-bold tracking-[0.12em] text-orange">当前告警</p>
+              <p className="text-[13px] leading-[1.65] text-label">{r.gap}</p>
+            </section>
+          )}
+
+          {/* 摘要字段已在首屏呈现，完整正文只作可追溯证据。 */}
+          <details className="card group mx-4 mt-5 overflow-hidden rounded-[14px]">
+            <summary className="cursor-pointer px-4 py-3.5 text-[13px] font-medium text-label2">
+              今日流水与完整证据
+              <span className="ml-2 text-[11px] font-normal text-label3">按需展开</span>
+            </summary>
+            <div className="border-t border-hairline px-4 pb-4 pt-3">
+              <p className="mb-3 rounded-[8px] bg-fill2 px-3 py-2 text-[12.5px] leading-relaxed text-label2">{r.flow ?? "暂无流水记录"}</p>
+              <Markdown density="compact">{r.content}</Markdown>
+              <div className="mt-3 border-t border-hairline pt-2 text-[11px] text-label3">
+                {r.generated_at
+                  ? `生成于 ${new Date(r.generated_at).toLocaleString("zh-CN", { hour12: false }).slice(5, 16)}`
+                  : ""} · 电脑端 Codex 生产
+              </div>
             </div>
-          </section>
+          </details>
 
           {/* 近 7 天执行链 —— 连续性一眼可见，这是日报比周报多出来的那半本账 */}
           {rows && rows.length > 1 && (
@@ -118,11 +134,13 @@ export default async function DailyPage() {
   );
 }
 
-function Row({ label, value, tone }: { label: string; value: string | null; tone?: "warn" }) {
-  return (
-    <div className="text-[13px] leading-relaxed">
-      <span className="mr-1.5 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{label}</span>
-      <span className={tone === "warn" && value && value !== "无" ? "text-orange" : "text-label"}>{value ?? "—"}</span>
-    </div>
-  );
+function priorityBorder(priority: ReportPriority | null) {
+  if (priority === "P0") return "border-l-red";
+  if (priority === "P1") return "border-l-gold";
+  return "border-l-hairline";
+}
+
+function PriorityBadge({ priority }: { priority: ReportPriority | null }) {
+  const tone = priority === "P0" ? "bg-red/15 text-red" : priority === "P1" ? "bg-gold/15 text-gold" : "bg-fill text-label3";
+  return <span className={`mt-0.5 shrink-0 rounded-[6px] px-1.5 py-0.5 text-[10.5px] font-bold ${tone}`}>{priority ?? "任务"}</span>;
 }

@@ -10,7 +10,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { summarizeErrorBookRows, topicLabel } from "./lib/error-book-summary.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { summarizeAskPoints } from "./lib/ask-point-summary.mjs";
-import { parseReviewSchedule } from "./lib/assessment-ledgers.mjs";
+import { parseReviewSchedule, summarizeScheduleExecution } from "./lib/assessment-ledgers.mjs";
+import { buildLearningController } from "./lib/learning-controller.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
@@ -104,6 +105,9 @@ async function collect(date) {
   if (!existsSync(scheduleFile)) throw new Error(`日报事实源读取失败：缺 ${scheduleFile}`);
   const schedule = parseReviewSchedule(readFileSync(scheduleFile, "utf8"), { referenceDate: date });
   if (schedule.counts.errors) throw new Error(`日报事实源读取失败：复盘排期有 ${schedule.counts.errors} 个结构错误；先运行 node scripts/schedule.mjs check --today ${date}`);
+  // [gpt] 2026-08-10：昨日排期按“昨日截止时是否完成”结算，不能拿今天补做倒填昨日履约。
+  const ydayScheduleExecution = summarizeScheduleExecution(schedule, { start: yday, end: yday });
+  const controller = buildLearningController({ schedule, referenceDate: date });
   const [todayLog, ydayLog, heat, ydayErrNew, ydayErrAbs, todayErrNew, todayErrAbs, errorBook, askPoints, lastBySubj, allAct] = await Promise.all([
     db.from("study_log").select("subject, chapter, activity, accuracy, feeling, raw_input").eq("log_date", date),
     db.from("study_log").select("subject, chapter, activity, accuracy, feeling, raw_input").eq("log_date", yday),
@@ -141,7 +145,7 @@ async function collect(date) {
 
   return { date, yday, todayLog: todayLog.data ?? [], ydayLog: ydayLog.data ?? [], days, gap, trackLast,
     ydayErrNew: ydayErrNew.data ?? [], ydayErrAbs: ydayErrAbs.data ?? [], todayErrNew: todayErrNew.data ?? [], todayErrAbs: todayErrAbs.data ?? [],
-    errorSummary, reciteSummary, askSummary, schedule,
+    errorSummary, reciteSummary, askSummary, schedule, ydayScheduleExecution, controller,
     lastBySubj: Object.fromEntries(lastBySubj.map(([subject, response]) => [subject, response.data?.[0] ?? null])) };
 }
 
@@ -158,6 +162,7 @@ function render(r) {
   L.push(`═══════════ 法硕日报 · 事实源（北京 ${r.date} 周${dow(r.date)} ${bjNow()}）═══════════`);
   L.push(`距初试(${cfg.考试日期}) ${Math.max(0, daysTo(cfg.考试日期))} 天　距基础结业死线(${cfg.基础结业死线}) ${daysTo(cfg.基础结业死线)} 天　距首次模拟(${cfg.首次模拟}) ${daysTo(cfg.首次模拟)} 天`);
   const ms = milestone(); if (ms) L.push(`里程碑：${ms}`);
+  L.push(`控制器：${r.controller.mode}｜${r.controller.reason}｜${r.controller.policyText}`);
 
   L.push(`\n──── ① 昨日派单（今天必须逐条结算，别跳过）────`);
   if (!prev) L.push("  （台账为空：这是第一份日报，无可结算的派单——今天只派单）");
@@ -173,6 +178,14 @@ function render(r) {
   L.push(`  深度动作占比（复盘+带背 ÷ 全部）：${deepRatio(r.ydayLog)}`);
   const errList = (a) => a.map((e) => `${e.subject ?? "未分类"}·${cut(e.knowledge, 40)}`).join("、");
   L.push(`  错题：新增 ${r.ydayErrNew.length}${r.ydayErrNew.length ? "（" + errList(r.ydayErrNew) + "）" : ""} ／ 销账 ${r.ydayErrAbs.length}${r.ydayErrAbs.length ? "（" + errList(r.ydayErrAbs) + "）" : ""}`);
+  const yse = r.ydayScheduleExecution;
+  L.push(`  结构化排期履约：昨日应验收 ${yse.counts.planned} / 截至昨日完成 ${yse.counts.completedByEnd} / 截至昨日未完成 ${yse.counts.notCompletedByEnd}；昨日实际结案 ${yse.counts.completedDuring} / 截日仍压着旧欠账 ${yse.counts.backlogOpenAtEnd}`);
+  for (const item of yse.completedDuringItems.slice(0, 6)) {
+    L.push(`    ✅ ${item.id} ${item.route ?? "unrouted"}/${item.dimension ?? "unrouted"}｜原定 ${item.dueDate}｜${cut(item.result ?? item.task, 80)}`);
+  }
+  for (const item of yse.notCompletedByEndItems.slice(0, 6)) {
+    L.push(`    ❌ ${item.id} ${item.route ?? "unrouted"}/${item.dimension ?? "unrouted"}｜${cut(item.task, 80)}`);
+  }
 
   L.push(`\n──── ③ 今日截至此刻（${r.date} 00:00~${bjNow()}·半天切面，不能拿它判勤惰）────`);
   L.push(...fmtLog(r.todayLog));
@@ -206,7 +219,9 @@ function render(r) {
   L.push(`  答疑卡点：有效 open ${r.askSummary.activePoints.length}；${r.askSummary.activePoints.slice(0, 5).map((point) => `A#${point.id} ${point.subject ?? "未分类"}·${cut(point.confusion, 35)}(${String(point.createdAt ?? "").slice(0, 10) || "?"})`).join("、") || "（无）"}`);
   L.push(`  复盘排期：逾期 ${r.schedule.counts.overdue} / 今日 ${r.schedule.counts.dueToday} / 未来 ${r.schedule.counts.upcoming}（只认结构化行动项；旧格式 ${r.schedule.counts.legacy} 条只作证据）`);
   for (const item of [...r.schedule.overdue, ...r.schedule.dueToday, ...r.schedule.upcoming].slice(0, 8)) {
-    L.push(`    - ${item.dueDate} [${item.priority}] ${item.id} ${item.task}`);
+    // [gpt] 2026-08-10：日报把执行 owner/检验维度原样透传，不再靠任务文案猜应调用哪个 skill。
+    const dispatch = item.route ? ` → ${item.route}/${item.dimension}` : "";
+    L.push(`    - ${item.dueDate} [${item.priority}] ${item.id}${dispatch} ${item.task}`);
   }
 
   L.push(`\n──── ⑥ 本周周报分档（派单唯一来源 · 日报不另立标准）────`);

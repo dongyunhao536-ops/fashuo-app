@@ -1,6 +1,18 @@
+import {
+  buildFailurePortrait,
+  buildKnowledgePointStates,
+  reciteEvidenceFromLinks,
+} from "./knowledge-state.mjs";
+import { buildKnowledgeGraph } from "./knowledge-graph.mjs";
+import { buildExamLossForecast } from "./knowledge-forecast.mjs";
+import { buildInterventionResponse, findInterventionResponse, interventionResponseKey } from "./intervention-response.mjs";
+import { selectInterventionProtocol } from "./intervention-protocols.mjs";
+import { normalizeReviewEvidence, recommendNextReviewProbe, summarizeReviewProof } from "./error-taxonomy.mjs";
+import { buildLearningController, formatLearningController } from "./learning-controller.mjs";
+
 const DAY = 86400000;
 
-export const LEARNING_COACH_VERSION = "1.0";
+export const LEARNING_COACH_VERSION = "3.2"; // [gpt] 2026-08-10：加入协议化 episode 与多时点保守选策。
 export const LEARNING_STATES = Object.freeze([
   "discovered",
   "confirmed",
@@ -134,19 +146,19 @@ function urgencyFor(score) {
   return "low";
 }
 
-function topicStage(topic, evidence) {
+function topicStage(topic, evidence, reviewProof = summarizeReviewProof(evidence)) {
   if (topic.classificationStatus !== "confirmed") return "discovered";
-  const ordered = sortedEvidence(evidence);
-  const latest = ordered.at(-1) ?? null;
-  const latestPassDate = latestDate(ordered.filter((item) => item.result === "pass").map((item) => item.date));
+  const latest = reviewProof.latestEvidence;
+  const latestPassDate = reviewProof.latestSupportingPass?.date ?? null;
   const newerOpenEvent = topic.active && topic.latestOpenDate && (!latestPassDate || topic.latestOpenDate > latestPassDate);
-  if (latest?.result && latest.result !== "pass") return "reinforcing";
-  if (newerOpenEvent && topic.recurrent) return "reinforcing";
+  if (latest?.result === "partial" || latest?.result === "fail") return "reinforcing";
+  if (reviewProof.lastFailure && !reviewProof.latestSupportingPass) return "reinforcing";
+  if (newerOpenEvent) return "reinforcing";
   if (!latest) return topic.recurrent ? "reinforcing" : "confirmed";
-  const passDates = cleanPassDatesAfterLastFailure(ordered);
-  if (!topic.active && passDates.length >= 3) return "maintenance";
-  if (!topic.active && passDates.length >= 2) return "stable";
-  const passAge = daysBetween(latest.date, topic.referenceDate);
+  if (!topic.active && reviewProof.stable && reviewProof.passDates.length >= 3) return "maintenance";
+  if (!topic.active && reviewProof.stable) return "stable";
+  if (reviewProof.status === "open") return topic.recurrent ? "reinforcing" : "confirmed";
+  const passAge = daysBetween(reviewProof.latestSupportingPass?.date, topic.referenceDate);
   return passAge != null && passAge <= 2 ? "short_pass" : "cooling";
 }
 
@@ -162,35 +174,57 @@ function topicNextAction(stage) {
   }[stage];
 }
 
-export function buildTopicLearningStates(errorSummary, reviews = [], referenceDate) {
+export function buildTopicLearningStates(errorSummary, reviews = [], referenceDate, { objectLinks = [] } = {}) {
   if (!validDate(referenceDate)) throw new Error("referenceDate 必须是 YYYY-MM-DD");
+  const confirmedKpByTopic = new Map();
+  for (const link of objectLinks) {
+    if ((link.sourceKind ?? link.source_kind) !== "error_topic" || (link.linkStatus ?? link.link_status) !== "confirmed") continue;
+    const topicId = Number(link.sourceId ?? link.source_id);
+    const kpId = String(link.kpId ?? link.kp_id ?? "");
+    if (!Number.isInteger(topicId) || !kpId) continue;
+    const ids = confirmedKpByTopic.get(topicId) ?? new Set();
+    ids.add(kpId);
+    confirmedKpByTopic.set(topicId, ids);
+  }
   const reviewsByTopic = new Map();
   for (const [sequence, review] of reviews.entries()) {
-    const topicId = Number(review.topic_id ?? review.topicId);
-    const date = String(review.review_date ?? review.date ?? "");
+    const normalized = normalizeReviewEvidence(review, sequence);
+    const topicId = normalized.topicId;
+    const date = normalized.date;
     if (!Number.isInteger(topicId) || !validDate(date)) continue;
     const rows = reviewsByTopic.get(topicId) ?? [];
     rows.push({
-      date,
-      result: String(review.result ?? ""),
-      qualifying: true,
-      sequence,
+      ...normalized,
+      // [gpt] 2026-08-10：合格迁移 pass 与有效失败参与遗忘估计；提示/同场/低迁移 pass 和 void 不参与。
+      qualifying: normalized.result === "pass"
+        ? normalized.qualifyingTransferPass || normalized.legacyPass
+        : normalized.substantive,
     });
     reviewsByTopic.set(topicId, rows);
   }
 
   const items = (errorSummary?.topics ?? []).map((topic) => {
+    const linkedKpIds = [...(confirmedKpByTopic.get(topic.id) ?? [])];
+    const resolvedKpId = topic.kpId ?? (linkedKpIds.length === 1 ? linkedKpIds[0] : null);
     const evidence = reviewsByTopic.get(topic.id) ?? [];
+    const reviewProof = summarizeReviewProof(evidence);
+    const confirmedFailurePatterns = [...(topic.confirmedFailurePatterns ?? [])].sort();
+    const nextProbe = recommendNextReviewProbe(evidence, {
+      referenceDate,
+      failurePatternCode: confirmedFailurePatterns[0] ?? null,
+    });
     const enriched = { ...topic, referenceDate };
-    const state = topicStage(enriched, evidence);
-    const latestReview = sortedEvidence(evidence).at(-1) ?? null;
+    const state = topicStage(enriched, evidence, reviewProof);
+    const latestReview = reviewProof.latestEvidence;
     const lastEvidenceDate = latestDate([topic.latestEventDate, latestReview?.date]);
     const memoryDecay = topic.confirmedRootCauses?.includes("memory_decay") ?? false;
     const interval = intervalEstimate(evidence, TOPIC_INTERVALS[state], {
       recurrent: topic.recurrent,
       memoryDecay,
     });
-    const dueDate = shiftDate(lastEvidenceDate ?? referenceDate, interval.days);
+    const intervalDueDate = shiftDate(lastEvidenceDate ?? referenceDate, interval.days);
+    // [gpt] 2026-08-10：遗忘到期与证明门槛同时约束派单；未到下一探针冷却日不得提前连考。
+    const dueDate = latestDate([intervalDueDate, nextProbe.earliestDate]);
     const daysSinceEvidence = lastEvidenceDate ? daysBetween(lastEvidenceDate, referenceDate) : null;
     const overdueDays = dueDate && dueDate < referenceDate ? daysBetween(dueDate, referenceDate) : 0;
     const stateBase = {
@@ -207,39 +241,55 @@ export function buildTopicLearningStates(errorSummary, reviews = [], referenceDa
       + Math.min(25, (overdueDays ?? 0) * 5)
       + (topic.recurrent ? 10 : 0)
       + Math.min(12, topic.eventCounts.open * 3)
-      + (latestReview && latestReview.result !== "pass" ? 12 : 0)
+      + (reviewProof.lastFailure && reviewProof.status === "open" ? 12 : 0)
       + (memoryDecay ? 8 : 0),
     ));
-    const passDates = cleanPassDatesAfterLastFailure(evidence);
     return {
       id: topic.id,
+      kpId: resolvedKpId,
       subject: topic.subject,
       title: topic.title,
       chapter: topic.chapter,
       state,
       stateLabel: LEARNING_STATE_LABELS[state],
-      masteryStatus: topic.masteryStatus,
+      masteryStatus: reviewProof.status,
+      storedMasteryStatus: topic.masteryStatus,
       classificationStatus: topic.classificationStatus,
       active: topic.active,
       recurrent: topic.recurrent,
+      confirmedFailurePatterns,
+      pendingFailurePatterns: topic.pendingFailurePatterns ?? [],
       eventCounts: topic.eventCounts,
       reviewCounts: {
         total: evidence.length,
         pass: evidence.filter((item) => item.result === "pass").length,
         partial: evidence.filter((item) => item.result === "partial").length,
         fail: evidence.filter((item) => item.result === "fail").length,
-        cleanPassDates: passDates.length,
+        void: evidence.filter((item) => item.result === "void").length,
+        qualifyingTransferPasses: reviewProof.qualifyingPassCount,
+        legacyPasses: reviewProof.legacyPassCount,
+        cleanPassDates: reviewProof.passDates.length,
+      },
+      reviewProof: {
+        status: reviewProof.status,
+        spanDays: reviewProof.spanDays,
+        angles: reviewProof.angles,
+        probeAxes: reviewProof.probeAxes,
+        hasNovelTransfer: reviewProof.hasNovelTransfer,
+        blockers: reviewProof.blockers,
       },
       latestReview,
       lastEvidenceDate,
       daysSinceEvidence,
       estimatedRetentionDays: interval.days,
       intervalEvidence: interval,
+      intervalDueDate,
       dueDate,
       overdueDays,
       riskScore,
       urgency: urgencyFor(riskScore),
       nextAction: topicNextAction(state),
+      nextProbe,
     };
   }).sort((left, right) => right.riskScore - left.riskScore || String(left.dueDate).localeCompare(String(right.dueDate)) || left.id - right.id);
 
@@ -252,7 +302,7 @@ export function buildTopicLearningStates(errorSummary, reviews = [], referenceDa
 
 export function extractReciteReviewEvidence(entry, referenceDate) {
   if (!validDate(referenceDate)) throw new Error("referenceDate 必须是 YYYY-MM-DD");
-  const evidence = [];
+  const proseEvidence = [];
   const lines = String(entry?.block ?? "").replace(/\r\n/g, "\n").split("\n");
   for (const [sequence, line] of lines.entries()) {
     if (!/复检|冷启动|抽查/.test(line)) continue;
@@ -266,15 +316,50 @@ export function extractReciteReviewEvidence(entry, referenceDate) {
     if (!result) continue;
     const invalidQuestion = /问法失真|该发作废|题干喂答案/.test(line);
     const nonQualifyingPass = result === "pass" && /不算|当场|同场|原文刚在眼前|问法打折/.test(line);
-    evidence.push({
+    // [gpt] 2026-08-10：知识点状态机需要区分干净冷提取、提示后通过与作废题。
+    proseEvidence.push({
       date,
+      dimension: "recall",
       result,
       qualifying: !invalidQuestion && !nonQualifyingPass,
+      cold: /冷启动|冷复检|冷检|抽查/.test(line),
+      promptIntegrity: invalidQuestion ? "invalid" : nonQualifyingPass ? "cued" : "clean",
       sequence,
       source: line.replace(/\s+/g, " ").trim().slice(0, 180),
     });
   }
-  return sortedEvidence(evidence);
+  // [gpt] 2026-08-10：v2 流水覆盖同日同结果的自然语言推断；未结构化的旧记录继续保留。
+  const consumedProse = new Set();
+  const explicitEvidence = (entry?.explicitEvidence ?? [])
+    .filter((row) => validDate(row.date) && row.date <= referenceDate)
+    .map((row, explicitSequence) => {
+      const promptIntegrity = row.promptIntegrity ?? "clean";
+      const matchingIndex = row.dimension === "recall"
+        ? proseEvidence.findIndex((candidate, index) => !consumedProse.has(index) && candidate.date === row.date && candidate.result === row.result)
+        : -1;
+      const inferred = matchingIndex >= 0 ? proseEvidence[matchingIndex] : null;
+      if (matchingIndex >= 0) consumedProse.add(matchingIndex);
+      return {
+        ...(inferred ?? {}),
+        date: row.date,
+        dimension: row.dimension ?? "recall",
+        result: row.result,
+        qualifying: row.result !== "void" && promptIntegrity !== "invalid" && !(row.result === "pass" && promptIntegrity !== "clean"),
+        cold: Boolean(row.cold),
+        promptIntegrity,
+        failurePatternCode: row.failurePatternCode ?? null,
+        diagnosisStatus: row.diagnosisStatus ?? null,
+        operationId: row.operationId ?? null,
+        evidenceAnchor: row.evidenceAnchor ?? null,
+        sequence: inferred?.sequence ?? lines.length + explicitSequence,
+        source: row.note ?? inferred?.source ?? row.evidenceAnchor ?? null,
+        explicit: true,
+      };
+    });
+  return sortedEvidence([
+    ...proseEvidence.filter((_, index) => !consumedProse.has(index)),
+    ...explicitEvidence,
+  ]);
 }
 
 function reciteStage(entry, evidence, referenceDate) {
@@ -291,15 +376,34 @@ function reciteStage(entry, evidence, referenceDate) {
   return age != null && age <= 2 ? "short_pass" : "cooling";
 }
 
-export function buildReciteMemoryModel(reciteParsed, referenceDate) {
+export function buildReciteMemoryModel(reciteParsed, referenceDate, { objectLinks = [] } = {}) {
   if (!validDate(referenceDate)) throw new Error("referenceDate 必须是 YYYY-MM-DD");
+  const confirmedKpByRecord = new Map();
+  const primaryKpByRecord = new Map();
+  for (const link of objectLinks) {
+    const sourceKind = link.sourceKind ?? link.source_kind;
+    const linkStatus = link.linkStatus ?? link.link_status;
+    if (sourceKind !== "recite_ledger" || linkStatus !== "confirmed") continue;
+    const sourceId = String(link.sourceId ?? link.source_id ?? "");
+    const kpId = String(link.kpId ?? link.kp_id ?? "");
+    if (!sourceId || !kpId) continue;
+    const ids = confirmedKpByRecord.get(sourceId) ?? new Set();
+    ids.add(kpId);
+    confirmedKpByRecord.set(sourceId, ids);
+    if ((link.role ?? "primary") === "primary") {
+      const primaryIds = primaryKpByRecord.get(sourceId) ?? new Set();
+      primaryIds.add(kpId);
+      primaryKpByRecord.set(sourceId, primaryIds);
+    }
+  }
   const items = (reciteParsed?.records ?? []).map((entry) => {
     const evidence = extractReciteReviewEvidence(entry, referenceDate);
-    const state = reciteStage(entry, evidence, referenceDate);
-    const passCount = evidence.filter((item) => item.result === "pass" && item.qualifying !== false).length;
-    const partialCount = evidence.filter((item) => item.result === "partial" && item.qualifying !== false).length;
-    const failCount = evidence.filter((item) => item.result === "fail" && item.qualifying !== false).length;
-    const interval = intervalEstimate(evidence, RECITE_INTERVALS[state], {
+    const recallEvidence = evidence.filter((item) => (item.dimension ?? "recall") === "recall");
+    const state = reciteStage(entry, recallEvidence, referenceDate);
+    const passCount = recallEvidence.filter((item) => item.result === "pass" && item.qualifying !== false).length;
+    const partialCount = recallEvidence.filter((item) => item.result === "partial" && item.qualifying !== false).length;
+    const failCount = recallEvidence.filter((item) => item.result === "fail" && item.qualifying !== false).length;
+    const interval = intervalEstimate(recallEvidence, RECITE_INTERVALS[state], {
       recurrent: failCount >= 2,
       memoryDecay: false,
     });
@@ -325,8 +429,12 @@ export function buildReciteMemoryModel(reciteParsed, referenceDate) {
     ));
     const dropRisk = clamp(Math.round(100 - memoryStrength + Math.min(20, (overdueDays ?? 0) * 4)));
     const title = String(entry.title ?? "").split("｜")[0].trim();
+    const kpIds = [...(confirmedKpByRecord.get(String(entry.id)) ?? [])].sort();
+    const primaryKpIds = [...(primaryKpByRecord.get(String(entry.id)) ?? [])].sort();
     return {
       id: entry.id,
+      kpIds,
+      primaryKpId: primaryKpIds.length === 1 ? primaryKpIds[0] : null,
       subject: entry.subject,
       title,
       status: entry.status,
@@ -348,12 +456,38 @@ export function buildReciteMemoryModel(reciteParsed, referenceDate) {
     };
   }).sort((left, right) => right.dropRisk - left.dropRisk || String(left.dueDate).localeCompare(String(right.dueDate)) || left.id.localeCompare(right.id, "en", { numeric: true }));
 
+  // [gpt] 2026-08-10：未接线和多接线均保留带背事实，但不冒充已归属某个稳定知识点。
+  const linked = items.filter((item) => item.primaryKpId);
+  const unlinked = items.filter((item) => item.kpIds.length === 0);
+  const multiLinked = items.filter((item) => item.kpIds.length > 1);
+  const ambiguousLinks = items.filter((item) => item.kpIds.length > 0 && !item.primaryKpId);
+  const linkDebt = items
+    .filter((item) => item.route === "daibei" && !item.primaryKpId && (item.status === "active" || item.evidenceCounts.total > 0))
+    .map((item) => ({
+      id: item.id,
+      subject: item.subject,
+      title: item.title,
+      status: item.status,
+      kpIds: item.kpIds,
+      evidenceCount: item.evidenceCounts.total,
+      dueDate: item.dueDate,
+      dropRisk: item.dropRisk,
+      reason: item.kpIds.length ? "missing_unique_primary_kp" : "missing_confirmed_kp",
+    }));
+
   return {
     counts: {
       items: items.length,
       due: items.filter((item) => item.route === "daibei" && item.dueDate && item.dueDate <= referenceDate).length,
       highRisk: items.filter((item) => item.route === "daibei" && item.dropRisk >= 70).length,
+      linked: linked.length,
+      unlinked: unlinked.length,
+      multiLinked: multiLinked.length,
+      ambiguousLinks: ambiguousLinks.length,
+      evidenceUnlinked: items.filter((item) => !item.primaryKpId && item.evidenceCounts.total > 0).length,
+      actionableUnlinked: items.filter((item) => !item.primaryKpId && item.route === "daibei" && item.status === "active").length,
     },
+    linkDebt,
     topDropRisk: items.filter((item) => item.route === "daibei").slice(0, 20),
     items,
   };
@@ -368,22 +502,25 @@ function structuredMockRecords(targets) {
   return Array.isArray(records) ? records : [];
 }
 
-export function buildExamRiskModel({ referenceDate, quantV3, studyLogs = [], topicStates, reciteMemory, targets = {}, mockRecords = [] }) {
+export function buildExamRiskModel({ referenceDate, quantV3, studyLogs = [], topicStates, reciteMemory, knowledgeStates, targets = {}, mockRecords = [] }) {
   if (!validDate(referenceDate)) throw new Error("referenceDate 必须是 YYYY-MM-DD");
   const targetScores = targets?.["科目拆分"] ?? {};
   const records = Array.isArray(mockRecords) ? mockRecords : structuredMockRecords(targets);
   const subjects = (quantV3?.subjects ?? []).map((quant) => {
     const subjectTopics = (topicStates?.items ?? []).filter((item) => item.subject === quant.subject);
     const subjectRecite = (reciteMemory?.items ?? []).filter((item) => item.subject === quant.subject && item.route === "daibei");
+    const subjectKnowledge = (knowledgeStates?.active ?? []).filter((item) => item.subject === quant.subject);
     const latest = latestStudyDate(studyLogs, quant.subject);
     const daysSinceStudy = latest ? daysBetween(latest, referenceDate) : null;
     const recencyPenalty = daysSinceStudy == null ? 16 : daysSinceStudy > 14 ? 14 : daysSinceStudy > 7 ? 9 : daysSinceStudy > 3 ? 4 : 0;
     const highRiskTopics = subjectTopics.filter((item) => item.riskScore >= 70).length;
     const recurrentTopics = subjectTopics.filter((item) => item.recurrent).length;
     const highRiskRecite = subjectRecite.filter((item) => item.dropRisk >= 70).length;
+    const highRiskKnowledgePoints = subjectKnowledge.filter((item) => item.riskScore >= 70).length;
     const weakPenalty = Math.min(18, highRiskTopics * 2 + recurrentTopics * 2);
     const recitePenalty = Math.min(10, highRiskRecite * 1.5);
-    const riskScore = clamp(Math.round(0.62 * (100 - quant.ability) + recencyPenalty + weakPenalty + recitePenalty));
+    const knowledgePenalty = Math.min(10, highRiskKnowledgePoints * 1.5);
+    const riskScore = clamp(Math.round(0.62 * (100 - quant.ability) + recencyPenalty + weakPenalty + recitePenalty + knowledgePenalty));
     const targetScore = Number(targetScores[quant.subject] ?? 0) || null;
     const targetIntensityPct = targetScore == null ? null : Math.round((targetScore / quant.weight) * 100);
     const drivers = [];
@@ -393,6 +530,7 @@ export function buildExamRiskModel({ referenceDate, quantV3, studyLogs = [], top
     if (highRiskTopics) drivers.push(`${highRiskTopics} 个高风险弱项主题`);
     if (recurrentTopics) drivers.push(`${recurrentTopics} 个复发主题`);
     if (highRiskRecite) drivers.push(`${highRiskRecite} 个高掉落风险背诵点`);
+    if (highRiskKnowledgePoints) drivers.push(`${highRiskKnowledgePoints} 个高风险知识点证据状态`);
     if (!drivers.length) drivers.push("暂无额外高风险信号");
     return {
       subject: quant.subject,
@@ -408,6 +546,7 @@ export function buildExamRiskModel({ referenceDate, quantV3, studyLogs = [], top
       highRiskTopics,
       recurrentTopics,
       highRiskRecite,
+      highRiskKnowledgePoints,
       drivers,
     };
   }).sort((left, right) => right.riskScore - left.riskScore || right.weight - left.weight);
@@ -437,59 +576,341 @@ function priorityFor(score) {
   return "P2";
 }
 
+function recencyBoostFor(candidate, referenceDate) {
+  const latest = String(candidate.latestOpenDate ?? "");
+  if (!validDate(latest)) return 0;
+  const days = daysBetween(latest, referenceDate);
+  return days != null && days >= 0 && days <= 3 ? 8 : 0;
+}
+
+// 风险分去饱和（2026-08-07）：原始风险分常顶到 100、Top 3 无区分度。
+// 按科内相对位置拉开差距（科内第一 100、线性降到 55），再叠“新错加权 +8”
+// 与“积压限流 -6”；rawScore 仍保留供审计。产出仍是 0-100 调度分，
+// 不是遗忘概率或卷面分。
+export function desaturateDispatchScores(candidates, referenceDate) {
+  const bySubject = new Map();
+  for (const candidate of candidates) {
+    const list = bySubject.get(candidate.subject) ?? [];
+    list.push(candidate);
+    bySubject.set(candidate.subject, list);
+  }
+  const scored = [];
+  for (const list of bySubject.values()) {
+    const ordered = [...list].sort(
+      (a, b) => b.sourceRisk - a.sourceRisk
+        || String(a.dueDate).localeCompare(String(b.dueDate))
+        || String(a.id).localeCompare(String(b.id), "en", { numeric: true }),
+    );
+    const n = ordered.length;
+    const backlogPenalty = n > 6 ? 6 : 0;
+    ordered.forEach((candidate, index) => {
+      const withinRankScore = n <= 1 ? 85 : Math.max(55, Math.round(100 - (index / (n - 1)) * 30));
+      const recencyBoost = recencyBoostFor(candidate, referenceDate);
+      const score = clamp(Math.round(0.6 * candidate.sourceRisk + 0.4 * withinRankScore + recencyBoost - backlogPenalty));
+      scored.push({
+        ...candidate,
+        rawScore: candidate.sourceRisk,
+        withinRankScore,
+        recencyBoost,
+        backlogPenalty,
+        score,
+      });
+    });
+  }
+  return scored;
+}
+
 function diverseTop(candidates, limit) {
   const selected = [];
   const usedSubjects = new Set();
+  const counts = new Map();
+  const quotaPerSubject = Math.max(1, Math.ceil(limit / 2)); // limit=3 → 每科最多 2 件，保证 ≥2 科
   for (const candidate of candidates) {
     if (selected.length >= limit) break;
     if (usedSubjects.has(candidate.subject)) continue;
     selected.push(candidate);
     usedSubjects.add(candidate.subject);
+    counts.set(candidate.subject, 1);
   }
   for (const candidate of candidates) {
     if (selected.length >= limit) break;
-    if (!selected.includes(candidate)) selected.push(candidate);
+    if (selected.includes(candidate)) continue;
+    const used = counts.get(candidate.subject) ?? 0;
+    if (used >= quotaPerSubject) continue;
+    selected.push(candidate);
+    counts.set(candidate.subject, used + 1);
   }
   return selected;
 }
 
-export function buildPredictiveDispatch({ referenceDate, topicStates, reciteMemory, examRisk, limit = 3 }) {
+function activePattern(profile) {
+  const pattern = profile?.primaryPattern ?? null;
+  return pattern && pattern.status !== "retired" ? pattern : null;
+}
+
+function targetedTask(base, profile, { scope = "point", subject = null } = {}) {
+  const pattern = activePattern(profile);
+  if (!pattern) return base;
+  if (pattern.status === "pending") return `${base}；顺带验证候选栽点「${pattern.label}」，未认领前不写成定论`;
+  if (scope === "subject") {
+    return `${subject ?? "该科"}已确认出现「${pattern.label}」${pattern.habitual ? "的跨知识点复发" : ""}，本轮只练${pattern.focus}`;
+  }
+  return `你在该点主要栽在「${pattern.label}」，本轮只练${pattern.focus}`;
+}
+
+function patternRiskBoost(pattern, scope) {
+  if (!pattern) return 0;
+  if (pattern.status === "pending") return 1;
+  if (scope === "subject") return pattern.habitual ? 6 : 2;
+  return pattern.status === "confirmed" ? 8 : 5;
+}
+
+function habitualSubjectPortrait(profile) {
+  return profile?.primaryPattern?.habitual ? profile : null;
+}
+
+function knowledgeDispatchMetadata(item) {
+  if (["unseen", "exposed"].includes(item.stage)) {
+    return { route: "ask-pc", dimension: "understanding", type: "知识点理解" };
+  }
+  if (item.stage === "understanding") {
+    return { route: "daibei-pc", dimension: "recall", type: "知识点复述" };
+  }
+  if (item.stage === "recall") {
+    return { route: "cuoti-fupan", dimension: "application", type: "知识点精准复检" };
+  }
+  const coldDimensions = new Set(item.stability?.dimensions ?? []);
+  if (!coldDimensions.has("recall")) return { route: "daibei-pc", dimension: "recall", type: "知识点冷复述" };
+  if (!coldDimensions.has("application")) return { route: "cuoti-fupan", dimension: "application", type: "知识点精准复检" };
+  const latestCold = [...(item.evidence ?? [])]
+    .filter((row) => row.valid && row.cold && row.result === "pass" && row.promptIntegrity === "clean" && ["recall", "application"].includes(row.dimension))
+    .sort((left, right) => left.evidenceDate.localeCompare(right.evidenceDate) || left.sequence - right.sequence)
+    .at(-1);
+  return latestCold?.dimension === "application"
+    ? { route: "daibei-pc", dimension: "recall", type: "知识点冷复述" }
+    : { route: "cuoti-fupan", dimension: "application", type: "知识点精准复检" };
+}
+
+function redirectToPrerequisite(candidate, knowledgeGraph, knowledgeById) {
+  if (!candidate.kpId) return candidate;
+  const node = (knowledgeGraph?.byKnowledgePoint ?? []).find((item) => item.kpId === candidate.kpId);
+  const blockers = node?.blockers ?? [];
+  if (!blockers.length) return candidate;
+  const blocker = [...blockers].sort((left, right) => Number(right.root) - Number(left.root) || right.path.length - left.path.length || right.strength - left.strength)[0];
+  const prerequisite = knowledgeById.get(blocker.kpId);
+  if (!prerequisite) return candidate;
+  const dispatch = knowledgeDispatchMetadata(prerequisite);
+  const target = { kpId: candidate.kpId, title: candidate.title, kind: candidate.kind, sourceId: candidate.id };
+  return {
+    ...candidate,
+    kind: "knowledge",
+    id: prerequisite.kpId,
+    kpId: prerequisite.kpId,
+    subject: prerequisite.subject,
+    title: prerequisite.name ?? prerequisite.kpId,
+    type: "知识点前置补洞",
+    route: dispatch.route,
+    dimension: dispatch.dimension,
+    dueDate: [candidate.dueDate, prerequisite.dueDate].filter(Boolean).sort()[0] ?? candidate.dueDate,
+    sourceRisk: clamp(Math.round(Math.max(candidate.sourceRisk, prerequisite.riskScore ?? 0) + Math.min(12, blocker.strength * 2))),
+    task: `${prerequisite.kpId}（${prerequisite.name ?? "未命名前置"}）：它是 ${target.kpId}（${target.title ?? "目标知识点"}）的前置，须先达到 ${blocker.requiredStage}；当前 ${prerequisite.stageLabel ?? prerequisite.stage}。${prerequisite.nextAction}`,
+    baseRef: `coach-engine:knowledge:${prerequisite.kpId}:prerequisite`,
+    knowledgeStage: prerequisite.stage,
+    prerequisiteFor: [target],
+    prerequisitePath: blocker.path,
+    redirectedFrom: { kind: candidate.kind, id: candidate.id, kpId: candidate.kpId, route: candidate.route, dimension: candidate.dimension },
+    // [gpt] 2026-08-10：依赖点的栽点不能自动传播给前置点；前置点须用自己的证据重新画像。
+    failurePattern: null,
+    ankiReference: prerequisite.anki,
+  };
+}
+
+function mergePrerequisiteRedirects(candidates) {
+  const output = [];
+  const byKey = new Map();
+  for (const candidate of candidates) {
+    if (!candidate.prerequisiteFor) {
+      output.push(candidate);
+      continue;
+    }
+    const key = `${candidate.kpId}:${candidate.route}:${candidate.dimension}`;
+    const known = byKey.get(key);
+    if (!known) {
+      byKey.set(key, candidate);
+      output.push(candidate);
+      continue;
+    }
+    known.sourceRisk = Math.max(known.sourceRisk, candidate.sourceRisk);
+    known.prerequisiteFor.push(...candidate.prerequisiteFor.filter((target) => !known.prerequisiteFor.some((item) => item.kpId === target.kpId)));
+    if (known.prerequisiteFor.length > 1) {
+      known.task += `；同一前置还将解锁 ${known.prerequisiteFor.slice(1).map((item) => item.kpId).join("、")}`;
+    }
+  }
+  return output;
+}
+
+function attachInterventionMetadata(candidate, interventionResponse, forecastByKp, referenceDate) {
+  const pattern = candidate.failurePattern;
+  if (!pattern?.code) return candidate;
+  const prior = findInterventionResponse(interventionResponse, {
+    patternCode: pattern.code,
+    route: candidate.route,
+    dimension: candidate.dimension,
+  });
+  const calibrationNote = prior?.status === "needs-redesign"
+    ? "；【策略校准】历史同病根干预响应低，先复核病根并改变问法，禁止机械重复"
+    : prior?.status === "mixed"
+      ? "；【策略校准】历史响应混合，本轮必须换验证角度并留结构化结果"
+      : "";
+  // [gpt] route/dimension 之下再选择可比较的具体教法；选择理由随派单快照审计。
+  const protocol = selectInterventionProtocol({
+    patternCode: pattern.code,
+    subject: candidate.subject,
+    route: candidate.route,
+    dimension: candidate.dimension,
+    interventionResponse,
+    decisionKey: `${referenceDate}:${candidate.kpId ?? candidate.id}:${candidate.baseRef}`,
+  });
+  const protocolNote = protocol
+    ? `；【干预协议·${protocol.label}】${protocol.instruction}`
+    : "";
+  return {
+    ...candidate,
+    task: `${candidate.task}${calibrationNote}${protocolNote}`,
+    intervention: {
+      code: interventionResponseKey(pattern.code, candidate.route, candidate.dimension),
+      protocolCode: protocol?.code ?? null,
+      protocolVersion: protocol?.version ?? null,
+      protocolLabel: protocol?.label ?? null,
+      selectionMode: protocol?.mode ?? null,
+      selectionReason: protocol?.reason ?? null,
+      failurePatternCode: pattern.code,
+      failurePatternScope: pattern.scope,
+      kpId: candidate.kpId ?? null,
+      baselineRisk: candidate.kpId ? forecastByKp.get(candidate.kpId) ?? null : null,
+      expectedOutcome: "clean-pass",
+      prior: prior ? {
+        status: prior.status,
+        countable: prior.counts.countable,
+        distinctKps: prior.counts.distinctKps,
+        observedCleanPassRate: prior.observedCleanPassRate,
+      } : null,
+    },
+  };
+}
+
+export function buildPredictiveDispatch({ referenceDate, topicStates, reciteMemory, knowledgeStates, knowledgeGraph, failurePortrait, examRisk, examForecast, interventionResponse, limit = 3 }) {
   const examBySubject = new Map((examRisk?.subjects ?? []).map((item) => [item.subject, item]));
+  const knowledgeById = new Map((knowledgeStates?.items ?? []).map((item) => [item.kpId, item]));
+  const profileByKp = new Map((failurePortrait?.byKnowledgePoint ?? []).map((item) => [item.kpId, item]));
+  const profileBySubject = new Map((failurePortrait?.bySubject ?? []).map((item) => [item.subject, item]));
   const topicCandidates = (topicStates?.items ?? [])
     .filter((item) => item.dueDate <= referenceDate || item.riskScore >= 75)
     .map((item) => {
-      const score = clamp(Math.round(item.riskScore + (examBySubject.get(item.subject)?.riskScore ?? 0) * 0.15));
+      const pointState = item.kpId ? knowledgeById.get(item.kpId) : null;
+      const pointPortrait = item.kpId ? profileByKp.get(item.kpId) : null;
+      const portrait = pointPortrait ?? habitualSubjectPortrait(profileBySubject.get(item.subject));
+      const portraitScope = pointPortrait ? "point" : "subject";
+      const pattern = activePattern(portrait);
+      const baseRisk = Math.max(item.riskScore, pointState?.riskScore ?? 0);
+      const sourceRisk = clamp(Math.round(baseRisk + (examBySubject.get(item.subject)?.riskScore ?? 0) * 0.15 + patternRiskBoost(pattern, portraitScope)));
+      const probeSuffix = item.nextProbe
+        ? `；下一探针 ${item.nextProbe.variantLabel}/L${item.nextProbe.transferLevel}，验证「${item.nextProbe.probeAxisLabel}」，最早 ${item.nextProbe.earliestDate}`
+        : "";
       return {
         kind: "topic",
         id: `T${item.id}`,
+        kpId: item.kpId ?? null,
         subject: item.subject,
         title: item.title,
-        score,
-        sourceRisk: item.riskScore,
+        score: sourceRisk,
+        sourceRisk,
+        latestOpenDate: item.latestOpenDate ?? "",
         dueDate: item.dueDate,
         type: "错题冷复检",
-        task: `T#${item.id}（${item.title}）：${item.nextAction}`,
+        route: "cuoti-fupan",
+        dimension: "application",
+        task: `T#${item.id}（${item.title}${item.kpId ? `｜${item.kpId}` : ""}）：${targetedTask(item.nextAction, portrait, { scope: portraitScope, subject: item.subject })}${probeSuffix}`,
         baseRef: `coach-engine:topic:T${item.id}`,
+        knowledgeStage: pointState?.stage ?? null,
+        failurePattern: pattern ? { code: pattern.pattern, label: pattern.label, status: pattern.status, focus: pattern.focus, scope: portraitScope } : null,
+        reviewProbe: item.nextProbe ?? null,
+        ankiReference: pointState?.anki ?? null,
       };
     });
   const reciteCandidates = (reciteMemory?.items ?? [])
     .filter((item) => item.route === "daibei" && (item.dueDate <= referenceDate || item.dropRisk >= 65))
     .map((item) => {
-      const score = clamp(Math.round(item.dropRisk + (examBySubject.get(item.subject)?.riskScore ?? 0) * 0.15));
+      const kpId = item.primaryKpId ?? (item.kpIds?.length === 1 ? item.kpIds[0] : null);
+      const knowledgeLinkStatus = kpId ? "linked" : item.kpIds?.length ? "ambiguous" : "unlinked";
+      const pointState = kpId ? knowledgeById.get(kpId) : null;
+      const pointPortrait = kpId ? profileByKp.get(kpId) : null;
+      const portrait = pointPortrait ?? habitualSubjectPortrait(profileBySubject.get(item.subject));
+      const portraitScope = pointPortrait ? "point" : "subject";
+      const pattern = activePattern(portrait);
+      const sourceRisk = clamp(Math.round(Math.max(item.dropRisk, pointState?.riskScore ?? 0) + (examBySubject.get(item.subject)?.riskScore ?? 0) * 0.15 + patternRiskBoost(pattern, portraitScope)));
       return {
         kind: "recite",
         id: item.id,
+        kpId,
         subject: item.subject,
         title: item.title,
-        score,
-        sourceRisk: item.dropRisk,
+        score: sourceRisk,
+        sourceRisk,
+        latestOpenDate: "",
         dueDate: item.dueDate,
         type: "带背复检",
-        task: `${item.id}（${item.title}）：冷启动复检并把结果回写带背挂账`,
+        route: "daibei-pc",
+        dimension: "recall",
+        task: `${item.id}（${item.title}${kpId ? `｜${kpId}` : ""}）：${targetedTask("冷启动复检并把结果回写带背挂账", portrait, { scope: portraitScope, subject: item.subject })}${knowledgeLinkStatus === "unlinked" ? "；【接线债】尚未映射稳定 KP，证据先留带背账，补映射后可追溯接入" : knowledgeLinkStatus === "ambiguous" ? "；【接线冲突】关联多个 KP，本轮证据先留带背账，确认唯一主 KP 后再接入" : ""}`,
         baseRef: `coach-engine:recite:${item.id}`,
+        knowledgeLinkStatus,
+        knowledgeStage: pointState?.stage ?? null,
+        failurePattern: pattern ? { code: pattern.pattern, label: pattern.label, status: pattern.status, focus: pattern.focus, scope: portraitScope } : null,
+        ankiReference: pointState?.anki ?? null,
       };
     });
-  const ranked = [...topicCandidates, ...reciteCandidates]
+  const coveredKpIds = new Set([...topicCandidates, ...reciteCandidates].map((item) => item.kpId).filter(Boolean));
+  const knowledgeCandidates = (knowledgeStates?.active ?? [])
+    .filter((item) => !coveredKpIds.has(item.kpId) && (item.dueDate <= referenceDate || item.riskScore >= 65))
+    .map((item) => {
+      const dispatch = knowledgeDispatchMetadata(item);
+      const pointPortrait = profileByKp.get(item.kpId);
+      const portrait = pointPortrait ?? habitualSubjectPortrait(profileBySubject.get(item.subject));
+      const portraitScope = pointPortrait ? "point" : "subject";
+      const pattern = activePattern(portrait);
+      const sourceRisk = clamp(Math.round(item.riskScore + (examBySubject.get(item.subject)?.riskScore ?? 0) * 0.15 + patternRiskBoost(pattern, portraitScope)));
+      return {
+        kind: "knowledge",
+        id: item.kpId,
+        kpId: item.kpId,
+        subject: item.subject,
+        title: item.name ?? item.kpId,
+        score: sourceRisk,
+        sourceRisk,
+        latestOpenDate: item.lastEvidenceDate ?? "",
+        dueDate: item.dueDate,
+        type: dispatch.type,
+        route: dispatch.route,
+        dimension: dispatch.dimension,
+        task: `${item.kpId}（${item.name ?? "未命名知识点"}｜${item.stageLabel}）：${targetedTask(item.nextAction, portrait, { scope: portraitScope, subject: item.subject })}`,
+        baseRef: `coach-engine:knowledge:${item.kpId}`,
+        knowledgeStage: item.stage,
+        sprintLane: item.sprintLane,
+        failurePattern: pattern ? { code: pattern.pattern, label: pattern.label, status: pattern.status, focus: pattern.focus, scope: portraitScope } : null,
+        ankiReference: item.anki,
+      };
+    });
+  // [gpt] 2026-08-10：目标有未满足 confirmed 前置时，派单先转向根前置；图谱不改变状态，只改变顺序。
+  const graphOrdered = mergePrerequisiteRedirects(
+    [...topicCandidates, ...reciteCandidates, ...knowledgeCandidates]
+      .map((candidate) => redirectToPrerequisite(candidate, knowledgeGraph, knowledgeById)),
+  );
+  // [gpt] 2026-08-10：定向病根任务携带事前失分基线和历史响应，写进排期后可事后校准。
+  const forecastByKp = new Map((examForecast?.hotspots ?? []).map((item) => [item.kpId, item.lossRiskIndex]));
+  const interventionAware = graphOrdered.map((candidate) => attachInterventionMetadata(candidate, interventionResponse, forecastByKp, referenceDate));
+  const desaturated = desaturateDispatchScores(interventionAware, referenceDate);
+  const ranked = desaturated
     .sort((left, right) => right.score - left.score || String(left.dueDate).localeCompare(String(right.dueDate)) || left.id.localeCompare(right.id, "en", { numeric: true }))
     .map((candidate, index) => ({ ...candidate, rank: index + 1, priority: priorityFor(candidate.score) }));
   const queue = ranked.slice(0, 20);
@@ -503,69 +924,182 @@ export function buildPredictiveDispatch({ referenceDate, topicStates, reciteMemo
       if (p0Used) priority = "P1";
       p0Used = true;
     }
+    const scheduleId = `AUTO-${referenceDate.replaceAll("-", "")}-${candidate.kind === "topic" ? candidate.id : candidate.kind === "recite" ? `R${candidate.id}` : `K${candidate.id.replaceAll("-", "")}`}`;
     return {
       ...candidate,
       priority,
       dispatchRef: `${candidate.baseRef}:${referenceDate}`,
-      scheduleId: `AUTO-${referenceDate.replaceAll("-", "")}-${candidate.kind === "topic" ? candidate.id : `R${candidate.id}`}`,
+      scheduleId,
+      intervention: candidate.intervention?.protocolCode ? {
+        ...candidate.intervention,
+        episodeId: `EP-${scheduleId}`,
+        observationWindow: "immediate",
+      } : candidate.intervention,
     };
   });
-  return { queue, today: normalizedToday, policy: { maxToday: limit, maxP0: 1, diversity: "prefer-subject-diversity" } };
+  return { queue, today: normalizedToday, policy: { maxToday: limit, maxP0: 1, diversity: "prefer-subject-diversity", unit: "knowledge-point × failure-pattern when confirmed" } };
 }
 
-export function fitDispatchToSchedule(candidates, actionable = [], limit = 3) {
-  const availableSlots = Math.max(0, limit - actionable.length);
+/**
+ * 按判断台账校准系数折算派单量（2026-08-07 P2）。
+ * 历史任务量高估 → 可信执行量 = limit × 系数（四舍五入，最少 1 件）。
+ * [gpt] 2026-08-10：台账结果不编码“低估”，因此只允许减量，不再接受自动加量系数。
+ */
+export function fitDispatchToSchedule(candidates, actionable = [], limit = 3, calibration = null, controller = null) {
+  let effectiveLimit = limit;
+  let adjustment = null;
+  let controllerAdjustment = null;
+  const factor = calibration?.executionFactor;
+  if (factor && Number.isFinite(Number(factor.value))) {
+    const raw = Math.round(limit * factor.value);
+    if (factor.value < 1) {
+      effectiveLimit = Math.max(1, raw);
+      adjustment = { kind: "reduce", reason: factor.basis, from: limit, to: effectiveLimit, factor: factor.value };
+    }
+  }
+  // [gpt] 2026-08-10：控制器只削外围负载，不静默降低既有 P0 验收标准或丢弃到期维护义务。
+  const controllerLimit = Number(controller?.policy?.maxNewDaily);
+  if (Number.isInteger(controllerLimit) && controllerLimit >= 1 && controllerLimit < effectiveLimit) {
+    controllerAdjustment = { kind: "controller", mode: controller.mode, reason: controller.reason, from: effectiveLimit, to: controllerLimit };
+    effectiveLimit = controllerLimit;
+  }
+  const availableSlots = Math.max(0, effectiveLimit - actionable.length);
   const existingP0 = actionable.some((item) => item.priority === "P0");
   let newP0Used = false;
-  const selected = candidates.slice(0, availableSlots).map((candidate) => {
+  const currentWeek = controller?.currentWeek;
+  const currentWeekEnd = controller?.current?.weekEnd;
+  const isCurrentWeek = (item) => item.planWeek
+    ? item.planWeek === currentWeek
+    : item.dueDate && currentWeek && currentWeekEnd && item.dueDate >= currentWeek && item.dueDate <= currentWeekEnd;
+  const currentPlannedP1 = Number(controller?.current?.byPriority?.P1?.plannedUnits ?? 0);
+  let p1Used = Math.max(currentPlannedP1, actionable.filter((item) => item.priority === "P1" && isCurrentWeek(item)).length);
+  const allowP2 = controller?.policy?.allowP2 ?? true;
+  const maxP1 = Number.isInteger(controller?.policy?.maxP1PerWeek) ? controller.policy.maxP1PerWeek : Number.POSITIVE_INFINITY;
+  const selected = [];
+  for (const candidate of candidates) {
+    if (selected.length >= availableSlots) break;
+    if (candidate.priority === "P2" && !allowP2) continue;
+    if (controller?.mode === "rescue" && candidate.priority !== "P0") continue;
     let priority = candidate.priority;
-    if (priority === "P0" && (existingP0 || newP0Used)) priority = "P1";
+    if (priority === "P0" && (existingP0 || newP0Used)) {
+      // [gpt] 2026-08-10：降载模式下宁可延后候选，也不把第二个 P0 偷改成 P1；normal 保留旧兼容行为。
+      if (controller && controller.mode !== "normal") continue;
+      priority = "P1";
+    }
+    if (priority === "P1" && p1Used >= maxP1) continue;
     if (priority === "P0") newP0Used = true;
-    return { ...candidate, priority };
-  });
-  return { selected, availableSlots, existingActionable: actionable.length };
+    if (priority === "P1") p1Used += 1;
+    selected.push({ ...candidate, priority });
+  }
+  return { selected, availableSlots, existingActionable: actionable.length, effectiveLimit, adjustment, controllerAdjustment };
 }
 
 export function buildLearningCoachSnapshot(input) {
-  const topicStates = buildTopicLearningStates(input.errorSummary, input.reviews, input.referenceDate);
-  const reciteMemory = buildReciteMemoryModel(input.reciteParsed, input.referenceDate);
+  const topicStates = buildTopicLearningStates(input.errorSummary, input.reviews, input.referenceDate, { objectLinks: input.knowledgeObjectLinks });
+  const reciteMemory = buildReciteMemoryModel(input.reciteParsed, input.referenceDate, { objectLinks: input.knowledgeObjectLinks });
+  const reciteKnowledgeEvidence = reciteEvidenceFromLinks(reciteMemory, input.knowledgeObjectLinks ?? []);
+  const allKnowledgeEvidence = [...(input.knowledgeEvidence ?? []), ...reciteKnowledgeEvidence];
+  const knowledgeStates = buildKnowledgePointStates({
+    catalog: input.knowledgeCatalog,
+    evidence: allKnowledgeEvidence,
+    objectLinks: input.knowledgeObjectLinks,
+    referenceDate: input.referenceDate,
+    examDate: input.examDate,
+  });
+  const knowledgeGraph = buildKnowledgeGraph({
+    catalog: input.knowledgeCatalog,
+    relations: input.knowledgeRelations ?? [],
+    knowledgeStates,
+  });
+  const failurePortrait = buildFailurePortrait({
+    errorRows: input.errorBookRows,
+    knowledgeEvidence: allKnowledgeEvidence,
+    objectLinks: input.knowledgeObjectLinks,
+    catalog: input.knowledgeCatalog,
+  });
   const examRisk = buildExamRiskModel({
     referenceDate: input.referenceDate,
     quantV3: input.quantV3,
     studyLogs: input.studyLogs,
     topicStates,
     reciteMemory,
+    knowledgeStates,
+    knowledgeGraph,
     targets: input.targets,
     mockRecords: input.mockRecords,
+  });
+  const examForecast = buildExamLossForecast({
+    referenceDate: input.referenceDate,
+    examDate: input.examDate,
+    knowledgeStates,
+    knowledgeGraph,
+    failurePortrait,
+    studyLogs: input.studyLogs,
+    targets: input.targets,
+    mockRecords: input.mockRecords,
+  });
+  const interventionResponse = buildInterventionResponse({
+    reviewSchedule: input.reviewSchedule,
+    examForecast,
+    failurePortrait,
+    referenceDate: input.referenceDate,
+  });
+  const controller = buildLearningController({
+    schedule: input.reviewSchedule,
+    referenceDate: input.referenceDate,
+    milestoneRisk: input.milestoneRisk ?? null,
   });
   const dispatch = buildPredictiveDispatch({
     referenceDate: input.referenceDate,
     topicStates,
     reciteMemory,
+    knowledgeStates,
+    knowledgeGraph,
+    failurePortrait,
     examRisk,
+    examForecast,
+    interventionResponse,
     limit: input.dispatchLimit ?? 3,
   });
+  // 933 个目录点可随时由 catalog+evidence 重算；快照只携带已激活点，避免把 Anki
+  // 元数据重复展开成兆级 JSON。counts 仍覆盖完整目录。
+  const knowledgeStateSnapshot = Object.fromEntries(Object.entries(knowledgeStates).filter(([key]) => !["items", "active"].includes(key)));
+  knowledgeStateSnapshot.items = knowledgeStates.active;
   return {
-    schemaVersion: 1,
+    schemaVersion: 3,
     modelVersion: LEARNING_COACH_VERSION,
     referenceDate: input.referenceDate,
     topicStates,
     reciteMemory,
+    knowledgeStates: knowledgeStateSnapshot,
+    knowledgeGraph,
+    failurePortrait,
     examRisk,
+    examForecast,
+    interventionResponse,
+    controller,
     dispatch,
-    caveat: "风险分只用于调度排序；没有成套模考校准时，不代表卷面分、遗忘概率或录取胜率。",
+    caveat: "衰减/失分压力只用于调度排序，不是记忆概率；同口径完整模考少于 3 次不报分、少于 6 次不报概率。图谱只改学习顺序，Anki 不构成掌握证据。",
   };
 }
 
 export function formatLearningCoachSummary(snapshot) {
   const states = snapshot.topicStates.counts;
-  const top = snapshot.dispatch.today.map((item) => `[${item.priority}] ${item.subject}·${item.id} ${item.title}`).join("；") || "无到期候选";
+  // [gpt] 2026-08-10：快照摘要暴露 route/dimension，报告层不再二次猜 owner。
+  const top = snapshot.dispatch.today.map((item) => `[${item.priority}] ${item.subject}·${item.id} ${item.title}→${item.route}/${item.dimension}`).join("；") || "无到期候选";
   const exam = snapshot.examRisk.topRisks.map((item) => `${item.subject}${item.riskScore}`).join(" / ") || "无";
   return [
     `智能教练快照（北京 ${snapshot.referenceDate}，model v${snapshot.modelVersion}）`,
     `弱项状态：发现${states.discovered} / 确认${states.confirmed} / 强化${states.reinforcing} / 短期通过${states.short_pass} / 冷却${states.cooling} / 稳定${states.stable} / 长期保持${states.maintenance}`,
     `预测复习：主题到期 ${snapshot.topicStates.due.length} / 带背到期 ${snapshot.reciteMemory.counts.due} / 带背高掉落风险 ${snapshot.reciteMemory.counts.highRisk}`,
+    `带背接线：唯一主链接 ${snapshot.reciteMemory.counts.linked}/${snapshot.reciteMemory.counts.items} / 零链接 ${snapshot.reciteMemory.counts.unlinked} / 主链接歧义 ${snapshot.reciteMemory.counts.ambiguousLinks}（未接入且有证据 ${snapshot.reciteMemory.counts.evidenceUnlinked}）/ 含 related 的多链接记录 ${snapshot.reciteMemory.counts.multiLinked}`,
+    `知识点状态：已激活 ${snapshot.knowledgeStates.counts.activated}/${snapshot.knowledgeStates.counts.total} / 可派单 ${snapshot.knowledgeStates.counts.dispatchEligible} / 稳定 ${snapshot.knowledgeStates.counts.activatedByStage.stable} / 考试就绪 ${snapshot.knowledgeStates.counts.examReady} / 冲刺通道 ${snapshot.knowledgeStates.counts.sprintLane}`,
+    `时间衰减：已回落 ${snapshot.knowledgeStates.counts.decayed} / 衰减到期 ${snapshot.knowledgeStates.counts.dueByDecay}；图谱确认前置 ${snapshot.knowledgeGraph.counts.confirmedPrerequisites} / 活跃目标受阻 ${snapshot.knowledgeGraph.counts.activeBlockedTargets} / 环 ${snapshot.knowledgeGraph.counts.cycles}`,
+    `栽点画像：知识点级确认/观察 ${snapshot.failurePortrait.counts.activeConfirmed} / 待认领 ${snapshot.failurePortrait.counts.pending} / 已退役 ${snapshot.failurePortrait.counts.retired}；科目级确认 ${snapshot.failurePortrait.counts.subjectActiveConfirmed} / 习惯性 ${snapshot.failurePortrait.counts.habitual}`,
     `考试风险排序（调度分，非卷面分）：${exam}；校准=${snapshot.examRisk.calibration.status}`,
+    `考试失分前瞻：${snapshot.examForecast.hotspots.slice(0, 3).map((item) => `${item.kpId}:${item.lossRiskIndex}`).join(" / ") || "无已观测点"}；校准=${snapshot.examForecast.calibration.status}/${snapshot.examForecast.calibration.rankingConfidence}，可投影卷面分=${snapshot.examForecast.calibration.canProjectScore ? "是" : "否"}，可报达标概率=${snapshot.examForecast.calibration.canProjectProbability ? "是" : "否"}`,
+    `干预响应：episode ${snapshot.interventionResponse.counts.episodes} / 结构化观察 ${snapshot.interventionResponse.counts.structuredObservations} / 具体协议 ${snapshot.interventionResponse.counts.protocols} / 已支持 ${snapshot.interventionResponse.counts.supported} / 待改 ${snapshot.interventionResponse.counts.needsRedesign}`,
+    formatLearningController(snapshot.controller),
     `今日建议：${top}`,
     snapshot.caveat,
   ].join("\n");

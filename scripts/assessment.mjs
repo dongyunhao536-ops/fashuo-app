@@ -5,7 +5,15 @@ import { pathToFileURL } from "node:url";
 import { summarizeAskPoints } from "./lib/ask-point-summary.mjs";
 import { parseDailyLedger, parseReviewSchedule, parseSubjectiveLedger } from "./lib/assessment-ledgers.mjs";
 import { summarizeErrorBookRows } from "./lib/error-book-summary.mjs";
+import { summarizeReviewProof } from "./lib/error-taxonomy.mjs";
 import { buildLearningCoachSnapshot } from "./lib/learning-coach.mjs";
+import { buildKnowledgeCatalog, loadAnkiExtract } from "./lib/knowledge-catalog.mjs";
+import {
+  appendMockCalibrationForecasts,
+  assertValidProbabilityForecastLedger,
+  parseProbabilityForecastLedger,
+  summarizeProbabilityForecastLedger,
+} from "./lib/forecast-ledger.mjs";
 import { beijingDate, parseReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
 import { buildQuantV3 } from "../src/lib/quant-v3.mjs";
 
@@ -75,12 +83,16 @@ function summarizeStudy(logs, referenceDate) {
 }
 
 export async function collectAssessment(referenceDate) {
-  const [logs, errors, errorBookRows, reviews, askRows] = await Promise.all([
+  const [logs, errors, errorBookRows, reviews, askRows, knowledgePointRows, knowledgeEvidence, knowledgeObjectLinks, knowledgeRelations] = await Promise.all([
     fetchAll((from, to) => db.from("study_log").select("id, subject, chapter, activity, accuracy, log_date, raw_input, feeling").order("id").range(from, to), "study_log"),
     fetchAll((from, to) => db.from("study_error").select("id, subject, knowledge, status, absorbed_at, log_date, kp_id, source").in("status", ["open", "absorbed"]).order("id").range(from, to), "study_error"),
-    fetchAll((from, to) => db.from("error_book_v2").select("study_error_id, log_date, event_subject, knowledge, event_status, absorbed_at, role, root_cause_code, diagnosis_status, topic_id, topic_subject, chapter, section, topic_title, classification_status, mastery_status").order("study_error_id").range(from, to), "error_book_v2"),
-    fetchAll((from, to) => db.from("error_review").select("id, topic_id, review_date, result, evidence_anchor, note").order("id").range(from, to), "error_review"),
+    fetchAll((from, to) => db.from("error_book_v2").select("study_error_id, log_date, event_subject, event_kp_id, knowledge, event_status, absorbed_at, role, root_cause_code, failure_pattern_code, diagnosis_status, evidence_anchor, topic_id, topic_subject, topic_kp_id, chapter, section, topic_title, classification_status, mastery_status").order("study_error_id").range(from, to), "error_book_v2"),
+    fetchAll((from, to) => db.from("error_review").select("id, topic_id, review_date, result, angle, evidence_anchor, note, dimension, cold, prompt_integrity, variant_kind, transfer_level, probe_axis, assessment_context, duration_seconds").order("id").range(from, to), "error_review"),
     fetchAll((from, to) => db.from("ask_point_v2").select("id, subject, kp_id, question_type, step_stuck, confusion, status, effective_status, ttl_until, source, created_at, updated_at, resolved_at, resolution_note").order("id").range(from, to), "ask_point_v2"),
+    fetchAll((from, to) => db.from("knowledge_point_v2").select("kp_id, subject, parent_kp, name, page, src_line, kaofa, zhenti_freq, zhenti_years, keypoints, anki_note_ids, anki_match_level, state_authority, legacy_mastery_ignored, catalog_updated_at").order("kp_id").range(from, to), "knowledge_point_v2"),
+    fetchAll((from, to) => db.from("knowledge_evidence").select("id, operation_id, kp_id, evidence_date, dimension, result, source_kind, source_id, cold, prompt_integrity, variant_kind, transfer_level, assessment_context, duration_seconds, failure_pattern_code, diagnosis_status, evidence_anchor, note, created_at").order("id").range(from, to), "knowledge_evidence"),
+    fetchAll((from, to) => db.from("knowledge_object_link").select("id, operation_id, source_kind, source_id, kp_id, role, match_method, link_status, confidence, evidence_anchor, created_by, created_at, updated_at").order("id").range(from, to), "knowledge_object_link"),
+    fetchAll((from, to) => db.from("knowledge_relation").select("id, operation_id, prerequisite_kp_id, dependent_kp_id, relation_type, required_stage, strength, relation_status, confidence, source_kind, evidence_anchor, note, created_by, created_at, updated_at").order("id").range(from, to), "knowledge_relation"),
   ]);
 
   const reciteParsed = parseReciteLedger(requiredFile(".local/带背挂账.md"), { referenceDate });
@@ -90,7 +102,16 @@ export async function collectAssessment(referenceDate) {
   if (schedule.counts.errors) throw new Error(`评估事实源读取失败：复盘排期有 ${schedule.counts.errors} 个结构错误`);
   const daily = parseDailyLedger(requiredFile(".local/日报台账.md"), { referenceDate });
   const subjective = parseSubjectiveLedger(requiredFile(".local/主观题台账.md"), { referenceDate });
+  const probabilityForecastFile = ".local/概率预测台账.md";
+  const probabilityForecasts = existsSync(probabilityForecastFile)
+    ? summarizeProbabilityForecastLedger(
+      assertValidProbabilityForecastLedger(parseProbabilityForecastLedger(readFileSync(probabilityForecastFile, "utf8")), "评估"),
+      { referenceDate },
+    )
+    : null;
   const config = JSON.parse(requiredFile("config/coach.json"));
+  const ankiExtract = loadAnkiExtract();
+  const knowledgeCatalog = buildKnowledgeCatalog(knowledgePointRows, ankiExtract.notes);
   const examOutline = extractExamOutline();
   const quantV3 = buildQuantV3({ logs, errors, referenceDate, examOutline });
   const errorSummary = summarizeErrorBookRows(errorBookRows);
@@ -98,6 +119,9 @@ export async function collectAssessment(referenceDate) {
   const ask = summarizeAskPoints(askRows, { referenceDate, periodStart: monthStart, periodEnd: referenceDate });
   const review30Start = dateMinus(referenceDate, 29);
   const reviews30 = reviews.filter((review) => String(review.review_date) >= review30Start && String(review.review_date) <= referenceDate);
+  // [gpt] 2026-08-10：评估层只读重算迁移证明，不把旧 pass 或提示后通过等价成 stable 证据。
+  const reviewProofs = [...new Set(reviews.map((review) => review.topic_id))]
+    .map((topicId) => ({ topicId, ...summarizeReviewProof(reviews.filter((review) => review.topic_id === topicId)) }));
   const examDate = config["考试日期"];
   const baseDeadline = config["基础结业死线"];
   const coachEngine = buildLearningCoachSnapshot({
@@ -109,11 +133,20 @@ export async function collectAssessment(referenceDate) {
     studyLogs: logs,
     targets: config["目标分"],
     mockRecords: config["模拟分记录"]?.["记录"] ?? [],
+    examDate,
+    knowledgeCatalog,
+    knowledgeEvidence,
+    knowledgeObjectLinks,
+    knowledgeRelations,
+    errorBookRows,
+    // [gpt] 2026-08-10：同一份唯一排期同时供派单占位与干预响应重算，避免另建效果真相账。
+    reviewSchedule: schedule,
     dispatchLimit: 3,
   });
 
   return {
-    schemaVersion: 2,
+    // [gpt] 2026-08-10：v5 在 subjective 下新增内部 capabilityProfile / propagation 派生视图。
+    schemaVersion: 7, // [gpt] 2026-08-10：新增分层概率门槛、概率预测台账与 Brier 校准视图。
     referenceDate,
     dates: {
       examDate,
@@ -139,7 +172,10 @@ export async function collectAssessment(referenceDate) {
     coldReviews: {
       total: reviews.length,
       last30d: reviews30.length,
-      last30dByResult: Object.fromEntries(["pass", "partial", "fail"].map((result) => [result, reviews30.filter((review) => review.result === result).length])),
+      last30dByResult: Object.fromEntries(["pass", "partial", "fail", "void"].map((result) => [result, reviews30.filter((review) => review.result === result).length])),
+      qualifyingTransferPasses: reviewProofs.reduce((sum, proof) => sum + proof.qualifyingPassCount, 0),
+      legacyPasses: reviewProofs.reduce((sum, proof) => sum + proof.legacyPassCount, 0),
+      stableProofTopics: reviewProofs.filter((proof) => proof.stable).length,
       latestDate: reviews.map((review) => String(review.review_date ?? "")).sort().at(-1) ?? null,
     },
     askPoints: {
@@ -155,6 +191,19 @@ export async function collectAssessment(referenceDate) {
       withdrawnReviewCandidates: recite.withdrawnReviewCandidates.map((entry) => ({ id: entry.id, subject: entry.subject, title: entry.title, lastTouchedOn: entry.lastTouchedOn })),
       flow30d: summarizeReciteTransitions(reciteParsed, { start: dateMinus(referenceDate, 29), end: referenceDate }),
     },
+    knowledgePoints: {
+      catalog: knowledgeCatalog.counts,
+      catalogIssues: knowledgeCatalog.issues.slice(0, 50),
+      evidence: knowledgeEvidence.length,
+      objectLinks: knowledgeObjectLinks.length,
+      relations: knowledgeRelations.length,
+      anki: {
+        available: ankiExtract.available,
+        path: ankiExtract.path,
+        notes: ankiExtract.notes.length,
+        issue: ankiExtract.issue,
+      },
+    },
     dailyExecution: daily,
     reviewSchedule: {
       counts: schedule.counts,
@@ -165,9 +214,10 @@ export async function collectAssessment(referenceDate) {
     },
     subjective,
     coachEngine,
+    probabilityForecasts,
     sources: {
-      database: ["study_log", "study_error", "error_book_v2", "error_review", "ask_point_v2"],
-      local: [".local/带背挂账.md", ".local/日报台账.md", ".local/复盘排期.md", ".local/主观题台账.md", "config/coach.json", "src/lib/exam-outline.gen.ts"],
+      database: ["study_log", "study_error", "error_book_v2", "error_review", "ask_point_v2", "knowledge_point_v2", "knowledge_evidence", "knowledge_object_link", "knowledge_relation"],
+      local: [".local/带背挂账.md", ".local/日报台账.md", ".local/复盘排期.md", ".local/主观题台账.md", existsSync(probabilityForecastFile) ? probabilityForecastFile : null, "config/coach.json", "src/lib/exam-outline.gen.ts", ankiExtract.path].filter(Boolean),
     },
   };
 }
@@ -180,6 +230,11 @@ export function formatAssessmentSnapshot(snapshot) {
   const s = snapshot.reviewSchedule;
   const w = snapshot.subjective;
   const c = snapshot.coachEngine;
+  const probabilityForecasts = snapshot.probabilityForecasts;
+  const subjectProbabilities = c.examForecast.calibration.mock.subjects
+    .filter((item) => item.projection?.attainmentProbability != null)
+    .map((item) => `${item.subject}${item.projection.attainmentProbability}%[${item.projection.probabilityBand.join("-")}]`)
+    .join(" / ");
   return [
     `评估事实快照（北京 ${snapshot.referenceDate}，schema v${snapshot.schemaVersion}，量化 v${q.version}）`,
     `距首次模拟 ${snapshot.dates.daysToFirstMock} 天 / 基础结业 ${snapshot.dates.daysToBaseDeadline} 天 / 初试 ${snapshot.dates.daysToExam} 天`,
@@ -190,7 +245,11 @@ export function formatAssessmentSnapshot(snapshot) {
     `排期：逾期 ${s.counts.overdue} / 今日 ${s.counts.dueToday} / 未来 ${s.counts.upcoming}（结构化 ${s.counts.canonical}，旧格式 ${s.counts.legacy}）`,
     `主观题：案例 ${w.counts.cases} / 论述 ${w.counts.essays} / 挂病灶 ${w.counts.activeDefects}；首稿均分 ${w.scores.averageDraft ?? "无样本"}/15，最新稿均分 ${w.scores.averageLatest ?? "无样本"}/15`,
     `教练状态：强化 ${c.topicStates.counts.reinforcing} / 冷却 ${c.topicStates.counts.cooling} / 稳定 ${c.topicStates.counts.stable} / 长期保持 ${c.topicStates.counts.maintenance}；主题到期 ${c.topicStates.due.length} / 带背到期 ${c.reciteMemory.counts.due}`,
+    `知识点：激活 ${c.knowledgeStates.counts.activated}/${c.knowledgeStates.counts.total} / 可派单 ${c.knowledgeStates.counts.dispatchEligible} / 今日已衰减 ${c.knowledgeStates.counts.decayed} / 稳定 ${c.knowledgeStates.counts.activatedByStage.stable} / 考试就绪 ${c.knowledgeStates.counts.examReady}；图谱前置 ${c.knowledgeGraph.counts.confirmedPrerequisites} / 活跃受阻 ${c.knowledgeGraph.counts.activeBlockedTargets}`,
     `考试风险：${c.examRisk.topRisks.map((item) => `${item.subject}${item.riskScore}`).join(" / ") || "无"}（调度分，校准=${c.examRisk.calibration.status}）`,
+    `失分前瞻：${c.examForecast.hotspots.slice(0, 3).map((item) => `${item.kpId}:${item.lossRiskIndex}`).join(" / ") || "无已观测点"}（压力排序，非概率；校准=${c.examForecast.calibration.status}/${c.examForecast.calibration.rankingConfidence}）`,
+    `达标预测：${subjectProbabilities || c.examForecast.calibration.mock.reason}；概率回测=${probabilityForecasts ? `${probabilityForecasts.calibrationStatus}/N${probabilityForecasts.counts.resolved}/Brier ${probabilityForecasts.overall.brierScore ?? "—"}` : "尚未建账"}`,
+    `控制器：${c.controller.mode}（${c.controller.reason}）｜${c.controller.policyText}`,
     "已写 .local/assessment-snapshot.json；pinggu-pc 只据该快照下结论，缺失字段不得脑补。",
   ].join("\n");
 }
@@ -200,6 +259,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const referenceDate = options.today && options.today !== true ? String(options.today) : beijingDate();
   const snapshot = await collectAssessment(referenceDate);
   mkdirSync(".local", { recursive: true });
+  // [gpt] 2026-08-10：只有跨过 N>=6 门槛的概率才自动留账；同一模考证据日期集合幂等，不按每天重复灌样本。
+  const probabilityForecastFile = ".local/概率预测台账.md";
+  const currentForecastLedger = existsSync(probabilityForecastFile) ? readFileSync(probabilityForecastFile, "utf8") : "";
+  const recorded = appendMockCalibrationForecasts(currentForecastLedger, snapshot.coachEngine.examForecast.calibration.mock, {
+    referenceDate,
+    targetDate: snapshot.dates.examDate,
+  });
+  if (recorded.additions.length) writeFileSync(probabilityForecastFile, recorded.markdown, "utf8");
+  if (recorded.markdown) {
+    snapshot.probabilityForecasts = summarizeProbabilityForecastLedger(parseProbabilityForecastLedger(recorded.markdown), { referenceDate });
+    if (!snapshot.sources.local.includes(probabilityForecastFile)) snapshot.sources.local.push(probabilityForecastFile);
+  }
   writeFileSync(".local/assessment-snapshot.json", `${JSON.stringify(snapshot, null, 2)}\n`, "utf8");
   console.log(options.json ? JSON.stringify(snapshot, null, 2) : formatAssessmentSnapshot(snapshot));
 }

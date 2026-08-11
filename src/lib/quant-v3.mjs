@@ -7,6 +7,26 @@ export const QUANT_SUBJECTS = Object.freeze(["刑法", "民法", "法理", "宪�
 export const QUANT_TOTAL_CHAPTERS = Object.freeze({ 刑法: 21, 民法: 21, 法理: 13, 宪法: 5, 法制史: 7 });
 export const QUANT_WEIGHTS = Object.freeze({ 刑法: 75, 民法: 75, 法理: 60, 宪法: 50, 法制史: 40 });
 
+// [gpt] 2026-08-10：刑法官方目录只有章名，历史流水却大量使用节级概念；这些别名只负责归章，不直接加台阶。
+const CHAPTER_ALIASES = Object.freeze({
+  刑法: Object.freeze({
+    1: ["刑法概说", "刑法的基本原则", "刑法解释", "刑法的效力范围", "刑法的空间效力", "刑法的时间效力"],
+    2: ["犯罪的概念", "犯罪的基本特征", "犯罪的分类"],
+    3: [
+      "犯罪客体", "犯罪客观方面", "危害行为", "危害结果", "刑法上的因果关系", "犯罪主体", "刑事责任年龄",
+      "刑事责任能力", "单位犯罪", "犯罪主观方面", "犯罪故意", "犯罪过失", "事实认识错误", "法律认识错误",
+    ],
+    4: ["正当行为", "正当防卫", "紧急避险"],
+    5: ["犯罪预备", "犯罪未遂", "犯罪中止"],
+    6: ["共同犯罪的形式", "共同犯罪人的种类", "主犯", "从犯", "胁从犯", "教唆犯"],
+    7: ["实质的一罪", "法定的一罪", "处断的一罪", "想象竞合犯", "法条竞合", "牵连犯", "吸收犯"],
+    8: ["刑事责任的概念", "刑事责任的解决方式"],
+    10: ["量刑情节", "累犯", "自首", "坦白", "立功", "数罪并罚", "缓刑"],
+    11: ["减刑", "假释"],
+    12: ["时效", "赦免"],
+  }),
+});
+
 function closureQuality(open, absorbed, repeat) {
   const seen = open + absorbed;
   return (absorbed / (seen + SMOOTH_K)) * (seen > 0 ? 1 - 0.5 * (repeat / seen) : 1);
@@ -48,6 +68,28 @@ function parseChineseNumber(token) {
   return index >= 0 ? index + 1 : null;
 }
 
+function normalizeChapterKey(value) {
+  return String(value ?? "").replace(/[\s，,、：:；;·（）()《》]/g, "");
+}
+
+function semanticChapterMatches(chapters, text, minimumLength) {
+  const normalizedText = normalizeChapterKey(text);
+  if (!normalizedText) return new Set();
+  const matches = [];
+  for (const chapter of chapters) {
+    for (const key of chapter.keys) {
+      const normalizedKey = normalizeChapterKey(key);
+      if (normalizedKey.length >= minimumLength && normalizedText.includes(normalizedKey)) {
+        matches.push({ number: chapter.number, key: normalizedKey });
+      }
+    }
+  }
+  // “非法人组织”同时包含“法人”；只保留更具体的长标题，避免一条流水误记两章。
+  return new Set(matches
+    .filter((match) => !matches.some((other) => other.key.length > match.key.length && other.key.includes(match.key)))
+    .map((match) => match.number));
+}
+
 export function createChapterDetector(examOutline) {
   const outline = {};
   for (const block of String(examOutline ?? "").split("◆").slice(1)) {
@@ -64,23 +106,19 @@ export function createChapterDetector(examOutline) {
       const sections = (match[3] || "").split(/[；;]/)
         .map((section) => section.replace(/^第[0-9一二三四五六七八九十]+节\s*/, "").trim())
         .filter((section) => section.length >= 2);
-      chapters.push({ number, keys: [title, ...sections].filter((key) => key.length >= 2) });
+      const aliases = CHAPTER_ALIASES[subject]?.[number] ?? [];
+      chapters.push({ number, keys: [title, ...sections, ...aliases].filter((key) => key.length >= 2) });
     }
     outline[subject] = chapters;
   }
 
   return function detectChapters(subject, text, raw = null) {
-    const found = new Set();
     const controlledText = String(text ?? "");
     const rawText = String(raw ?? "");
     const total = QUANT_TOTAL_CHAPTERS[subject] ?? 99;
-    for (const chapter of outline[subject] ?? []) {
-      if (chapter.keys.some((key) => controlledText.includes(key))) found.add(chapter.number);
-    }
+    let found = semanticChapterMatches(outline[subject] ?? [], controlledText, 2);
     if (found.size === 0 && rawText) {
-      for (const chapter of outline[subject] ?? []) {
-        if (chapter.keys.some((key) => key.length >= 4 && rawText.includes(key))) found.add(chapter.number);
-      }
+      found = semanticChapterMatches(outline[subject] ?? [], rawText, 4);
     }
     if (found.size === 0) {
       const regex = /第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/g;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatReciteLedgerSummary, parseReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./recite-ledger.mjs";
+import { applyEvidenceEvent, applyTransition, formatReciteLedgerSummary, parseReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./recite-ledger.mjs";
 
 const header = `# 带背挂账\n\n## 挂账中（法理 1 · 刑法 1）`;
 
@@ -103,5 +103,78 @@ describe("recite ledger", () => {
 `, { referenceDate: "2026-08-05" });
 
     expect(parsed.issues).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "error", code: "transition_status_drift", id: "L1" })]));
+  });
+
+  it("把带背结果、检验条件与候选栽点留成同账本 append-only 证据", () => {
+    const original = `${header}
+### X1｜刑法｜程度词
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-05" });
+    const applied = applyEvidenceEvent(original, parsed, {
+      id: "X1",
+      date: "2026-08-05",
+      dimension: "recall",
+      result: "fail",
+      cold: true,
+      promptIntegrity: "clean",
+      failurePatternCode: "degree_strength",
+      diagnosisStatus: "pending",
+      evidenceAnchor: "背诵一本通#刑法-程度词",
+      note: "把可以说成应当",
+    });
+    const checked = parseReciteLedger(applied.markdown, { referenceDate: "2026-08-05" });
+
+    expect(checked.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(checked.records[0]).toMatchObject({ lastTouchedOn: "2026-08-05" });
+    expect(checked.records[0].explicitEvidence).toEqual([
+      expect.objectContaining({ entryId: "X1", result: "fail", cold: true, failurePatternCode: "degree_strength", diagnosisStatus: "pending" }),
+    ]);
+    expect(applied.markdown).toContain("**冷复检（08-05）**：✗；栽点：程度词/效力词漂移（pending）");
+    expect(applied.markdown).toContain("<!-- recite-evidence-v2");
+  });
+
+  it("失败证据没有栽点类型时拒绝写入", () => {
+    const original = `${header}
+### X1｜刑法｜程度词
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-05" });
+    expect(() => applyEvidenceEvent(original, parsed, {
+      id: "X1",
+      date: "2026-08-05",
+      result: "fail",
+      evidenceAnchor: "背诵一本通#刑法-程度词",
+    })).toThrow("必须记录栽点类型");
+  });
+
+  it("同一内存事务可先写冷检证据再撤池，重解析后两类事实一致", () => {
+    const original = `${header}
+### L1｜法理｜普通挂账
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-10" });
+    const evidenced = applyEvidenceEvent(original, parsed, {
+      id: "L1",
+      date: "2026-08-10",
+      dimension: "recall",
+      result: "pass",
+      cold: true,
+      promptIntegrity: "clean",
+      evidenceAnchor: "教材#L1",
+    });
+    const afterEvidence = parseReciteLedger(evidenced.markdown, { referenceDate: "2026-08-10" });
+    const transitioned = applyTransition(evidenced.markdown, afterEvidence, {
+      id: "L1",
+      event: "withdraw",
+      date: "2026-08-10",
+      evidence: "教材#L1",
+      note: "冷检通过",
+    });
+    const final = parseReciteLedger(transitioned.markdown, { referenceDate: "2026-08-10" });
+    expect(final.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(final.records[0]).toMatchObject({ status: "withdrawn", lastTouchedOn: "2026-08-10" });
+    expect(final.evidenceEvents).toHaveLength(1);
+    expect(final.transitions).toHaveLength(1);
   });
 });

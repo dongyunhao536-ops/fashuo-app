@@ -18,6 +18,14 @@ const JOBS = [
   { src: "D:/fashuo-app/.local", dest: "PC工作区备份", exclude: /[\\/]_raw$/ },
 ];
 
+// [gpt] 2026-08-10：这些小型派生教材文本是 content_mirror 的必需输入；PDF 本体仍不进 git。
+// 过去备份任务只 add 三个备份目录，导致已生成的带背 OCR 永久停在 untracked。
+const REQUIRED_ARCHIVE_ASSETS = [
+  "教材/带背/_文本/法理学_带背_文本.txt",
+  "教材/带背/_文本/法制史_带背_文本.txt",
+  "教材/带背/_文本/刑法_带背_文本.txt",
+];
+
 const git = (...args) =>
   execFileSync("git", args, { cwd: REPO, encoding: "utf8" }).trim();
 
@@ -40,6 +48,14 @@ if (!copied) {
   console.error("所有源目录都不存在，未备份任何内容。");
   process.exit(1);
 }
+
+for (const asset of REQUIRED_ARCHIVE_ASSETS) {
+  if (!existsSync(`${REPO}/${asset}`)) {
+    console.error(`必需档案资产不存在，拒绝提交不完整备份: ${asset}`);
+    process.exit(1);
+  }
+}
+git("add", "--", ...REQUIRED_ARCHIVE_ASSETS);
 
 const staged = git("diff", "--cached", "--name-only");
 if (!staged) {
