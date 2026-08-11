@@ -22,7 +22,7 @@ describe("linked file transaction", () => {
   it("拒绝把同一个文件当成两个事实源写两次", () => {
     expect(() => commitLinkedTextFiles([
       { path: "same.md", previous: "a", next: "b" },
-      { path: ".\\same.md", previous: "a", next: "c" },
+      { path: "./same.md", previous: "a", next: "c" },
     ])).toThrow(/路径不能重复/);
   });
 });
