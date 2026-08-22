@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatWeeklyDataText, type WeeklyReview } from "./weekly-review";
+import { formatWeeklyDataText, WEEKLY_STUDY_SUBJECTS, type WeeklyReview } from "./weekly-review";
 
 const empty: WeeklyReview = {
   weekStart: "2026-06-06",
@@ -14,6 +14,11 @@ const empty: WeeklyReview = {
 };
 
 describe("formatWeeklyDataText（喂复盘层的真实数据序列化）", () => {
+  it("本周流水白名单接纳跨科聚合科目综合", () => {
+    // [gpt] 2026-08-23：防止综合流水已入库却在周页被静默过滤。
+    expect(WEEKLY_STUDY_SUBJECTS).toContain("综合");
+  });
+
   it("空数据不抛、各段给如实兜底（缺失本身也是复盘信号）", () => {
     const t = formatWeeklyDataText(empty);
     expect(t).toContain("【本周真实使用数据 2026-06-06 ~ 2026-06-12】");

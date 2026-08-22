@@ -34,7 +34,8 @@ export interface WeeklyReview {
 // 但这里的白名单还停在五科，导致英语 study_log 落了库却在「本周学了什么」和「学习效果」里整块消失
 // ——云 07-30 刷完首篇 2016 Text 1（100%）后当场发现看不到。与 scripts/weekly.mjs 的白名单对齐。
 // 注：五科雷达/覆盖率仍不含英语（章节口径不同），那是 dashboard.ts 的 SUBJECTS，别混改。
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"];
+// [gpt] 2026-08-23：跨科聚合复盘使用“综合”；仅进入周流水展示，不进入五科能力量化。
+export const WEEKLY_STUDY_SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语", "综合"] as const;
 // "学了什么" 只认这几类【实打实学习动作】——含带背(PC辅导带背，云 2026-07-07 要求计入)；把闲聊/被考(复盘)/策略讨论(其他)/未识别排除。
 // 2026-07-28 补「复盘」：量化 v3 已把复盘计入"检验"台阶（见 dashboard.ts 文件头），
 // 这里却还停在 v2 的旧白名单，导致云最高频的动作（销账/讲解）在「本周学了什么」里整块消失。
@@ -84,7 +85,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
   for (const s of study) {
     const subj = (s.subject as string | null) ?? "";
     const act = (s.activity as string | null) ?? "";
-    if (!SUBJECTS.includes(subj) || !STUDY_ACTIVITIES.has(act) || !s.chapter) continue;
+    if (!(WEEKLY_STUDY_SUBJECTS as readonly string[]).includes(subj) || !STUDY_ACTIVITIES.has(act) || !s.chapter) continue;
     const row = studyMap.get(subj) ?? { chapters: new Set<string>(), activities: new Set<string>() };
     row.chapters.add(String(s.chapter));
     row.activities.add(act);
@@ -98,7 +99,7 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
 
   // —— 带背/背诵学习效果（feeling·掌握轨迹）：喂复盘层定"下周精度重点"；不卡章节（小结行 chapter=null 也收）——
   const effects = study
-    .filter((s) => SUBJECTS.includes((s.subject as string) ?? "") && s.feeling)
+    .filter((s) => (WEEKLY_STUDY_SUBJECTS as readonly string[]).includes((s.subject as string) ?? "") && s.feeling)
     .map((s) => ({
       subject: s.subject as string,
       chapter: (s.chapter as string | null) ?? null,
