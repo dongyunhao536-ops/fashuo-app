@@ -34,12 +34,16 @@ export interface WeeklyReview {
 // 但这里的白名单还停在五科，导致英语 study_log 落了库却在「本周学了什么」和「学习效果」里整块消失
 // ——云 07-30 刷完首篇 2016 Text 1（100%）后当场发现看不到。与 scripts/weekly.mjs 的白名单对齐。
 // 注：五科雷达/覆盖率仍不含英语（章节口径不同），那是 dashboard.ts 的 SUBJECTS，别混改。
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"];
-// "学了什么" 只认这几类【实打实学习动作】——含带背(PC辅导带背，云 2026-07-07 要求计入)；把闲聊/被考(复盘)/策略讨论(其他)/未识别排除。
+// [gpt] 2026-08-23：跨科复盘用 subject=综合；它只进入周流水展示，不进入五科能力量化。
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语", "综合"];
+export const isWeeklyStudySubject = (subject: string) => SUBJECTS.includes(subject);
+// "学了什么" 只认这几类【实打实学习动作】；把闲聊/策略讨论(其他)/未识别排除。
 // 2026-07-28 补「复盘」：量化 v3 已把复盘计入"检验"台阶（见 dashboard.ts 文件头），
 // 这里却还停在 v2 的旧白名单，导致云最高频的动作（销账/讲解）在「本周学了什么」里整块消失。
 // 2026-07-31 补「看书」：自学看书＝输入台阶，此前无此档被塞进「听课」（云当日点名）；白名单漏掉它会重演英语那次"整块消失"。
-const STUDY_ACTIVITIES = new Set(["听课", "看书", "做题", "背诵", "带背", "复盘"]);
+const STUDY_ACTIVITIES = new Set(["听课", "看书", "做题", "背诵", "复盘"]);
+// [gpt] 2026-08-16：新流水统一存“背诵”；旧“带背/自背”只在读取端兼容。
+const canonicalActivity = (activity: string) => activity === "带背" || activity === "自背" ? "背诵" : activity;
 
 export async function buildWeeklyReview(today = new Date()): Promise<WeeklyReview> {
   // 自然周窗口（云 2026-07-01）：北京时间本周一 ~ 周日，不再滚动最近 7 天。
@@ -83,8 +87,8 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
   const studyMap = new Map<string, { chapters: Set<string>; activities: Set<string> }>();
   for (const s of study) {
     const subj = (s.subject as string | null) ?? "";
-    const act = (s.activity as string | null) ?? "";
-    if (!SUBJECTS.includes(subj) || !STUDY_ACTIVITIES.has(act) || !s.chapter) continue;
+    const act = canonicalActivity((s.activity as string | null) ?? "");
+    if (!isWeeklyStudySubject(subj) || !STUDY_ACTIVITIES.has(act) || !s.chapter) continue;
     const row = studyMap.get(subj) ?? { chapters: new Set<string>(), activities: new Set<string>() };
     row.chapters.add(String(s.chapter));
     row.activities.add(act);
@@ -98,11 +102,11 @@ export async function buildWeeklyReview(today = new Date()): Promise<WeeklyRevie
 
   // —— 带背/背诵学习效果（feeling·掌握轨迹）：喂复盘层定"下周精度重点"；不卡章节（小结行 chapter=null 也收）——
   const effects = study
-    .filter((s) => SUBJECTS.includes((s.subject as string) ?? "") && s.feeling)
+    .filter((s) => isWeeklyStudySubject((s.subject as string) ?? "") && s.feeling)
     .map((s) => ({
       subject: s.subject as string,
       chapter: (s.chapter as string | null) ?? null,
-      activity: (s.activity as string | null) ?? "",
+      activity: canonicalActivity((s.activity as string | null) ?? ""),
       feeling: String(s.feeling),
     }));
 
@@ -179,7 +183,7 @@ export function formatWeeklyDataText(r: WeeklyReview): string {
   }
 
   if (r.effects?.length) {
-    L.push(`· 带背/学习效果（掌握轨迹，据此定下周精度重点）：`);
+    L.push(`· 背诵/学习效果（掌握轨迹，据此定下周精度重点）：`);
     for (const e of r.effects) {
       L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`);
     }

@@ -3,8 +3,12 @@
 //   B) Qwen-VL（OpenAI 兼容 /v1/chat/completions，image_url）—— 兜底路径
 // 跑法：node --env-file=.env.local scripts/probe-vision.mjs
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { resolveAppRoot } from "../lib/workspace-paths.mjs";
 
-const b64 = readFileSync("D:/fashuo-app/tmp-ocr-test.png").toString("base64");
+// [gpt] 2026-08-23：允许 Mac/Windows 使用同一入口，测试图也可显式覆盖。
+const imagePath = process.env.FASHUO_VISION_PROBE_IMAGE ?? join(resolveAppRoot(), "tmp-ocr-test.png");
+const b64 = readFileSync(imagePath).toString("base64");
 const BASE = process.env.LLM_BASE_URL;
 const KEY = process.env.LLM_API_KEY;
 const PROMPT = "读出这张图里的所有中文文字，逐行原样输出，不要解释。";

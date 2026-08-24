@@ -45,6 +45,8 @@ export function normalizeLearningAttempt(operation, today) {
   const maxScore = optionalNumber(operation.maxScore, "maxScore");
   if ((score == null) !== (maxScore == null)) throw new Error("score/maxScore 必须成对提供");
   if (score != null && (!(maxScore > 0) || score < 0 || score > maxScore)) throw new Error("score 必须位于 0..maxScore");
+  // [gpt] 2026-08-12：void 是教练题面事故审计，不是用户作答成绩；禁止夹带分数归责用户。
+  if (result === "void" && score != null) throw new Error("void 作废题不能记录 score/maxScore");
 
   const questionRef = operation.questionRef == null ? null : String(operation.questionRef).trim() || null;
   const sourceId = operation.sourceId == null ? null : String(operation.sourceId).trim() || null;
@@ -107,6 +109,14 @@ export function normalizeLearningAttempt(operation, today) {
     // [gpt] 2026-08-11：显式保存“是否应投影知识证据”，监控只据声明查部分成功，不从 kp_id 猜生产意图。
     metadata: {
       ...(operation.metadata ?? {}),
+      // [gpt] 2026-08-12：调用方不能把污染题改写成用户失败或有效题量；void 归责在规范化层强制覆盖。
+      ...(result === "void" ? {
+        responsibility: "teacher",
+        count_as_valid_attempt: false,
+        count_as_user_error: false,
+        advance_cooldown: false,
+        close_schedule: false,
+      } : {}),
       projection_expected: operation.projectEvidence ?? true,
     },
     project_evidence: operation.projectEvidence ?? true,

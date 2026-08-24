@@ -5,6 +5,7 @@ import {
   assertScheduleLink,
   auditScheduleLinks,
   closeScheduleItem,
+  extractScheduleTargetIds,
   setScheduleDispatch,
 } from "./schedule-store.mjs";
 
@@ -178,6 +179,30 @@ describe("schedule store", () => {
     })).toThrow(/冷检.*clean/);
   });
 
+  it("void 只归责教练并保持原排期 open，不消耗有效题量、计划完成或冷却窗口", () => {
+    const markdown = "# 复盘排期\n- [ ] 2026-08-05 | P1 | id=R1 | type=错题冷复检 | task=T#1 | ref=coach-engine:topic:T1:2026-08-05\n";
+    const result = closeScheduleItem(markdown, "R1", {
+      date: TODAY,
+      result: "题面点名错误项，作废",
+      outcome: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+    });
+    expect(result).toMatchObject({
+      markdown,
+      closed: false,
+      reason: "teacher-invalid-prompt",
+      disposition: {
+        responsibility: "teacher",
+        countAsValidAttempt: false,
+        countAsUserError: false,
+        advanceCooldown: false,
+        closeSchedule: false,
+      },
+    });
+    expect(parseReviewSchedule(result.markdown, { referenceDate: TODAY }).items[0]).toMatchObject({ status: "pending", completedOn: null });
+  });
+
   it("同一对象已有未完成排期时幂等跳过", () => {
     const markdown = "# 复盘排期\n- [ ] 2026-08-04 | P1 | id=OLD | type=错题冷复检 | task=T#1 | ref=coach-engine:topic:T1:2026-08-04\n";
     const result = appendScheduleItem(markdown, {
@@ -273,6 +298,16 @@ describe("schedule store", () => {
     expect(() => assertScheduleLink(markdown, "RL9", { kind: "recite", targetId: "L10", referenceDate: TODAY })).toThrow(/不是 L10|不包含目标 L10/);
     expect(() => assertScheduleLink(markdown, "T62", { kind: "recite", targetId: "L9", referenceDate: TODAY })).toThrow(/类型/);
     expect(() => assertScheduleLink(markdown, "MULTI", { kind: "recite", targetId: "L30", referenceDate: TODAY })).toThrow(/同时包含 L30、L31/);
+  });
+
+  it("错题目标精确抽取支持斜杠简写，且单条联动拒绝整组排期提前结清", () => {
+    // [gpt] 2026-08-12：T#10 与 T#108 必须保持两个离散目标，不能用字符串包含关系判断。
+    const item = { ref: "T#10/T#25", task: "T#10/T#25 各打一发；另有 T#108 未来复检" };
+    expect(extractScheduleTargetIds(item).topicIds).toEqual([10, 25, 108]);
+    const markdown = "# 复盘排期\n- [ ] 2026-08-05 | P0 | id=GROUP | type=错题复检 | task=T#10/T#25 各打一发 | route=cuoti-fupan | dimension=application | ref=T#10/T#25\n";
+    expect(() => assertScheduleLink(markdown, "GROUP", {
+      kind: "topic", targetId: 10, referenceDate: TODAY, route: "cuoti-fupan", dimension: "application",
+    })).toThrow(/单条 review 不得提前结清整组/);
   });
 
   it("关联审计能发现排期仍开但带背条目已经撤池", () => {

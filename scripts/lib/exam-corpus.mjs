@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
+import { resolveExamTextRoot } from "./workspace-paths.mjs";
 
-export const DEFAULT_EXAM_TEXT_ROOT = "D:\\fashuo\\真题\\_文本";
+// [gpt] 2026-08-23：默认真题根随档案根跨平台解析，仍可由环境变量覆盖。
+export const DEFAULT_EXAM_TEXT_ROOT = resolveExamTextRoot();
 export const EXAM_CORPUS_PARSER_VERSION = "exam-corpus-v1";
 
 const SECTION_RE =

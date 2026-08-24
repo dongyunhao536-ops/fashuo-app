@@ -2,6 +2,7 @@
 import { readFileSync } from "node:fs";
 import { expandMirrorScope } from "./mirror-scope.mjs";
 import { prepareMirrorGeneration } from "./mirror-generation.mjs";
+import { resolveArchiveRoot } from "./workspace-paths.mjs";
 
 export const DEFAULT_MIRROR_SCOPE = "config/mirror-scope.json";
 
@@ -36,7 +37,8 @@ export async function loadLocalMaterialCorpus({
 } = {}) {
   const configBytes = readFileSync(configPath);
   const config = JSON.parse(configBytes.toString("utf8"));
-  const root = archiveRoot ?? process.env.ARCHIVE_DIR ?? config.root;
+  // [gpt] 2026-08-23：本地五源检索与同步链共享跨平台档案根解析。
+  const root = archiveRoot ?? resolveArchiveRoot({ configRoot: config.root });
   const scope = await expandMirrorScope(config, { root });
   if (scope.files.length === 0) {
     throw new Error(`本地材料范围为空：${root}`);

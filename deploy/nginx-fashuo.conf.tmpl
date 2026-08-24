@@ -38,9 +38,9 @@ server {
 
     # PostgREST 路由（supabase-js 默认路径 /rest/v1/<table>）
     location /rest/v1/ {
-        # 把 /rest/v1/foo → /foo 喂给 PostgREST
-        rewrite ^/rest/v1/(.*)$ /$1 break;
-        proxy_pass http://127.0.0.1:3001;
+        # [gpt] 2026-08-20：用 proxy_pass 尾斜杠稳定剥离 /rest/v1/，避免安全更新改变 rewrite 捕获行为后全表 404。
+        # /rest/v1/foo → /foo；不要改回依赖正则捕获的 rewrite。
+        proxy_pass http://127.0.0.1:3001/;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;

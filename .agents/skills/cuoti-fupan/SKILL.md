@@ -1,62 +1,62 @@
 ---
 name: cuoti-fupan
-description: 云在电脑端说“复盘错题”“销账错题”“考我错题”“抽查老题”“清错题本”，或想检验某个做题弱项是否真正掌握时用。按法硕真题思路出递进变式，先用教材/真题证据判题，再把一次错题事件归入长期弱项主题并记录跨会话冷复检；掌握后才销账。
+description: 用户上传、登记或汇报真实错题（包括进度附错题），或要复盘、重做、抽查、清理、销账旧错题及检验应用弱项时使用；“继续清几道老题/换一科”也触发。英语错题转 yingyu-pc，背诵掉点转 daibei-pc，需 15 分批改的主观题转 lunshu-pc。
 ---
+
+<!-- [gpt] 2026-08-13：Codex 原生轻入口；新错摄取、指定复检和系统选题分路执行。 -->
 
 # 错题复盘
 
-目标：把真实做错事件转成可复用的长期弱项主题，用冷复检证明“不二过”。不要把长段错题描述当分类，不要把刚讲完答对当掌握。
+目标是把真实错误讲透、留证，并用跨日迁移证明不再犯。当天新错只讲解与归类，不当天重考或销账。三条入口都使用 Skill Run，业务写回不能手工补签。
 
-## 必读
+## Codex 正常执行快路径
 
-开始前完整读取：
+<!-- [gpt] 2026-08-13：正常路径信任受控脚本回执，避免为确认契约反复翻实现。 -->
+规定命令成功即以结构化回执为准；正常执行禁止读取 `scripts/` 实现、全库 `rg`、扫描 `.local`、运行 `git status` 或加载无关科目材料。命令明确失败且错误信息不足时，只定向读取报错涉及的一个文件片段；一次仍不能推进就安全结束 Run 并报告阻塞，不得重复兜圈。
+PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF8 -LiteralPath <路径>`，禁止先按系统默认编码读取再重试。<!-- [gpt] 2026-08-13 -->
+错题写回的来源、章节、分类状态和病根一致性由 `validateErrorEntry()` 在暂存与最终同步两端执行；模型只提供事实判断。遇到结构化错误码时补对应事实，不要重读本 Skill 猜规则。<!-- [gpt] 2026-08-13 -->
 
-- [数据契约.md](数据契约.md)：取数、归类、病根代码、状态迁移和写回命令。
-- [命题判题规范.md](命题判题规范.md)：出题、判题、病根认领、销账门槛。
-- [../_shared/智能教练契约.md](../_shared/智能教练契约.md)：七阶段状态、遗忘间隔、风险分边界与自动排期。
+## 三条入口
 
-需要修改易混概念档时，再读 `D:\fashuo\易混概念库\_索引.md`；该仓只在用户同意同步内容库后提交和推送。
+### 1. 新错题或进度附错题
 
-## 开场
+1. 直接启动 `node scripts/skill-run.mjs start --skill cuoti-fupan --subject <科目> --kind intake --json`，不加载跨科候选或完整个人账本。
+2. 从图片/原话形成一个批次清单；题图数必须等于错题数。有总题数时实算 accuracy。清单只提交模型确实知道的主题/错因；未知项省略，由校验器落为 pending/unclassified。
+3. 一次运行 `node --env-file=.env.local scripts/cuoti.mjs record-batch <清单> --run <SR-ID>`，写一条进度和 N 条错题并同步；历史回放只用 `verify-batch`，不得重复入账。
+4. 对本批独立核心考点一次运行 `material-batch --run <SR-ID>`。按原顺序一次讲一题：结论、规则、原错因、一个最小纠偏动作。错因未确认就写 pending，不能替用户编病根。
+5. 等待用户认领时，以 `checkpoint --phase intake_question --done target_frozen --ref <批次/事件>` 等待；全部讲完后以 `end --phase intake --done target_frozen,response_verified --ref <批次/事件列表>` 收口。
 
-1. 运行 `coach.mjs ledger`，读取当前进度、轮次和本周流水。
-2. 运行 `node --env-file=.env.local scripts/coach-engine.mjs snapshot` 与 `node scripts/schedule.mjs summary`；前者给七阶段、到期日与风险排序，后者是唯一行动队列。自动排期只有 `route=cuoti-fupan + dimension=application` 才由本 skill 执行；旧行缺字段可兼容，字段声明冲突必须拒绝。再看 `.local/weekly-draft.md` 的 P0/P1，只用于宏观优先级。<!-- [gpt] 2026-08-10 -->
-3. 运行 `cuoti.mjs topics [科目]`、`cuoti.mjs list [科目]`、`cuoti.mjs profile [科目]` 和 `cuoti.mjs proof [科目]`。`proof` 是主题 stable 的可重算审计视图，并给出下一探针的最早日期、变式、迁移等级与结构化验证轴；它是命题处方，不是现成题目或掌握概率。若显示库内状态偏差，以证据重算结果为准并先修数据链。画像只据已记录证据派生：`pending` 只作候选，单个已确认个案不叫习惯性；未指定科目时，按“已到期强化/冷却主题 > 复发主题 > 同主题高频 > 真题核心”选。若画像显示未映射证据，再运行 `node --env-file=.env.local scripts/knowledge.mjs suggest-errors [科目]`：它只做候选预览，必须先 `show <KP-ID>` 核对；跨科做题方法、目录外科目和多义候选允许保留未映射，绝不为清零硬连。<!-- [gpt] 2026-08-10 -->
-4. **读取教练分科校准（[gpt] 2026-08-10）**：运行 `node scripts/judgment-ledger.mjs calibration`。相关科目栽点预测少于 5 条时不调策略；样本足够但兑现偏低时，降低诊断置信度、扩大互斥候选，不得在作答前提示预测内容。
-5. 英语事件跳过并转 `yingyu-pc`；背诵栽点转 `daibei-pc`。风险分、画像分布和预测兑现率都不是掌握概率。
+### 2. 用户点名 T#、事件或具体旧题
 
-如果 P0 科目本周仍零动作，开场只提醒一句最小启动动作，不阻塞本次复盘。
+启动 `skill-run.mjs start --skill cuoti-fupan --subject <科目> --kind review`，只查询该对象的 `proof`/原始事件，不加载跨科快照。然后按下方复检流程执行。
 
-## 工作流
+### 3. 用户让系统选题、继续、换科或清一批老题
 
-1. 选一个 T#主题或同病根小窝，先读每条事件的原始栽点；画像中的“习惯性”可决定优先训练角度，“已确认个案”只作局部证据，“候选待认领”必须在本题重新验证。优先遵守 `proof.nextProbe` 的变式、验证轴与冷却日；若材料证据表明处方不适用，说明理由后重算，不可静默改轴。<!-- [gpt] 2026-08-10 -->
-2. 对核心术语运行 1–3 次 `material`，取得教材、真题或讲义锚点。
-3. 按《命题判题规范》出递进题，一次给 1–2 道；第一题必须正中原始错因。把验证轴落实为题目中主动改变的变量，但不得把轴名、病根预测或规则结论写进题面。<!-- [gpt] 2026-08-10 -->
-   - **出题后、云作答前落一条预测（2026-08-07 判断台账；[gpt] 2026-08-10 分科校准）**：`node scripts/judgment-ledger.mjs add --type 栽点 --prediction "他会栽在 X" --subject 科目 --ref T#id --verify-date 当日 --basis "依据"`；判分时 `resolve <id> hit|miss`。判对的没人记＝分母永远不存在，所以**对错都记**；预测只在教练侧静默保存。
-4. 云作答后，先保留原答与依据，再逐项判。答错时给 2–4 条互斥病根候选，由云认领。
-5. 新错误用带 `--topic` 的 `add` 入账；旧事件用 `classify` 补主题。主题拿不准时标 `--classification pending`；病根未认领一律 `--diagnosis pending`，认领后才 confirmed。
-6. 每个真实复检都按《数据契约》用 `review T# pass|partial|fail|void --variant ... --axis ... --angle ... --anchor ...` 留完整证据。<!-- [gpt] 2026-08-10 --> `--axis` 是受控的主动变量，`--angle` 是本题可读细节；改写 angle 不能伪造第二个轴。变式决定维度和迁移等级，禁止自由打分；同日订正、提示通过、原题复现、规则复述与 teach-back 都不能凑主题 stable，坏题干记 `void --variant invalid --invalid-prompt`，内部轴自动记 `invalid`。
-7. 达到事件销账门槛后运行 `absorb #id...`；<!-- [gpt] 2026-08-10 --> CLI 与 outbox 落库前都会重验：最近失败后至少两条带原答/依据的 clean L3+ application 通过、覆盖两个结构化验证轴，且至少一条是跨会话冷检；当日新错直接拒绝。只改写 angle 不算第二轴，禁止手改 outbox 绕过。写操作自动进入可靠 outbox 并立即同步，成功前不要说已入库。误销账只用 `reopen #id --reason "..."` 行政恢复，不得用 `recheck-fail` 伪造失败或复发。
-8. 用 `schedule.mjs done <ID> --result "..."` 回写完成项；未过则保留并用 `schedule.mjs add` 排下一次，会话里新定日期当场落账。
+运行一次 `node --env-file=.env.local scripts/skill-context.mjs cuoti [聚焦科目]`。它负责跨科候选、到期排期和冷却条件。只有在 `pass/partial/fail/absorbed/new-error`、用户要求继续/换科、同科连续两题或最小动作完成后，才带 `--signal` 重规划；不要每题前后重复拉全账。
 
-## 特殊路径
+**[gpt] 2026-08-13：事件销账与主题冷却是两个并行状态。**候选若写“事件本题通过可销账；主题冷却至 YYYY-MM-DD，本轮不推进 stable”，表示已有一次跨会话冷检，本题可补第二验证轴并只关闭事件；主题仍等跨日 stable 证据。不得把主题 `nextProbe` 的未来日期反过来解释成“当前事件不能销账”，也不得因此重复钻取同一 proof。
 
-- 云说“抽查老题/复盘老错题”：运行 `recheck`，最久未碰优先。通过后 `pass #id` 维护全覆盖轮换；若有 T#，同时按真实题型写完整 `review` 证据。失败用 `recheck-fail #id` 重挂并写完整 `review T# fail --variant ... --axis ... --angle ... --anchor ...`，不得再写裸 pass/fail。
-- 当日新错：只讲解、认领、`add`、排冷考；当天不重考、不销账。**讲解不另记 study_log 流水（2026-08-07 云定）**：错题讲解只在会话里讲透，错题本身以 `add` 入账即算记录，不再为讲解单独开一条学习日志。
-- **复盘活动落流水（2026-08-09 云定·口径修正）**：周三轻滚、周日冷启动等整场复盘活动结束，按科目各记一条 `activity=复盘` 的 study_log（`coach.mjs log --subject X --activity 复盘 --chapter "周日错题复盘·..." --feeling "验了哪些主题、pass/fail、病根认领、排期回写"`），`log_date` 用当天北京日。复盘活动与“记录错题后的逐题讲解”是两件事：前者落流水、后者不落。
-- **周三轻滚强度（2026-08-09 云定·加量；[gpt] 2026-08-10 门槛固化）**：原“20 分钟维护性·不销账”改为 **30–40 分钟·允许销账**——从本周目标窝里抽 3–5 条验证；旧事件至少先有一条跨会话冷检，再补无提示 clean 角度，累计覆盖两个结构化验证轴且都能讲出依据，才当场 `absorb`。当日新错仍不当天销。
-- 复发主题：只认结构化迁移门槛；第一次合格 L3+ 通过只进入 monitoring，第二次还必须跨至少 7 天、换结构化验证轴且含一次 L4 才可能 stable。
-- 主观题需要 15 分逐句批改时转 `lunshu-pc`；本 Skill 继续保存客观题式错因和表达漏点主题。
+## 复检流程
 
-## 红线
+1. 冻结稳定对象 ID，并读取事件原始栽点与 `proof.nextProbe`；相似度候选不能冒充映射事实。
+2. 用 `material` 或 `material-batch --run <SR-ID>` 核对核心规则。材料没讲就降信心，不能硬判。
+3. 依 [命题判题规范.md](命题判题规范.md) 生成一份不泄答案的完整题面；运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen --hash <SHA256> --ref <T#/E#/排期>` 展示。
+4. 用户作答后保留其原答与依据，逐项判定。把判定、规则、涵摄、证据锚点与病根状态写入临时 JSON，运行 `node scripts/judgment-result.mjs check --file <判题结果.json> --run <SR-ID>`；只展示脚本返回的证据卡。教材、讲义或考试分析证据必须同时带页码（未知须明示）与行号；法条带条号，真题带年份与题号。pending 病根的确定性表述会被自动阻断。<!-- [gpt] 2026-08-13 -->
+5. 用 `cuoti.mjs review ... --run <SR-ID>` 记录真实结果并同步；CLI 会在进入 outbox 前强制核对判题卡与写回的 T#、结果和病根状态。提示后通过、原题复现、规则复述和同日订正不能冒充跨日 clean 迁移。<!-- [gpt] 2026-08-13 -->
+6. 业务与判题 Gate 回执成功后分流：`pass` 或无需认领病根时，证据门槛满足才 `absorb`，并用 `end --phase result --hash <证据卡SHA256>` 收口；`partial/fail + diagnosis=pending` 必须用 `checkpoint --phase diagnosis_question --hash <pending证据卡SHA256>` 原样展示证据卡并等待认领，禁止先 `end`。用户选择后，沿用同一 Run 执行 `cuoti.mjs classify <事件id> ... --diagnosis confirmed|rejected --run <SR-ID>`（或在尚未写 review 时直接带已认领状态写入），重新生成 confirmed/rejected 证据卡，再用新卡 hash 收口。不能手签 `response_verified/diagnosis_recorded`，也不能改写 Gate 卡。<!-- [gpt] 2026-08-13 -->
 
-- 题干不加粗决定答案的事实，不提示答案所在章节、表格或条目数。
-- 引用编号必须带内容摘要，如 `T#12（监护人顺位）`。
-- 判题前必须取证；材料没讲就说不确定并降信心。
-- 云未认领前，不把教练推断写成 confirmed。
-- 知识点相似度只缩小检索范围，不是映射事实；`suggest-errors` 的全部候选都保持 pending。只有人工核对源对象、目标 KP 与材料锚点后，才可显式 `link ... --status confirmed --method manual --anchor ...`。<!-- [gpt] 2026-08-10 -->
-- 不把画像样本占比、预测兑现率或任何调度分写成掌握率；低样本不得自动改训练策略。
-- `pending` 栽点可以帮助设计验证题，但不得驱动下一探针；处方只采用 confirmed 栽点，缺 confirmed 时走中性验证轴。<!-- [gpt] 2026-08-10 -->
-- `absorb` 只销事件，且必须通过自动证据门槛；一次通过最多让主题进入 monitoring，不能销事件。主题是否 stable 只认满足结构化迁移门槛的跨日 `error_review`，旧裸 pass 最多 monitoring。<!-- [gpt] 2026-08-10 -->
-- 不改 `kp_state`、`detection_log` 或背诵台账状态。
-- 全程按法硕口径，不引法考通说替代考试分析。
+## 决策与数据底线
+
+- 今日/逾期且带稳定对象的具体 P0 排期先执行；周报宏观 P0 只加权，不锁科。
+- `pending` 病根只用于设计中性探针；用户认领或证据确认后才可写 confirmed。认领前不说“暴露了、证明了、确认了某病根”，只能列 2–4 个互斥候选。<!-- [gpt] 2026-08-13 -->
+- 题面污染写 `void`，只归责教练，不记用户 fail、不推进冷却、不关闭排期。
+- 写入、同步和销账只认脚本回执；不以自然语言声称“已经记录”。
+- 输出只需交代结论、关键依据、证据是否有效、事件能否销账以及下一步；不要朗读内部状态机。
+
+## 按需参考
+
+- 写入字段、主题状态、复检门槛：读 [数据契约.md](数据契约.md)。
+- 出题、判题和病根认领：读 [命题判题规范.md](命题判题规范.md)。
+- P0、文字瑕疵、动态重规划：读 [执行裁量契约](../_shared/执行裁量契约.md)。
+- 主题 stable、遗忘间隔与风险边界：读 [智能教练契约](../_shared/智能教练契约.md)。
+- 周三轻滚、整组排期、知识映射、复发主题等少见路径：只读 [完整运行参考.md](完整运行参考.md) 的相关段落。

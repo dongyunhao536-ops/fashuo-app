@@ -22,6 +22,12 @@ import { normalizeTransferMetadata } from "./evidence-transfer.mjs";
 import { withIngestAudit } from "./ingest-ledger.mjs";
 import { recordLearningAttempt } from "./learning-attempt.mjs";
 import { materializeStudyLogAttempt } from "./attempt-producers.mjs";
+import { errorEntrySourceLabel, isLegacyErrorEntry, migrateLegacyErrorEntry, validateErrorEntry } from "./error-entry.mjs";
+import {
+  normalizeStudyActivity,
+  recitationModeFromActivity,
+  withRecitationModeMarker,
+} from "./study-activity.mjs";
 
 const STUDY_OUTBOX_HANDLER_VERSION = "data-foundation-v1[gpt]";
 
@@ -213,8 +219,13 @@ async function appendKnowledgeEvidence(db, op, today) {
   if ((result === "void") !== (promptIntegrity === "invalid")) throw new Error("知识证据 void 必须对应 invalid 题干，invalid 题干也必须记 void");
   if (cold && promptIntegrity !== "clean") throw new Error("知识证据冷检必须使用 clean 题干");
   const sourceKind = oneOf(op.sourceKind ?? "manual", EVIDENCE_KINDS, "知识证据来源");
-  const diagnosisStatus = validateDiagnosisStatus(op.diagnosisStatus ?? "pending");
-  const failurePatternCode = validateFailurePattern(op.failurePatternCode);
+  // [gpt] 2026-08-12：void 不能携带用户栽点；教练责任在统一证据入口再次强制覆盖。
+  const teacherVoid = result === "void";
+  const diagnosisStatus = validateDiagnosisStatus(teacherVoid ? "pending" : op.diagnosisStatus ?? "pending");
+  const failurePatternCode = teacherVoid ? null : validateFailurePattern(op.failurePatternCode);
+  const note = teacherVoid
+    ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", op.note].filter(Boolean).join("；")
+    : op.note ?? null;
   const transfer = normalizeTransferMetadata({
     dimension,
     result,
@@ -243,7 +254,7 @@ async function appendKnowledgeEvidence(db, op, today) {
     assessment_context: transfer.assessmentContext,
     duration_seconds: transfer.durationSeconds,
     evidence_anchor: op.evidenceAnchor ?? null,
-    note: op.note ?? null,
+    note,
   }, { onConflict: "operation_id", ignoreDuplicates: true });
   throwOnError(response, "知识点证据写入失败");
   return { kind: "knowledge_evidence", affected: 1, kpId, dimension, result, ...transfer };
@@ -364,7 +375,11 @@ async function applyAskVerification(db, op, today, nowIso) {
   if (promptIntegrity === "invalid" && result !== "void") throw new Error("题面无效时答疑验证结果必须是 void");
   if (result === "void" && promptIntegrity !== "invalid") throw new Error("答疑验证 void 必须标记 invalid prompt");
   const evidenceAnchor = String(op.evidenceAnchor ?? "").trim();
-  const note = String(op.note ?? "").trim();
+  const teacherVoid = result === "void";
+  const noteInput = String(op.note ?? "").trim();
+  const note = teacherVoid
+    ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", noteInput].filter(Boolean).join("；")
+    : noteInput;
   if (!evidenceAnchor) throw new Error("答疑验证缺 evidenceAnchor");
   if (!note) throw new Error("答疑验证缺 note");
 
@@ -429,6 +444,13 @@ async function applyAskVerification(db, op, today, nowIso) {
     evidenceAnchor,
     responseExcerpt: op.responseExcerpt ?? null,
     note,
+    metadata: teacherVoid ? {
+      responsibility: "teacher",
+      count_as_valid_attempt: false,
+      count_as_user_error: false,
+      advance_cooldown: false,
+      close_schedule: false,
+    } : op.metadata,
     projectEvidence: false,
   }, today, { required: false });
   const resolution = shouldClarify
@@ -451,6 +473,15 @@ async function applyAskVerification(db, op, today, nowIso) {
     knowledgeEvidence,
     learningAttempt,
     resolution,
+    ...(teacherVoid ? {
+      disposition: {
+        responsibility: "teacher",
+        countAsValidAttempt: false,
+        countAsUserError: false,
+        advanceCooldown: false,
+        closeSchedule: false,
+      },
+    } : {}),
   };
 }
 
@@ -543,7 +574,7 @@ async function applyOperation(db, op, today, nowIso) {
       subject: op.subject,
       kp_id: op.topic?.kpId ?? recurSource?.kp_id ?? null,
       knowledge: op.knowledge,
-      source: op.recurOf ? "pc复盘·复发" : "pc复盘",
+      source: errorEntrySourceLabel(op.entrySource),
       raw_input: op.recurOf ? `【复发·源#${op.recurOf}】${op.knowledge}` : op.knowledge,
       status: "open",
     }, { onConflict: "operation_id", ignoreDuplicates: true }).select("id, subject, kp_id");
@@ -588,6 +619,11 @@ async function applyOperation(db, op, today, nowIso) {
     // [gpt] 2026-08-10：在任何远端写入前完成语义校验，避免 invalid 题干造成半完成写入。
     const reviewEvidence = buildReviewEvidence(op);
     const result = validateReviewResult(reviewEvidence.result);
+    // [gpt] 2026-08-12：污染题只留教练事故审计，不能沿用用户错因、分数或普通复检备注语义。
+    const teacherVoid = result === "void";
+    const responsibilityNote = teacherVoid
+      ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", op.note].filter(Boolean).join("；")
+      : op.note ?? null;
     const insertReview = await db.from("error_review").upsert({
       operation_id: op.operation_id,
       topic_id: op.topicId,
@@ -597,7 +633,7 @@ async function applyOperation(db, op, today, nowIso) {
       session_key: op.sessionKey ?? null,
       angle: reviewEvidence.angle,
       evidence_anchor: reviewEvidence.evidenceAnchor,
-      note: op.note ?? null,
+      note: responsibilityNote,
       dimension: reviewEvidence.dimension,
       cold: reviewEvidence.cold,
       prompt_integrity: reviewEvidence.promptIntegrity,
@@ -646,7 +682,7 @@ async function applyOperation(db, op, today, nowIso) {
         failurePatternCode: op.failurePatternCode ?? null,
         diagnosisStatus: op.diagnosisStatus ?? "pending",
         evidenceAnchor: reviewEvidence.evidenceAnchor ?? `error_topic#${op.topicId}`,
-        note: op.note ?? op.angle ?? null,
+        note: teacherVoid ? responsibilityNote : op.note ?? op.angle ?? null,
       }, today)
       : null;
     const learningAttempt = await recordLearningAttempt(db, {
@@ -668,14 +704,37 @@ async function applyOperation(db, op, today, nowIso) {
       probeAxis: reviewEvidence.probeAxis,
       assessmentContext: op.assessmentContext ?? "practice",
       durationSeconds: op.durationSeconds ?? null,
-      failurePatternCode: op.failurePatternCode ?? null,
+      failurePatternCode: teacherVoid ? null : op.failurePatternCode ?? null,
       diagnosisStatus: op.diagnosisStatus ?? "pending",
       evidenceAnchor: reviewEvidence.evidenceAnchor ?? `error_topic#${op.topicId}`,
       responseExcerpt: op.responseExcerpt ?? null,
-      note: op.note ?? op.angle ?? null,
+      note: teacherVoid ? responsibilityNote : op.note ?? op.angle ?? null,
+      metadata: teacherVoid ? {
+        responsibility: "teacher",
+        count_as_valid_attempt: false,
+        count_as_user_error: false,
+        advance_cooldown: false,
+        close_schedule: false,
+      } : op.metadata,
       projectEvidence: false,
     }, today, { required: false });
-    return { kind: "error_review", affected: 1, topicId: op.topicId, masteryStatus, knowledgeEvidence, learningAttempt };
+    return {
+      kind: "error_review",
+      affected: 1,
+      topicId: op.topicId,
+      masteryStatus,
+      knowledgeEvidence,
+      learningAttempt,
+      ...(teacherVoid ? {
+        disposition: {
+          responsibility: "teacher",
+          countAsValidAttempt: false,
+          countAsUserError: false,
+          advanceCooldown: false,
+          closeSchedule: false,
+        },
+      } : {}),
+    };
   }
 
   if (op.op === "knowledge_link") return linkKnowledgeObject(db, op, nowIso);
@@ -686,19 +745,101 @@ async function applyOperation(db, op, today, nowIso) {
 
   if (op.op === "learning_attempt") return recordLearningAttempt(db, op, today, { required: true });
 
+  if (op.op === "study_log_correction") {
+    // [gpt] 2026-08-23：错误流水只允许用完整旧业务键唯一命中后原地更正，禁止模糊批量覆盖。
+    const match = op.match ?? {};
+    const replacement = op.replacement ?? {};
+    const requiredMatch = ["date", "subject", "chapter", "activity"];
+    for (const key of requiredMatch) {
+      if (match[key] == null || String(match[key]).trim() === "") {
+        throw new Error(`学习流水更正缺少 match.${key}`);
+      }
+    }
+    if (!replacement.subject || !replacement.chapter) {
+      throw new Error("学习流水更正必须提供 replacement.subject 与 replacement.chapter");
+    }
+    const matchActivity = normalizeStudyActivity(match.activity);
+    const replacementActivity = normalizeStudyActivity(replacement.activity);
+    const lookup = await db.from("study_log")
+      .select("id, operation_id, attempt_expected")
+      .eq("log_date", match.date)
+      .eq("subject", match.subject)
+      .eq("chapter", match.chapter)
+      .eq("activity", matchActivity)
+      .order("id", { ascending: false })
+      .limit(2);
+    throwOnError(lookup, "待更正学习流水回读失败");
+    const rows = lookup.data ?? [];
+    if (rows.length !== 1) {
+      throw new Error(`学习流水更正要求唯一命中，实际命中 ${rows.length} 条`);
+    }
+    const current = rows[0];
+    if (current.attempt_expected) {
+      throw new Error("带统一尝试分母的学习流水不能通过普通更正入口修改");
+    }
+    const payload = {
+      log_date: replacement.date ?? match.date,
+      subject: replacement.subject,
+      chapter: replacement.chapter,
+      activity: replacementActivity,
+      accuracy: replacement.accuracy ?? null,
+      feeling: replacement.feeling ?? null,
+      source: "pc",
+      raw_input: replacement.raw ?? null,
+    };
+    const updated = await db.from("study_log").update(payload).eq("id", current.id).select("id");
+    throwOnError(updated, "学习流水更正失败");
+    if ((updated.data ?? []).length !== 1) throw new Error("学习流水更正未更新到目标行");
+    return {
+      kind: "study_log_correction",
+      affected: 1,
+      action: "updated",
+      studyLogId: current.id,
+      operationId: current.operation_id,
+    };
+  }
+
   if (op.op === "study_log") {
+    const activity = normalizeStudyActivity(op.activity);
+    const recitationMode = recitationModeFromActivity(op.activity);
     const payload = {
       operation_id: op.operation_id,
       log_date: op.date ?? today,
       subject: op.subject,
       chapter: op.chapter ?? null,
-      activity: op.activity ?? "其他",
+      activity,
       accuracy: op.accuracy ?? null,
       feeling: op.feeling ?? null,
       source: "pc",
-      raw_input: op.raw ?? null,
+      raw_input: withRecitationModeMarker(op.raw, recitationMode),
       ...(op.attempt ? { attempt_expected: true } : {}),
     };
+    // [gpt] 2026-08-21：背诵进度的业务唯一键是北京日+科目+规范章节+活动；重复汇报应复写原行，不能靠新 operation_id 再插一行。
+    if (activity === "背诵" && payload.chapter && !op.attempt) {
+      const existing = await db.from("study_log")
+        .select("id, operation_id")
+        .eq("log_date", payload.log_date)
+        .eq("subject", payload.subject)
+        .eq("chapter", payload.chapter)
+        .eq("activity", payload.activity)
+        .order("id", { ascending: false })
+        .limit(1);
+      throwOnError(existing, "背诵进度唯一键回读失败");
+      const current = existing.data?.[0] ?? null;
+      if (current) {
+        const replacement = { ...payload };
+        delete replacement.operation_id;
+        const updated = await db.from("study_log").update(replacement).eq("id", current.id);
+        throwOnError(updated, "背诵进度复写失败");
+        return {
+          kind: "study_log",
+          affected: 1,
+          action: "updated",
+          studyLogId: current.id,
+          operationId: current.operation_id,
+        };
+      }
+    }
     let request = db.from("study_log").upsert(payload, { onConflict: "operation_id", ignoreDuplicates: true });
     if (op.attempt) request = request.select("id");
     const response = await request;
@@ -716,7 +857,7 @@ async function applyOperation(db, op, today, nowIso) {
       studyLogId = lookup.data?.[0]?.id ?? null;
     }
     if (studyLogId == null) throw new Error(`学习日志 ${op.operation_id} 已写入但无法取得 id`);
-    const attemptOperation = materializeStudyLogAttempt(op, studyLogId);
+    const attemptOperation = materializeStudyLogAttempt({ ...op, activity }, studyLogId);
     const learningAttempt = await recordLearningAttempt(db, attemptOperation, today, { required: true });
     return { kind: "study_log", affected: 1, studyLogId, learningAttempt };
   }
@@ -802,16 +943,27 @@ async function applyOperation(db, op, today, nowIso) {
 
 export async function syncStudyOutbox({ db, path, today, now = new Date() }) {
   const operations = readOutbox(path);
+  // [gpt] 2026-08-13：先校验整批再做任何远端调用，防止后段坏条目造成半批写入。
+  const validatedOperations = operations.map((op, index) => {
+    if (op.op !== "new_error") return op;
+    try {
+      const validated = validateErrorEntry(migrateLegacyErrorEntry(op));
+      // [gpt] 2026-08-13：旧缓冲在内存中补齐后执行业务，但保留原 payload 给 ingest 指纹，避免已审计重试发生 hash 漂移。
+      return isLegacyErrorEntry(op) ? { ...validated, _ingestPayload: op } : validated;
+    } catch (error) {
+      throw new Error(`outbox 第 ${index + 1} 条 new_error 未通过写回前校验：${error instanceof Error ? error.message : String(error)}`);
+    }
+  });
   const nowIso = now.toISOString();
   const result = await processOutbox(
-    operations,
+    validatedOperations,
     (op) => withIngestAudit({
       db,
-      operation: op,
+      operation: op._ingestPayload ?? op,
       handlerVersion: STUDY_OUTBOX_HANDLER_VERSION,
       handler: () => applyOperation(db, op, today, nowIso),
     }),
   );
-  writeOutbox(path, result.failed.map(({ op }) => op));
-  return { total: operations.length, ...result };
+  writeOutbox(path, result.failed.map(({ op }) => op._ingestPayload ?? op));
+  return { total: validatedOperations.length, ...result };
 }

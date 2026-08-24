@@ -15,6 +15,8 @@ import {
 import { buildReciteMemoryModel } from "./lib/learning-coach.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { readOutbox } from "./lib/study-outbox.mjs";
+import { readSkillRunEvents, summarizeSkillRuns } from "./lib/skill-run.mjs";
+import { readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
 
 const LOCAL_DIR = ".local/system-observability";
 const LOCAL_SNAPSHOT_LOG = `${LOCAL_DIR}/learning-flow.jsonl`;
@@ -101,7 +103,7 @@ function ledgerFallback(code, message) {
   return { counts: { errors: 1, warnings: 0 }, issues: [{ code, severity: "error", message }] };
 }
 
-function readLocalFacts(referenceDate, windowStart, windowEnd) {
+function readLocalFacts(referenceDate, windowStart, windowEnd, nowIso = new Date().toISOString()) {
   let localOutbox;
   try {
     localOutbox = { operations: readOutbox(OUTBOX_FILE), parseError: null };
@@ -127,12 +129,27 @@ function readLocalFacts(referenceDate, windowStart, windowEnd) {
     reciteSummary = summarizeReciteLedger(reciteParsed);
   }
 
-  return { localOutbox, scheduleParsed, scheduleExecution, reciteParsed, reciteSummary };
+  // [gpt] 2026-08-20：默认读取主仓库与同仓库旧工作树遥测，避免相对路径漏算。
+  const skillRunLog = readSkillRunEvents();
+  const skillExecution = summarizeSkillRuns(skillRunLog, {
+    nowIso,
+    windowStart,
+    windowEnd,
+    staleMinutes: Number(thresholds().skillRunStaleMinutes ?? 24 * 60),
+  });
+  const skillTurnCoverage = summarizeSkillTurns(readSkillTurnEvents(), {
+    nowIso,
+    windowStart,
+    windowEnd,
+    uncheckedStaleMinutes: Number(thresholds().skillTurnUncheckedMinutes ?? 60),
+  });
+
+  return { localOutbox, scheduleParsed, scheduleExecution, reciteParsed, reciteSummary, skillExecution, skillTurnCoverage };
 }
 
 async function collectFacts(db, { now, windowStart, windowEnd }) {
   const referenceDate = beijingDate(now);
-  const local = readLocalFacts(referenceDate, windowStart, windowEnd);
+  const local = readLocalFacts(referenceDate, windowStart, windowEnd, now.toISOString());
   const sinceTs = beijingBoundary(windowStart);
   const untilTs = beijingBoundary(shiftDate(windowEnd, 1));
   const [
@@ -227,6 +244,8 @@ async function collectFacts(db, { now, windowStart, windowEnd }) {
     scheduleExecution: local.scheduleExecution,
     recite: local.reciteSummary,
     reciteMapping,
+    skillExecution: local.skillExecution,
+    skillTurnCoverage: local.skillTurnCoverage,
   };
 }
 

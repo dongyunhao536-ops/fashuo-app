@@ -1,7 +1,7 @@
 // node --env-file=.env.local scripts/register-full.mjs
 //
 // 一条龙：登记员 → 镜像同步 → 档案 git commit。
-//   1. register-events.mjs  把 events.confirmed → D:\fashuo 下的 md（红线 #3 唯一去重处）。
+//   1. register-events.mjs  把 events.confirmed → 跨平台档案根下的 md（红线 #3 唯一去重处）。
 //   2. sync-content.mjs     把档案 md 全量同步进 content_mirror（grep 镜像表）。
 //   3. 档案 git commit      记录这一批新写入；不是 git 仓库则跳过。
 //
@@ -11,8 +11,10 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { resolveArchiveRoot } from "./lib/workspace-paths.mjs";
 
-const ARCHIVE = process.env.ARCHIVE_DIR || path.resolve(process.cwd(), "..", "fashuo");
+// [gpt] 2026-08-23：档案根不再依赖调用时 cwd 或 Windows 盘符。
+const ARCHIVE = resolveArchiveRoot();
 
 function run(label, cmd, args, opts = {}) {
   console.log(`\n━━━━ ${label} ━━━━`);

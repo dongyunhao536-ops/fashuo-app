@@ -148,6 +148,32 @@ describe("recite ledger", () => {
     })).toThrow("必须记录栽点类型");
   });
 
+  it("污染题 void 只留教练事故审计，不刷新最后碰或用户栽点", () => {
+    const original = `${header}
+### X1｜刑法｜程度词
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-05" });
+    const applied = applyEvidenceEvent(original, parsed, {
+      id: "X1",
+      date: "2026-08-05",
+      dimension: "recall",
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      failurePatternCode: "degree_strength",
+      evidenceAnchor: "污染题#1",
+      note: "点名错误项",
+    });
+    const checked = parseReciteLedger(applied.markdown, { referenceDate: "2026-08-05" });
+
+    expect(checked.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(checked.records[0].lastTouchedOn).toBe("2026-08-01");
+    expect(applied.event).toMatchObject({ result: "void", failurePatternCode: null, diagnosisStatus: null });
+    expect(applied.event.note).toContain("responsibility=teacher");
+    expect(applied.markdown).not.toContain("栽点：程度词");
+  });
+
   it("同一内存事务可先写冷检证据再撤池，重解析后两类事实一致", () => {
     const original = `${header}
 ### L1｜法理｜普通挂账

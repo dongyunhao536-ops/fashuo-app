@@ -11,6 +11,7 @@ import {
   parseMaterialBatchArgs,
   requireMaterialRows,
 } from "./cuoti.mjs";
+import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
 
 describe("cuoti material sources", () => {
   it("给每类来源独立正配额，并把原始真题与二次总结分开", () => {
@@ -93,6 +94,7 @@ describe("cuoti material CLI", () => {
       "--query", "偶然防卫",
     ])).toEqual({
       source: "local",
+      runId: null,
       queries: [
         { keyword: "犯罪中止", refine: "因果" },
         { keyword: "正当防卫", refine: "时间条件" },
@@ -101,8 +103,10 @@ describe("cuoti material CLI", () => {
     });
     expect(parseMaterialArgs(["犯罪中止", "因果", "--db"])).toEqual({
       source: "db",
+      runId: null,
       queries: [{ keyword: "犯罪中止", refine: "因果" }],
     });
+    expect(parseMaterialArgs(["犯罪中止", "--run", "SR-1"])).toMatchObject({ runId: "SR-1" });
   });
 
   it("拒绝游离 refine、缺关键词和额外位置参数", () => {
@@ -127,5 +131,92 @@ describe("cuoti material CLI", () => {
     expect(batch).toBe(`${first}\n\n══════════ 下一组独立检索 ══════════\n\n${second}`);
     expect(first).toContain("教材重排/机构讲义/法律更新混合库");
     expect(first).toContain("101► 犯罪中止的因果关系");
+  });
+});
+
+describe("错题截图批次摄取", () => {
+  it("上传几道即错几道，并只生成一条带准确率的进度流水", () => {
+    const batch = buildErrorIntakeBatchOperations({
+      batchId: "ownership-20260813",
+      subject: "民法",
+      chapter: "第十章 所有权（分章真题16题完成）",
+      totalQuestions: 16,
+      uploadedCount: 2,
+      errors: [
+        { knowledge: "11401038：误选C，正确D" },
+        { knowledge: "11801037：误选C，正确B" },
+      ],
+    }, { today: "2026-08-13" });
+
+    expect(batch).toMatchObject({ errorCount: 2, accuracy: 87.5 });
+    expect(batch.operations.filter((item) => item.op === "study_log")).toHaveLength(1);
+    expect(batch.operations.filter((item) => item.op === "new_error")).toHaveLength(2);
+    expect(batch.operations.filter((item) => item.op === "new_error")).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        entrySource: "batch",
+        chapter: "第十章 所有权（分章真题16题完成）",
+        entryState: expect.objectContaining({ classificationStatus: "pending", rootCauseCode: "unclassified" }),
+      }),
+    ]));
+    expect(batch.operations[0]).toMatchObject({
+      accuracy: 87.5,
+      date: "2026-08-13",
+      ts: "2026-08-13T00:00:00.000+08:00",
+    });
+  });
+
+  it("拒绝把截图解释成抽样或写入不一致的错题数", () => {
+    expect(() => buildErrorIntakeBatchOperations({
+      subject: "民法",
+      chapter: "所有权",
+      totalQuestions: 16,
+      uploadedCount: 2,
+      errors: [{ knowledge: "只列了一道" }],
+    }, { today: "2026-08-13" })).toThrow(/上传题数 2 与错题明细 1 不一致/);
+  });
+
+  it("批次中的 confirmed 病根缺认领说明时在生成 outbox 前阻断", () => {
+    expect(() => buildErrorIntakeBatchOperations({
+      subject: "民法",
+      chapter: "所有权",
+      totalQuestions: 1,
+      errors: [{
+        knowledge: "处分规则误判",
+        topic: {
+          title: "无权处分的效力",
+          classificationStatus: "confirmed",
+          rootCauseCode: "boundary_miss",
+          diagnosisStatus: "confirmed",
+        },
+      }],
+    }, { today: "2026-08-13" })).toThrow(/confirmed_cause_note_missing/);
+  });
+
+  it("同一批次生成稳定 operation_id，重跑不会制造重复流水", () => {
+    const manifest = {
+      subject: "民法",
+      chapter: "所有权",
+      totalQuestions: 5,
+      errors: [{ knowledge: "错题A" }],
+    };
+    const first = buildErrorIntakeBatchOperations(manifest, { today: "2026-08-13" });
+    const second = buildErrorIntakeBatchOperations(manifest, { today: "2026-08-13" });
+    expect(first.operations.map((item) => item.operation_id)).toEqual(second.operations.map((item) => item.operation_id));
+    expect(first.operations).toEqual(second.operations);
+  });
+
+  it("历史批次回放只接受唯一进度和逐题唯一事件", () => {
+    const manifest = {
+      subject: "民法", chapter: "所有权", totalQuestions: 16,
+      errors: [{ knowledge: "错题A" }, { knowledge: "错题B" }],
+    };
+    const verified = verifyExistingErrorIntakeBatch(manifest, {
+      studyLogs: [{ id: 193, subject: "民法", chapter: "所有权", log_date: "2026-08-13", activity: "做题", accuracy: 87.5 }],
+      errors: [
+        { id: 112, subject: "民法", log_date: "2026-08-13", knowledge: "错题A" },
+        { id: 113, subject: "民法", log_date: "2026-08-13", knowledge: "错题B" },
+      ],
+    }, { today: "2026-08-13" });
+    expect(verified).toMatchObject({ verified: true, studyLogId: 193, errorIds: [112, 113] });
   });
 });

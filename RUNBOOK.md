@@ -3,8 +3,9 @@
 > 这是"打开就能跑"的命令清单。每条命令前面一句话说**什么时候用**。
 > 设计原理见 [BUILD_PLAN.md](BUILD_PLAN.md)；这里只列操作。
 >
-> 工作目录约定：所有 `npm run XXX` 都在 **PC 的 `D:\fashuo-app\`** 跑。
+> 工作目录约定：Windows 在 `D:\fashuo-app\`，macOS 建议在 `~/Projects/fashuo-app/`；下文 `npm.cmd` 在 macOS 改为 `npm`。<!-- [gpt] 2026-08-23 -->
 > 部署/查日志在 **ECS 的 `/opt/fashuo-app/`** 跑（先 SSH 进去）。
+> 跨平台根目录统一使用 `FASHUO_APP_ROOT` / `FASHUO_ARCHIVE_ROOT`；完整换机见 [docs/Mac迁移手册.md](docs/Mac迁移手册.md)。<!-- [gpt] 2026-08-23 -->
 
 ---
 
@@ -207,14 +208,24 @@ npm run verify-schema
 
 迁移与 schema 校验通过后再跑 `npm run data-health`。它会核对唯一 active 镜像代际及行数、stage 残留、`ingest_operation` 失败/卡住、显式 study_log 缺子尝试和法硕尝试映射债；error 级问题退出 1，warning 保留可行动提示。<!-- [gpt] 2026-08-10 -->
 
-PC 学习数据流监控只按周自动分析；每天的数据由学习动作发生时直接写入各事实表，不依赖每日监控任务。它不重复评价学习效果，而是审计“该写的有没有写、写后有没有按预期流到消费者”：<!-- [gpt] 2026-08-11 -->
+PC 学习数据流监控只按周自动分析；每天的数据由学习动作发生时直接写入各事实表，不依赖每日监控任务。它不重复评价学习效果，而是审计“该写的有没有写、写后有没有按预期流到消费者”；2026-08-12 起同时读取六个高频 Skill 的本地 Run/Step 遥测，区分慢启动、保护性 Gate 阻断、正常等用户与真正漏收口。<!-- [gpt] 2026-08-12 -->
+
+Codex 宿主守卫由 `.codex/hooks.json` 的 `SessionStart/UserPromptSubmit/Stop` 驱动：强触发请求命中 Skill 后，结束前必须能对上同一 `session_id/turn_id` 的合规 Run；缺 Run 或未收口会自动续跑一次。hook 定义新增或改变后，必须新开任务并在 `/hooks` 审阅信任；`skill:check`/`flow:check` 显示“宿主覆盖未观测”时，禁止把零 Run 解释成零异常。遥测只保存 prompt SHA-256 与长度。<!-- [gpt] 2026-08-12 -->
+
+Skill Run/Turn 默认统一写入主仓库 `.local/system-observability/`；从 Codex 工作树执行时会由 `.git` 指针解析回主仓库。监控读取主仓库时，同时只读合并同一 Git 仓库下的旧工作树流水并按 `eventId` 去重，不搬移、不删除历史。超过 `skillRunStaleMinutes` 的 `waiting_user` 保留可恢复状态，但标记为 `orphanedWaiting` 并进入原始完整率分母；宿主耗时按 `UserPromptSubmit → 最终 Stop` 单列，不能和自动步骤耗时混算。<!-- [gpt] 2026-08-20 -->
 
 ```powershell
 npm.cmd run flow:check                 # 仅故障排查时手动跑；保存即时诊断快照
 npm.cmd run flow:check -- --no-save    # 手动只读预览，不保存
+npm.cmd run skill:check                # 近两天 Skill 执行完成率、漏收口与启动分位数
+npm.cmd run skill:replay               # 回放近期同型事故与状态机硬闸
 npm.cmd run flow:weekly                # 每周自动；默认汇总刚结束的上一北京自然周
 npm.cmd run flow:weekly -- --current   # 当前周基线/调试，同周覆盖
 ```
+
+`ask-pc` 为保持“材料先于个人历史”的裁判顺序，先执行 `skill-run start --skill ask-pc --subject <科目> --json`，材料命令带返回的 `--run`，材料结论确定后再执行 `skill-context.mjs ask <科目> --run <SR-ID>`；`materials_checked` 不允许手工补签。<!-- [gpt] 2026-08-12 -->
+
+Codex 日常默认推理档为 `high`；质量优先的周报、阶段评估或高风险审计在 CLI 使用 `codex --profile quality`（`quality.config.toml` 为 `max`）。改档后需新开任务；是否继续使用 `max` 必须以同一回放集的质量/延迟数据证明，不能默认越高越好。<!-- [gpt] 2026-08-12 -->
 
 学习流水、尝试、知识证据、错题、复检与 ingest 均在动作发生时带北京时间戳落账；周检直接按这批原始事实生成七天逐日表，不要求每天先跑一次监控。手动诊断快照可写 `.local/system-observability/learning-flow.jsonl` 与 `learning_flow_snapshot`；周检分别写 `.local/system-observability/weekly-<周一>.md` 与 `learning_flow_weekly_review`。`degraded` 表示部分写入、传输或映射硬错误并以退出码 2 结束；`attention` 包括待分类、待接线、排期逾期等流转债务，退出码仍为 0。没有新训练、训练量低或 `learning_attempt` 暂时为空本身不算故障。<!-- [gpt] 2026-08-11 -->
 

@@ -59,6 +59,49 @@ describe("learning attempt", () => {
     expect(payload).toMatchObject({ project_evidence: false, metadata: { projection_expected: false } });
   });
 
+  it("污染题 void 留审计但不能伪装成用户失败或有效冷检", () => {
+    const payload = normalizeLearningAttempt({
+      operation_id: "teacher-invalid-question",
+      sourceKind: "error_review",
+      sourceId: "error-review:void:1",
+      attemptRole: "recheck",
+      dimension: "application",
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      variantKind: "invalid",
+      transferLevel: 0,
+      probeAxis: "invalid",
+    }, "2026-08-12");
+    expect(payload).toMatchObject({
+      result: "void",
+      cold: false,
+      prompt_integrity: "invalid",
+      metadata: {
+        responsibility: "teacher",
+        count_as_valid_attempt: false,
+        count_as_user_error: false,
+        advance_cooldown: false,
+        close_schedule: false,
+      },
+    });
+    expect(() => normalizeLearningAttempt({
+      operation_id: "teacher-invalid-question-with-score",
+      sourceKind: "error_review",
+      sourceId: "error-review:void:2",
+      attemptRole: "recheck",
+      dimension: "application",
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      variantKind: "invalid",
+      transferLevel: 0,
+      assessmentContext: "practice",
+      score: 0,
+      maxScore: 1,
+    }, "2026-08-12")).toThrow("void 作废题不能记录");
+  });
+
   it("通过单个 RPC 写 attempt，并由数据库同事务投影 knowledge_evidence", async () => {
     const calls = [];
     const db = {

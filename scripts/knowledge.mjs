@@ -44,6 +44,7 @@ import { beijingDate, parseReciteLedger } from "./lib/recite-ledger.mjs";
 import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs";
 import { appendOutbox, readOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { normalizeLearningAttempt } from "./lib/learning-attempt.mjs";
+import { assertSkillRunPrerequisites, recordDaibeiKnowledgeAttemptWriteback } from "./lib/skill-run.mjs";
 
 const OUTBOX = ".local/cuoti-pending.jsonl";
 const LINK_KINDS = ["study_error", "error_topic", "error_review", "recite_ledger", "ask_point", "study_log", "manual"];
@@ -200,10 +201,10 @@ async function syncOutbox(today) {
   if (report.failed.length) {
     console.error(`⚠️ ${report.failed.length} 条同步失败，已保留 outbox：`);
     for (const item of report.failed) console.error(`- ${item.op.operation_id}：${item.error}`);
-    return false;
+    return null;
   }
   console.log(`✅ 同步成功 ${report.succeeded.length} 条；outbox 已安全清空成功项。`);
-  return true;
+  return report;
 }
 
 async function commandStats(options) {
@@ -677,6 +678,7 @@ async function commandEvidence(positional, options, today) {
   if (cold && promptIntegrity !== "clean") throw new Error("冷检不能同时带提示或无效题干");
   const pattern = options.pattern === true || !options.pattern ? null : oneOf(options.pattern, Object.keys(FAILURE_PATTERNS), "--pattern");
   if (options.diagnosis && !pattern) throw new Error("--diagnosis 必须和 --pattern 一起使用");
+  if (result === "void" && pattern) throw new Error("作废题只归责教练，不能记录用户 failure pattern");
   const diagnosisStatus = options.diagnosis === true || !options.diagnosis
     ? "pending"
     : oneOf(options.diagnosis, ["pending", "confirmed", "rejected"], "--diagnosis");
@@ -716,9 +718,12 @@ async function commandEvidence(positional, options, today) {
     diagnosisStatus,
     ...transfer,
     evidenceAnchor: options.anchor === true ? null : options.anchor,
-    note: options.note === true ? null : options.note,
+    note: result === "void"
+      ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", options.note === true ? null : options.note].filter(Boolean).join("；")
+      : options.note === true ? null : options.note,
   });
   console.log(`⏳ 已暂存 ${kpId} ${dimension}/${result}${cold ? "｜冷检" : ""}${variantKind ? `｜${EVIDENCE_VARIANTS[variantKind].label}/L${transfer.transferLevel}` : ""}${assessmentContext !== "practice" ? `｜${ASSESSMENT_CONTEXTS[assessmentContext].label}${durationSeconds ? ` ${durationSeconds}s` : ""}` : ""}${pattern ? `｜${FAILURE_PATTERNS[pattern].label}` : ""}（op=${op.operation_id}）`);
+  if (result === "void") console.log("↩ 本次只留教练题面事故审计：不计有效题量、不记用户错误、不推进冷却，原排期保持 open。");
   if (options.stage) return;
   const synced = await syncOutbox(today);
   if (!synced || !scheduleId) return;
@@ -727,15 +732,19 @@ async function commandEvidence(positional, options, today) {
     kind: "knowledge", targetId: kpId, referenceDate: date, route: routeByDimension[dimension], dimension,
   });
   // [gpt] 2026-08-10：知识点排期结案同步保留 outcome/cold/prompt，供干预响应派生重算。
-  const closed = closeScheduleItem(markdown, scheduleId, {
+  const closure = closeScheduleItem(markdown, scheduleId, {
     date,
     result: `${dimension}/${result}${cold ? "｜冷检" : ""}`,
     outcome: result,
     cold,
     promptIntegrity,
   });
-  writeFileSync(scheduleFile, closed, "utf8");
-  console.log(`✅ 已结案知识点排期：${scheduleId}`);
+  if (typeof closure === "string") {
+    writeFileSync(scheduleFile, closure, "utf8");
+    console.log(`✅ 已结案知识点排期：${scheduleId}`);
+  } else {
+    console.log(`↩ 作废题只归责教练；排期 ${scheduleId} 保持 open，重写并重新过命题 Gate 后再执行。`);
+  }
 }
 
 async function commandAttempt(positional, options, today) {
@@ -771,7 +780,7 @@ async function commandAttempt(positional, options, today) {
     probeAxis: options["probe-axis"] === true ? null : options["probe-axis"],
     assessmentContext: options.context === true || !options.context ? "practice" : options.context,
     durationSeconds: options.seconds === true ? null : options.seconds,
-    failurePatternCode: options.pattern === true ? null : options.pattern,
+    failurePatternCode: result === "void" ? null : options.pattern === true ? null : options.pattern,
     diagnosisStatus: options.diagnosis === true || !options.diagnosis ? "pending" : options.diagnosis,
     protocol: options.protocol === true ? null : options.protocol,
     protocolVersion: options["protocol-version"] === true ? null : options["protocol-version"],
@@ -779,13 +788,45 @@ async function commandAttempt(positional, options, today) {
     observationWindow: options.window === true ? null : options.window,
     evidenceAnchor: options.anchor === true ? null : options.anchor,
     responseExcerpt: options.response === true ? null : options.response,
-    note: options.note === true ? null : options.note,
+    note: result === "void"
+      ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", options.note === true ? null : options.note].filter(Boolean).join("；")
+      : options.note === true ? null : options.note,
+    metadata: result === "void" ? {
+      responsibility: "teacher",
+      count_as_valid_attempt: false,
+      count_as_user_error: false,
+      advance_cooldown: false,
+      close_schedule: false,
+    } : undefined,
   };
+  const runId = options.run === true || !options.run ? null : String(options.run);
+  if (runId) {
+    if (options.stage) throw new Error("带 --run 的学习尝试禁止 --stage；必须同步成功后立即签业务回执");
+    if (!kpId) throw new Error("带 --run 的带背抽查必须提供稳定 KP-ID");
+    if (dimension !== "recall") throw new Error("daibei-pc KP 抽查 Run 只接受 dimension=recall");
+    const run = assertSkillRunPrerequisites({
+      runId,
+      expectedSkill: "daibei-pc",
+      steps: ["target_frozen", "materials_checked", "question_integrity_pass"],
+    });
+    if (run.kind !== "recall") throw new Error(`daibei-pc KP 抽查要求 kind=recall，实际 ${run.kind ?? "空"}`);
+    if (String(run.steps.target_frozen?.evidenceRef ?? "").trim().toUpperCase() !== kpId) {
+      throw new Error(`daibei-pc KP 抽查目标不一致：冻结=${run.steps.target_frozen?.evidenceRef ?? "空"}，待写回=${kpId}`);
+    }
+  }
   // [gpt] 先验证再落 outbox，避免缺稳定题号/来源的坏事件永久阻塞同步队列。
   normalizeLearningAttempt({ operation_id: "validate-knowledge-attempt", ...payload }, today);
   const op = appendOutbox(OUTBOX, payload);
   console.log(`⏳ 已暂存学习尝试 ${kpId ?? "未映射"} ${dimension}/${result}（op=${op.operation_id}）`);
-  if (!options.stage) await syncOutbox(today);
+  if (result === "void") console.log("↩ 本次只留教练题面事故审计：不计有效题量、不记用户错误、不推进冷却。");
+  if (!options.stage) {
+    const report = await syncOutbox(today);
+    if (runId && report) {
+      const succeeded = report.succeeded.find(({ op: item }) => item.operation_id === op.operation_id);
+      if (!succeeded) throw new Error(`学习尝试 ${op.operation_id} 未取得成功同步回执，不能给 Run 签字`);
+      recordDaibeiKnowledgeAttemptWriteback({ runId, kpId, operationId: op.operation_id });
+    }
+  }
 }
 
 function usage() {
@@ -807,7 +848,7 @@ function usage() {
   console.log("  link <source-kind> <source-id> <KP-ID> [--status pending|confirmed --method manual|exact_name|anki_exact|anki_section|fuzzy --confidence 0-100 --anchor 锚点 --stage]");
   console.log("  relate <前置KP-ID> <目标KP-ID> [--type prerequisite|supports|contrast --required understanding|recall|application|stable --status pending|confirmed|rejected --source manual|textbook|model --strength 1-5 --confidence 0-100 --anchor 锚点 --note 说明 --stage]");
   console.log("  evidence <KP-ID> <exposure|understanding|recall|application> <pass|partial|fail|void> [--date 北京日 --cold --cued --invalid-prompt --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --context practice|timed|full_mock --seconds N --pattern 代码 --diagnosis pending|confirmed --anchor 锚点 --note 说明 --schedule 排期ID --stage]");
-  console.log("  attempt <KP-ID|-> <exposure|understanding|recall|application> <pass|partial|fail|void> [--subject 科目 --question 稳定题号 --source ... --source-id 稳定来源ID --role primary|rewrite|recheck|followup --score N --max N --cold --cued --invalid-prompt --variant ... --probe-axis ... --context practice|timed|full_mock --seconds N --anchor 锚点 --stage]");
+  console.log("  attempt <KP-ID|-> <exposure|understanding|recall|application> <pass|partial|fail|void> [--subject 科目 --question 稳定题号 --source ... --source-id 稳定来源ID --role primary|rewrite|recheck|followup --score N --max N --cold --cued --invalid-prompt --variant ... --probe-axis ... --context practice|timed|full_mock --seconds N --anchor 锚点 --run SR-... --stage]");
   console.log("    objective_question/subjective_answer 必须同时提供 --question、--source-id、--score、--max；非 manual 来源必须提供 --source-id。");
   console.log("  sync");
 }

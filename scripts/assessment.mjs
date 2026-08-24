@@ -66,7 +66,10 @@ function summarizeStudy(logs, referenceDate) {
   const subjects = [...new Set(logs.map((row) => row.subject ?? "未分类"))].sort();
   const bySubject = Object.fromEntries(subjects.map((subject) => {
     const rows = logs.filter((row) => (row.subject ?? "未分类") === subject);
-    const activities = Object.fromEntries([...new Set(rows.map((row) => row.activity ?? "未知"))].sort().map((activity) => [activity, rows.filter((row) => (row.activity ?? "未知") === activity).length]));
+    // [gpt] 2026-08-16：评估读取历史“带背/自背”时统一计入“背诵”。
+    const canonicalActivity = (activity) => activity === "带背" || activity === "自背" ? "背诵" : activity ?? "未知";
+    const activityRows = rows.map((row) => canonicalActivity(row.activity));
+    const activities = Object.fromEntries([...new Set(activityRows)].sort().map((activity) => [activity, activityRows.filter((item) => item === activity).length]));
     return [subject, {
       total: rows.length,
       last7d: rows.filter((row) => String(row.log_date) >= day7).length,

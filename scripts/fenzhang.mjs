@@ -3,10 +3,14 @@
 // 2026-08-03 建。口径与失真清单见 .local/夜班/提案/分章频次-统计结果-2026-08-03.md
 // 用法：node scripts/fenzhang.mjs [--dump 民法]
 import fs from 'node:fs';
+import path from 'node:path';
 import { loadExamPaper } from './lib/exam-corpus.mjs';
+import { resolveArchiveRoot } from './lib/workspace-paths.mjs';
 
-const 教材 = 'D:\\fashuo\\教材\\';
-const 真题 = 'D:\\fashuo\\真题\\_文本\\';
+// [gpt] 2026-08-23：不再绑定 D 盘；macOS 可设 FASHUO_ARCHIVE_ROOT。
+const 档案根 = resolveArchiveRoot();
+const 教材 = path.join(档案根, '教材');
+const 真题 = path.join(档案根, '真题', '_文本');
 const 封卷起始年 = 2025;
 const read = (p) => fs.readFileSync(p, 'utf8').replace(/^\uFEFF/, '').replace(/\r/g, '');
 const 文件年份 = (fileName) => Number((String(fileName).match(/(20\d{2})/) || [])[1]) || null;
@@ -78,7 +82,7 @@ function chapterTerms(chText) {
 // ---------- 建库 ----------
 const chapters = [];
 for (const [subj, [file, n]] of Object.entries(SUBJ))
-  for (const c of splitChapters(read(教材 + file), n))
+  for (const c of splitChapters(read(path.join(教材, file)), n))
     chapters.push({ subj, no: c.no, name: c.name, 名: `${c.no}.${c.name}`, text: c.text, terms: chapterTerms(c.text), 篇幅: c.text.replace(/\s/g, '').length });
 const N = chapters.length;
 

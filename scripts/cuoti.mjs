@@ -16,7 +16,7 @@
 // 写操作（先进本地缓冲 .local/cuoti-pending.jsonl）：
 //   absorb <id...>         —— 销账（云确认掌握后）；也可 absorb --like <片段> [--subject 刑法]
 //   add <科目> <事件说明> [--topic <标准主题> ...] —— 新增错题，可同时结构化归类
-//   classify <id> --topic <标准主题> ...            —— 给历史错题补分类
+//   classify <id> --topic <标准主题> ... [--run SR-ID] —— 给历史错题补分类；认领病根时回写当前 Run（[gpt] 2026-08-13）
 //   review <topic-id> <pass|partial|fail|void> ...   —— 记录结构化迁移证据；加 --schedule <排期id> 在证据同步成功后结案排期（[gpt] 有序一致性回写）
 //   pending [--clear]      —— 查看待同步缓冲；--clear 清空
 //   sync [--dry]           —— 重试 outbox；--dry 只预览不写。写命令加 --stage 可显式延后
@@ -34,6 +34,9 @@ import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs"
 import { loadEventAbsorptionProofs } from "./lib/error-absorption.mjs";
 import { buildFailurePortrait, formatFailurePortrait } from "./lib/knowledge-state.mjs";
 import { loadLocalMaterialCorpus, sortMaterialRows } from "./lib/material-corpus.mjs";
+import { assertCuotiJudgmentReady, assertSkillRunPrerequisites, recordAutomaticSkillStep, recordBusinessWriteback, validateDaibeiIngestReceipt } from "./lib/skill-run.mjs";
+import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
+import { validateErrorEntry } from "./lib/error-entry.mjs";
 import {
   CLASSIFICATION_STATUSES,
   FAILURE_PATTERNS,
@@ -65,7 +68,8 @@ function readPending() {
   return readOutbox(PENDING);
 }
 function appendPending(op) {
-  return appendOutbox(PENDING, op);
+  // [gpt] 2026-08-13：所有 CLI 新错入口共用同一校验器，不能靠调用者记住字段规则。
+  return appendOutbox(PENDING, op.op === "new_error" ? validateErrorEntry(op) : op);
 }
 function clearPending() {
   writeOutbox(PENDING, []);
@@ -530,23 +534,35 @@ export function buildMaterialOutput(corpus, keyword, refine) {
 export function parseMaterialArgs(args) {
   const positional = [];
   let source = "local";
-  for (const arg of args ?? []) {
+  let runId = null;
+  for (let index = 0; index < (args ?? []).length; index += 1) {
+    const arg = args[index];
     if (arg === "--db") source = "db";
+    else if (arg === "--run") {
+      runId = args[++index];
+      if (!runId || String(runId).startsWith("--")) throw new Error("material 的 --run 后需要 Skill Run ID");
+    }
     else if (String(arg).startsWith("--")) throw new Error(`material 未知参数：${arg}`);
     else positional.push(arg);
   }
   if (!positional[0]) throw new Error("material 需要关键词，如：material 想象竞合 因果");
   if (positional.length > 2) throw new Error("material 最多接收关键词和一个特征词");
-  return { source, queries: [{ keyword: positional[0], refine: positional[1] }] };
+  return { source, runId, queries: [{ keyword: positional[0], refine: positional[1] }] };
 }
 
 export function parseMaterialBatchArgs(args) {
   const queries = [];
   let source = "local";
+  let runId = null;
   for (let index = 0; index < (args ?? []).length; index += 1) {
     const arg = args[index];
     if (arg === "--db") {
       source = "db";
+      continue;
+    }
+    if (arg === "--run") {
+      runId = args[++index];
+      if (!runId || String(runId).startsWith("--")) throw new Error("material-batch 的 --run 后需要 Skill Run ID");
       continue;
     }
     if (arg === "--query") {
@@ -566,7 +582,7 @@ export function parseMaterialBatchArgs(args) {
     throw new Error(`material-batch 未知参数：${arg}`);
   }
   if (!queries.length) throw new Error("material-batch 至少需要一个 --query <关键词>");
-  return { source, queries };
+  return { source, runId, queries };
 }
 
 export function buildMaterialBatchOutput(corpus, queries) {
@@ -583,7 +599,8 @@ async function loadDbMaterialCorpus() {
   return new Map(entries);
 }
 
-async function runMaterialQueries({ source, queries }) {
+async function runMaterialQueries({ source, queries, runId = null }) {
+  const startedAt = Date.now();
   let corpus;
   try {
     corpus = source === "db"
@@ -594,6 +611,16 @@ async function runMaterialQueries({ source, queries }) {
   }
 
   console.log(buildMaterialBatchOutput(corpus, queries));
+  if (runId) {
+    recordAutomaticSkillStep({
+      runId,
+      step: "materials_checked",
+      status: "pass",
+      source: "cuoti-material",
+      evidenceRef: `queries:${queries.length}`,
+      durationMs: Date.now() - startedAt,
+    });
+  }
 }
 
 async function material(args) {
@@ -710,7 +737,12 @@ async function add(rest) {
   rest = rest.filter((arg) => arg !== "--stage");
   let parsed;
   try { parsed = parseAddArgs(rest); } catch (error) { return fail(error.message); }
-  appendPending({ op: "new_error", ...parsed });
+  const entrySource = parsed.recurOf ? "recurrence" : "direct";
+  try {
+    appendPending({ op: "new_error", ...parsed, entrySource });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
   console.log(`⏳ 已暂存待同步·新错题：[${parsed.subject}]${parsed.recurOf ? ` 🔁复发（源#${parsed.recurOf}）` : ""} ${parsed.knowledge}`);
   if (parsed.topic) {
     console.log(`   ↳ 主题「${parsed.topic.title}」｜病根 ${ROOT_CAUSES[parsed.topic.rootCauseCode]}｜诊断 ${parsed.topic.diagnosisStatus}`);
@@ -721,18 +753,117 @@ async function add(rest) {
   await sync([]);
 }
 
+// [gpt] 2026-08-13：一次写一条做题进度和整批截图错题，只同步一次。
+async function recordBatch(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
+  let runId = null;
+  try { runId = takeNamed(rest, "--run"); } catch (error) { return fail(error.message); }
+  const file = rest.shift();
+  if (!file) return fail("record-batch 需要 JSON 清单路径");
+  if (rest.length) return fail(`无法识别的 record-batch 参数：${rest.join(" ")}`);
+  let batch;
+  try {
+    const manifest = JSON.parse(readFileSync(file, "utf8"));
+    batch = buildErrorIntakeBatchOperations(manifest, { today });
+    if (runId) {
+      assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan" });
+    }
+  } catch (error) {
+    return fail(`批次预检失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  for (const operation of batch.operations) appendPending(operation);
+  console.log(`⏳ 已暂存批次 ${batch.key}：学习日志 1 条 + 错题 ${batch.errorCount} 条｜${batch.summary}`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
+  const synced = await sync([]);
+  if (!synced) return;
+  if (runId) {
+    recordBusinessWriteback({
+      runId,
+      source: "cuoti-record-batch",
+      evidenceRef: `batch:${batch.key}:log=1:errors=${batch.errorCount}`,
+      expectedSkill: "cuoti-fupan",
+      requiredSteps: [],
+    });
+  }
+  console.log(`✅ 批次已核验：只生成一条进度流水；${batch.errorCount} 张题图按 ${batch.errorCount} 道真实错题处理。`);
+}
+
+// [gpt] 2026-08-13：复跑历史任务时只核验唯一进度与既有错题，并为同一 intake Run 落业务回执。
+async function verifyBatch(rest) {
+  let runId = null;
+  try { runId = takeNamed(rest, "--run"); } catch (error) { return fail(error.message); }
+  const file = rest.shift();
+  if (!file) return fail("verify-batch 需要 JSON 清单路径");
+  if (!runId) return fail("verify-batch 必须提供 --run SR-ID");
+  if (rest.length) return fail(`无法识别的 verify-batch 参数：${rest.join(" ")}`);
+  try {
+    assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan" });
+    const manifest = JSON.parse(readFileSync(file, "utf8"));
+    const batch = buildErrorIntakeBatchOperations(manifest, { today });
+    const [logsResponse, errorsResponse] = await Promise.all([
+      db.from("study_log").select("id,log_date,subject,chapter,activity,accuracy")
+        .eq("log_date", batch.date).eq("subject", batch.subject).eq("chapter", batch.chapter),
+      db.from("study_error").select("id,log_date,subject,knowledge")
+        .eq("log_date", batch.date).eq("subject", batch.subject),
+    ]);
+    if (logsResponse.error) throw new Error(`读取进度流水失败：${logsResponse.error.message}`);
+    if (errorsResponse.error) throw new Error(`读取错题事件失败：${errorsResponse.error.message}`);
+    const verified = verifyExistingErrorIntakeBatch(manifest, {
+      studyLogs: logsResponse.data,
+      errors: errorsResponse.data,
+    }, { today });
+    recordBusinessWriteback({
+      runId,
+      source: "cuoti-verify-batch",
+      evidenceRef: `existing:log#${verified.studyLogId}:errors#${verified.errorIds.join(",")}`,
+      expectedSkill: "cuoti-fupan",
+      requiredSteps: [],
+    });
+    console.log(`BATCH_ALREADY_VERIFIED｜log#${verified.studyLogId}｜errors#${verified.errorIds.join(",")}｜${verified.summary}`);
+  } catch (error) {
+    return fail(`既有批次核验失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 async function classify(rest) {
   const stageOnly = rest.includes("--stage");
   rest = rest.filter((arg) => arg !== "--stage");
+  let runId;
+  let activeRun = null;
+  try { runId = takeNamed(rest, "--run"); } catch (error) { return fail(error.message); }
+  if (runId) {
+    try {
+      activeRun = assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan", steps: ["target_frozen"] });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
   const studyErrorId = Number(rest.shift());
   if (!Number.isInteger(studyErrorId) || studyErrorId <= 0) return fail("classify 需要错题事件 id，如：classify 81 --topic 监护人顺位");
+  // [gpt] 2026-08-13：病根认领只能写回本轮冻结的 E#，禁止用另一个事件的 confirmed 回执解锁当前判题。
+  if (activeRun) {
+    const frozenRefs = new Set(String(activeRun.steps.target_frozen?.evidenceRef ?? "").match(/(?:T|E)#\d+/gu) ?? []);
+    if (!frozenRefs.has(`E#${studyErrorId}`)) return fail(`classify --run 的事件 E#${studyErrorId} 不在本轮 target_frozen 中`);
+  }
   let parsed;
   try { parsed = parseTopicOptions(rest, { requireTopic: true }); } catch (error) { return fail(error.message); }
   if (parsed.rest.length) return fail(`无法识别的 classify 参数：${parsed.rest.join(" ")}`);
   appendPending({ op: "classify_error", studyErrorId, topic: parsed.topic });
   console.log(`⏳ 已暂存待同步·归类 #${studyErrorId} →「${parsed.topic.title}」｜病根 ${ROOT_CAUSES[parsed.topic.rootCauseCode]}｜诊断 ${parsed.topic.diagnosisStatus}`);
   if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
-  await sync([]);
+  const synced = await sync([]);
+  if (!synced) return;
+  // [gpt] 2026-08-13：用户认领或排除病根后，用真实归类同步回执解锁 result；pending 仍停在诊断问题阶段。
+  if (runId && ["confirmed", "rejected"].includes(parsed.topic.diagnosisStatus)) {
+    recordAutomaticSkillStep({
+      runId,
+      step: "diagnosis_recorded",
+      source: "cuoti-classify",
+      evidenceRef: `E#${studyErrorId}:diagnosis=${parsed.topic.diagnosisStatus}`,
+      expectedSkill: "cuoti-fupan",
+    });
+  }
 }
 
 async function classifyBatch(rest) {
@@ -792,6 +923,20 @@ function takeNamed(rest, name) {
 }
 
 async function review(rest) {
+  const reviewStartedAt = Date.now();
+  const runIndex = rest.indexOf("--run");
+  const runId = runIndex === -1 ? null : rest[runIndex + 1];
+  if (runIndex !== -1) {
+    if (!runId || String(runId).startsWith("--")) return fail("review 的 --run 后需要 Skill Run ID");
+    rest = [...rest.slice(0, runIndex), ...rest.slice(runIndex + 2)];
+  }
+  if (runId) {
+    try {
+      assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan", steps: ["target_frozen", "materials_checked", "question_integrity_pass"] });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
   const stageOnly = rest.includes("--stage");
   rest = rest.filter((arg) => arg !== "--stage");
   const sameSession = rest.includes("--same-session");
@@ -811,6 +956,7 @@ async function review(rest) {
     const failurePatternCode = validateFailurePattern(takeNamed(rest, "--pattern"));
     const diagnosisRaw = takeNamed(rest, "--diagnosis");
     if (diagnosisRaw && !failurePatternCode) throw new Error("--diagnosis 必须和 --pattern 一起使用");
+    if (result === "void" && failurePatternCode) throw new Error("作废题只归责教练，不能记录用户 failure pattern");
     // [gpt] 2026-08-10：CLI 先做完整语义预检，坏题干/缺变式不得先进入 outbox。
     const reviewEvidence = buildReviewEvidence({
       result,
@@ -845,8 +991,26 @@ async function review(rest) {
       durationSeconds: reviewEvidence.durationSeconds,
       failurePatternCode,
       diagnosisStatus: validateDiagnosisStatus(diagnosisRaw ?? "pending"),
+      ...(result === "void" ? {
+        responsibility: "teacher",
+        metadata: {
+          responsibility: "teacher",
+          count_as_valid_attempt: false,
+          count_as_user_error: false,
+          advance_cooldown: false,
+          close_schedule: false,
+        },
+      } : {}),
     };
   } catch (error) { return fail(error.message); }
+  if (runId) {
+    try {
+      // [gpt] 2026-08-13：在进入 outbox 前核对题号、结果和病根状态，避免显示卡与真实写回各说一套。
+      assertCuotiJudgmentReady({ runId, topicId, result: op.result, diagnosisStatus: op.diagnosisStatus });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
   const scheduleId = takeNamed(rest, "--schedule");
   const scheduleFile = takeNamed(rest, "--schedule-file") ?? ".local/复盘排期.md";
   if (rest.length) return fail(`无法识别的 review 参数：${rest.join(" ")}`);
@@ -870,13 +1034,14 @@ async function review(rest) {
   const reviewKind = op.cold ? "冷复检" : op.result === "void" ? "作废题" : "非冷检";
   console.log(`⏳ 已暂存待同步·T#${topicId} ${reviewKind} ${result}｜${REVIEW_VARIANTS[op.variantKind].label} L${op.transferLevel}${op.assessmentContext !== "practice" ? `｜${op.assessmentContext}/${op.durationSeconds}s` : ""}${op.angle ? `｜角度 ${op.angle}` : ""}${op.failurePatternCode ? `｜定向栽点 ${FAILURE_PATTERNS[op.failurePatternCode].label}` : ""}${op.date ? `｜${op.date}` : ""}${scheduleId ? `｜结案排期 ${scheduleId}` : ""}`);
   if (op.result === "pass" && !qualifies) console.log("ℹ️ 本次通过会留证，但不计入主题 stable：必须是 clean、跨会话、application 且 L3+。");
+  if (op.result === "void") console.log("↩ 本次只留教练题面事故审计：不计有效题量、不记用户错误、不推进冷却；原排期保持 open。");
   if (stageOnly) {
-    if (scheduleId) console.log(`（已按 --stage 仅暂存；复检证据与排期 ${scheduleId} 均未落，稍后 sync 成功后手动 schedule.mjs done。）`);
+    if (scheduleId) console.log(`（已按 --stage 仅暂存；复检证据与排期 ${scheduleId} 均未落。稍后先 sync，再重跑同一 review --schedule 完成安全结案；禁止裸 schedule.mjs done。）`);
     return;
   }
   const synced = await sync([]);
   if (!synced) {
-    if (scheduleId) console.error(`⚠️ 复检证据暂存但同步失败；排期 ${scheduleId} 未结案。修复后重跑 sync，再 schedule.mjs done ${scheduleId} --result "..."。`);
+    if (scheduleId) console.error(`⚠️ 复检证据暂存但同步失败；排期 ${scheduleId} 未结案。修复后先重跑 sync，再核对证据并重跑同一 review --schedule；禁止用无目标的 schedule.mjs done 代替。`);
     return;
   }
   if (scheduleId) {
@@ -886,7 +1051,7 @@ async function review(rest) {
       assertScheduleLink(currentSchedule, scheduleId, {
         kind: "topic", targetId: topicId, referenceDate: op.date, route: "cuoti-fupan", dimension: op.dimension,
       });
-      const closed = closeScheduleItem(currentSchedule, scheduleId, {
+      const closure = closeScheduleItem(currentSchedule, scheduleId, {
         date: op.date,
         result: `${result}${op.angle ? `｜${op.angle}` : ""}`,
         // [gpt] 2026-08-10：把真实复检条件一并回写排期，供干预响应校准；不是只打一个“已完成”勾。
@@ -894,11 +1059,35 @@ async function review(rest) {
         cold: op.cold,
         promptIntegrity: op.promptIntegrity,
       });
-      writeFileSync(scheduleFile, closed, "utf8");
-      console.log(`✅ 已结案复盘排期：${scheduleId}（${op.date}）`);
+      if (typeof closure === "string") {
+        writeFileSync(scheduleFile, closure, "utf8");
+        console.log(`✅ 已结案复盘排期：${scheduleId}（${op.date}）`);
+      } else {
+        console.log(`↩ 作废题只归责教练；排期 ${scheduleId} 保持 open、冷却不前移，重写并重新过命题 Gate 后再执行。`);
+      }
     } catch (error) {
-      console.error(`⚠️ 排期结案失败：${scheduleId}：${error instanceof Error ? error.message : String(error)}（复检证据已落库；请核对对象后手动 schedule.mjs done ${scheduleId} --result "..."）`);
+      console.error(`⚠️ 排期结案失败：${scheduleId}：${error instanceof Error ? error.message : String(error)}（复检证据已落库；请先核对原排期目标。单主题修正关联后重跑 review --schedule；整组须逐题留证后用 schedule.mjs done ${scheduleId} --topics <完整T#集合> --evidence-refs <已落库证据引用> --result "..."）`);
       process.exitCode = 1;
+    }
+  }
+  if (runId && process.exitCode !== 1) {
+    recordBusinessWriteback({
+      runId,
+      source: "cuoti-review",
+      evidenceRef: `T#${topicId}:${op.result}:diagnosis=${op.diagnosisStatus}`,
+      expectedSkill: "cuoti-fupan",
+      requiredSteps: ["target_frozen", "materials_checked", "question_integrity_pass", "judgment_output_verified"],
+      durationMs: Date.now() - reviewStartedAt,
+    });
+    // [gpt] 2026-08-13：若本次 review 已带已认领/已排除栽点，业务写回同时留下病根状态回执。
+    if (["confirmed", "rejected"].includes(op.diagnosisStatus)) {
+      recordAutomaticSkillStep({
+        runId,
+        step: "diagnosis_recorded",
+        source: "cuoti-review",
+        evidenceRef: `T#${topicId}:diagnosis=${op.diagnosisStatus}`,
+        expectedSkill: "cuoti-fupan",
+      });
     }
   }
 }
@@ -925,9 +1114,37 @@ function pending(rest) {
 
 // ---------- sync：逐项幂等落库；只移除成功项 ----------
 async function sync(rest) {
+  rest = [...rest];
+  let runId;
+  let operationId;
+  try {
+    runId = takeNamed(rest, "--run");
+    operationId = takeNamed(rest, "--operation");
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+  if (Boolean(runId) !== Boolean(operationId)) return fail("sync 的 --run 与 --operation 必须成对提供");
   const dry = rest.includes("--dry");
+  rest = rest.filter((arg) => arg !== "--dry");
+  if (rest.length) return fail(`无法识别的 sync 参数：${rest.join(" ")}`);
+  if (dry && runId) return fail("--dry 不能签 Skill Run 写回");
   const ops = readPending();
-  if (!ops.length) { console.log("缓冲为空，没有要同步的。"); return true; }
+  if (!ops.length && !operationId) { console.log("缓冲为空，没有要同步的。"); return true; }
+  let trackedRun = null;
+  if (runId) {
+    try {
+      trackedRun = assertSkillRunPrerequisites({
+        runId,
+        expectedSkill: "daibei-pc",
+        steps: ["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded"],
+      });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+    if (!String(trackedRun.steps.result_recorded.evidenceRef ?? "").includes(`op=${operationId}`)) {
+      return fail(`Skill Run 的本地结果回执与 operation_id 不一致：${operationId}`);
+    }
+  }
   const absorbIds = [...new Set(ops.filter((o) => o.op === "absorb").flatMap((o) => o.ids ?? []))];
   const reopenIds = [...new Set(ops.filter((o) => o.op === "reopen_error").flatMap((o) => o.ids ?? []))];
   const newErrs = ops.filter((o) => o.op === "new_error");
@@ -954,24 +1171,50 @@ async function sync(rest) {
     return true;
   }
 
-  let report;
-  try {
-    report = await syncStudyOutbox({ db, path: PENDING, today });
-  } catch (error) {
-    fail(`outbox 同步前检查/重写失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
-    return false;
+  let report = { total: 0, succeeded: [], failed: [] };
+  if (ops.length) {
+    try {
+      report = await syncStudyOutbox({ db, path: PENDING, today });
+    } catch (error) {
+      fail(`outbox 同步前检查/重写失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
+      return false;
+    }
   }
   const count = (kind) => report.succeeded
     .filter(({ result }) => result.kind === kind)
     .reduce((sum, { result }) => sum + result.affected, 0);
   console.log(`✅ 已确认同步：销账 ${count("absorb")} 条、恢复误销账 ${count("reopen_error")} 条、新增错题 ${count("new_error")} 条、补归类 ${count("classify_error")} 条、冷复检 ${count("error_review")} 条、知识映射 ${count("knowledge_link")} 条、知识证据 ${count("knowledge_evidence")} 条、答疑卡点 ${count("ask_point")} 条、答疑收口 ${count("resolve_ask_point")} 条、学习日志 ${count("study_log")} 条、长期记忆 ${count("coach_memory")} 条。`);
+  const targetFailed = operationId
+    ? report.failed.some(({ op }) => op.operation_id === operationId)
+    : false;
   if (report.failed.length) {
     console.error(`⚠️ ${report.failed.length} 项失败，已保留在 outbox，绝未清空：`);
     for (const { op, error } of report.failed) console.error(`   · ${op.operation_id} (${op.op})：${error}`);
     process.exitCode = 1;
-    return false;
+    if (!runId || targetFailed) return false;
   }
-  console.log("outbox 已清空；每项均由 operation_id 保证重试不重复。");
+  if (runId) {
+    const verification = await db.from("ingest_operation")
+      .select("operation_id,op_type,status")
+      .eq("operation_id", operationId)
+      .maybeSingle();
+    if (verification.error) return fail(`核验 ingest_operation 失败：${verification.error.message}`);
+    try {
+      validateDaibeiIngestReceipt({ runId, operationId, receipt: verification.data });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+    recordAutomaticSkillStep({
+      runId,
+      step: "writeback_verified",
+      source: "cuoti-sync-ingest",
+      evidenceRef: `ingest:${operationId}:applied`,
+      expectedSkill: "daibei-pc",
+    });
+    console.log(`SKILL_WRITEBACK_VERIFIED｜${runId}｜${operationId}`);
+  }
+  if (report.failed.length) console.log(`目标操作已核验成功；另有 ${report.failed.length} 项仍留在 outbox，稍后继续重试。`);
+  else console.log("outbox 已清空；每项均由 operation_id 保证重试不重复。");
   console.log(`（错题本是 Supabase 运行态，APP 实时读库即可见，无需重新部署。若日后复盘产出「心得」入内容库才需 archive 提交+部署。）`);
   return true;
 }
@@ -1035,7 +1278,7 @@ async function recheckFail(rest) {
   const ledger = readLedger();
   const now = new Date().toISOString();
   for (const r of data ?? []) {
-    appendPending({ op: "new_error", subject: r.subject, knowledge: String(r.knowledge), recurOf: r.id, note: `老题抽查没过·复发（源#${r.id}）` });
+    appendPending({ op: "new_error", subject: r.subject, knowledge: String(r.knowledge), recurOf: r.id, entrySource: "recurrence", note: `老题抽查没过·复发（源#${r.id}）` });
     ledger[r.id] = { last: now, count: (ledger[r.id]?.count ?? 0) + 1, result: "fail" };
     console.log(`↩ #${r.id} 没过 → 已暂存重新挂账：${String(r.knowledge).slice(0, 50)}`);
   }
@@ -1067,6 +1310,8 @@ async function main(argv) {
     case "absorb": await absorb(args); break;
     case "reopen": await reopen(args); break;
     case "add": await add(args); break;
+    case "record-batch": await recordBatch(args); break;
+    case "verify-batch": await verifyBatch(args); break;
     case "classify": await classify(args); break;
     case "classify-batch": await classifyBatch(args); break;
     case "review": await review(args); break;
@@ -1082,14 +1327,16 @@ async function main(argv) {
       console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
       console.log("  写：absorb <id...>|--like <片段>（自动校验至少两轴、两条带依据通过，其中至少一次冷检）");
       console.log("      reopen <id...> --reason <审计原因>（只纠正误销账，不伪造失败）");
-      console.log("      add <科目> <事件说明> [--topic 标准主题 --chapter 章 --section 节 --kp ID --classification pending|confirmed --cause 病根代码 --pattern 栽点代码 --cause-note 说明 --diagnosis pending|confirmed --anchor 锚点 --recur-of id]");
-      console.log("      classify <事件id> --topic <标准主题> [同上主题参数]");
+      console.log("      add <科目> <事件说明> --chapter 章 [--topic 标准主题 --section 节 --kp ID --classification pending|confirmed --cause 病根代码 --pattern 栽点代码 --cause-note 说明 --diagnosis pending|confirmed --anchor 锚点 --recur-of id]");
+      console.log("      record-batch <批次.json> [--run SR-ID] [--stage]（一条进度 + N 条截图错题，一次同步）");
+      console.log("      verify-batch <批次.json> --run SR-ID（只读核验既有批次，不重复写入）");
+      console.log("      classify <事件id> --topic <标准主题> [同上主题参数] [--run SR-ID]");
       console.log("      classify-batch <归类计划.json> [--stage]");
-      console.log("      review <主题id> <pass|partial|fail|void> --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --axis 验证轴 [--context practice|timed|full_mock --seconds N --event 错题id --dimension application|recall --pattern 栽点代码 --diagnosis pending|confirmed --same-session --cued --invalid-prompt --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键 --schedule 排期id --schedule-file 路径]");
+      console.log("      review <主题id> <pass|partial|fail|void> --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --axis 验证轴 [--context practice|timed|full_mock --seconds N --event 错题id --dimension application|recall --pattern 栽点代码 --diagnosis pending|confirmed --same-session --cued --invalid-prompt --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键 --schedule 排期id --schedule-file 路径 --run SR-ID]");
       console.log(`  验证轴：${Object.entries(REVIEW_PROBE_AXES).map(([code, item]) => `${code}=${item.label}`).join(" / ")}`);
       console.log(`  病根代码：${Object.entries(ROOT_CAUSES).map(([code, label]) => `${code}=${label}`).join(" / ")}`);
       console.log(`  栽点代码：${Object.entries(FAILURE_PATTERNS).map(([code, item]) => `${code}=${item.label}`).join(" / ")}`);
-      console.log("  outbox：pending [--clear] / sync [--dry]（失败重试）");
+      console.log("  outbox：pending [--clear] / sync [--dry]；带背 Run 写回核验：sync --run SR-ID --operation UUID");
   }
 }
 

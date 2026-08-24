@@ -9,6 +9,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs";
 import { appendOutbox, readOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { askPointLabel, summarizeAskPoints } from "./lib/ask-point-summary.mjs";
+import { assertSkillRunPrerequisites, recordBusinessWriteback } from "./lib/skill-run.mjs";
 
 let database = null;
 function db() {
@@ -143,13 +144,24 @@ async function verify(options) {
   const result = String(options._[1] ?? "");
   if (!Number.isInteger(id) || id <= 0) return fail("verify 需要合法卡点 id");
   if (!VERIFY_RESULTS.has(result)) return fail("verify 结果只能是 pass|partial|fail|void");
+  if (options.run && options.run !== true) {
+    try {
+      assertSkillRunPrerequisites({ runId: String(options.run), expectedSkill: "ask-pc", steps: ["materials_checked", "question_integrity_pass"] });
+    } catch (error) {
+      return fail(error instanceof Error ? error.message : String(error));
+    }
+  }
   const promptFlags = [options.cued ? "cued" : null, options["invalid-prompt"] ? "invalid" : null].filter(Boolean);
   if (promptFlags.length > 1) return fail("--cued 与 --invalid-prompt 不能同时使用");
   const promptIntegrity = promptFlags[0] ?? "clean";
   if (promptIntegrity === "invalid" && result !== "void") return fail("--invalid-prompt 必须配合 void");
   if (result === "void" && promptIntegrity !== "invalid") return fail("void 必须配合 --invalid-prompt");
   const evidenceAnchor = options.anchor && options.anchor !== true ? String(options.anchor).trim() : "";
-  const note = options.note && options.note !== true ? String(options.note).trim() : "";
+  const noteInput = options.note && options.note !== true ? String(options.note).trim() : "";
+  // [gpt] 2026-08-12：答疑检验的污染题同样只归责教练，审计语义不能靠调用者手填。
+  const note = result === "void"
+    ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", noteInput].filter(Boolean).join("；")
+    : noteInput;
   if (!evidenceAnchor) return fail('verify 需要 --anchor "检验题/教材锚点"');
   if (!note) return fail('verify 需要 --note "作答表现与判定理由"');
   let kpId = options.kp && options.kp !== true ? String(options.kp).trim().toUpperCase() : null;
@@ -189,6 +201,7 @@ async function verify(options) {
     note,
   });
   console.log(`⏳ 已暂存答疑验证：A#${id} → ${kpId} understanding/${result}${promptIntegrity === "clean" ? "" : `｜${promptIntegrity}`}`);
+  if (result === "void") console.log("↩ 本次只留教练题面事故审计：不计有效题量、不记用户错误、不推进冷却，原排期保持 open。");
   if (options.stage) return console.log("（已按 --stage 仅暂存；稍后运行 ask.mjs sync。）");
   const report = await sync();
   const succeeded = report?.succeeded.find(({ op: item }) => item.operation_id === op.operation_id);
@@ -198,7 +211,7 @@ async function verify(options) {
     assertScheduleLink(markdown, scheduleId, {
       kind: "knowledge", targetId: kpId, referenceDate: date, route: "ask-pc", dimension: "understanding",
     });
-    const closed = closeScheduleItem(markdown, scheduleId, {
+    const closure = closeScheduleItem(markdown, scheduleId, {
       date,
       result: `understanding/${result}${promptIntegrity === "clean" ? "" : `｜${promptIntegrity}`}`,
       // [gpt] 2026-08-10：结构化保存干预响应条件，提示后通过不再混入 clean pass。
@@ -206,12 +219,25 @@ async function verify(options) {
       cold: Boolean(options.cold),
       promptIntegrity,
     });
-    writeFileSync(scheduleFile, closed, "utf8");
-    console.log(`✅ 已结案答疑检验排期：${scheduleId}`);
+    if (typeof closure === "string") {
+      writeFileSync(scheduleFile, closure, "utf8");
+      console.log(`✅ 已结案答疑检验排期：${scheduleId}`);
+    } else {
+      console.log(`↩ 作废题只归责教练；排期 ${scheduleId} 保持 open，重写并重新过命题 Gate 后再执行。`);
+    }
   }
   console.log(succeeded.result.clarified
     ? `✅ A#${id} 已有 clean pass 理解证据，状态已收口为 clarified。`
     : `↩ A#${id} 已记理解证据但继续保持 open；下一轮仍需无提示通过。`);
+  if (options.run && options.run !== true) {
+    recordBusinessWriteback({
+      runId: String(options.run),
+      source: "ask-verify",
+      evidenceRef: `A#${id}:${result}`,
+      expectedSkill: "ask-pc",
+      requiredSteps: ["materials_checked", "question_integrity_pass"],
+    });
+  }
 }
 
 function pending() {

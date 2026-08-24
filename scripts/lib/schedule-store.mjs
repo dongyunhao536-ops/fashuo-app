@@ -118,10 +118,28 @@ function scheduleById(parsed, id) {
   return matches[0];
 }
 
+/**
+ * [gpt] 2026-08-12：统一抽取排期中的稳定错题目标；支持 T#27/29/30 与 canonical T27，
+ * 并保证 T#10 不会误命中 T#108。
+ */
+export function extractScheduleTargetIds(item = {}) {
+  const source = `${item.ref ?? ""} ${item.task ?? item.title ?? ""}`;
+  const topicIds = new Set();
+  for (const match of source.matchAll(/\bT#?(\d+)((?:\s*\/\s*(?:T#?)?\d+)*)/giu)) {
+    topicIds.add(Number(match[1]));
+    for (const continuation of match[2].matchAll(/\d+/gu)) topicIds.add(Number(continuation[0]));
+  }
+  const eventIds = new Set(
+    [...source.matchAll(/(?:^|[^A-Za-z0-9])#(\d+)\b/gu)].map((match) => Number(match[1])),
+  );
+  const knowledgeIds = new Set(source.toUpperCase().match(/\b[A-Z]{2,4}-\d{4}\b/gu) ?? []);
+  return { topicIds: [...topicIds], eventIds: [...eventIds], knowledgeIds: [...knowledgeIds] };
+}
+
 function taskTargetIds(kind, task) {
   const text = String(task ?? "");
   if (kind === "recite") return [...new Set(text.match(/\b[A-Z]\d+\b/g) ?? [])];
-  if (kind === "topic") return [...new Set([...text.matchAll(/\bT#?(\d+)\b/g)].map((match) => `T${match[1]}`))];
+  if (kind === "topic") return extractScheduleTargetIds({ task: text }).topicIds.map((id) => `T${id}`);
   if (kind === "knowledge") return [...new Set(text.match(/\b[A-Z]{2,4}-\d{4}\b/g) ?? [])];
   throw new Error(`未知关联类型：${kind}`);
 }
@@ -172,6 +190,9 @@ export function assertScheduleLink(markdown, scheduleId, { kind, targetId, refer
 
   const ids = taskTargetIds(kind, item.task);
   if (ids.length && !ids.includes(target)) throw new Error(`排期 ${id} 任务正文不包含目标 ${target}`);
+  if (kind === "topic" && ids.length > 1) {
+    throw new Error(`排期 ${id} 同时包含 ${ids.join("、")}，单条 review 不得提前结清整组；逐题留证后用带完整 --topics 的排期结案命令`);
+  }
   if (ref.startsWith(expectedRef)) return item;
   if (ids.length !== 1 || ids[0] !== target) {
     const detail = ids.length > 1 ? `任务同时包含 ${ids.join("、")}` : "缺少可核验的 canonical ref/单一任务 ID";
@@ -381,6 +402,23 @@ export function closeScheduleItem(markdown, id, { date, result, outcome = null, 
   if (before.counts.errors) throw new Error(`现有复盘排期有 ${before.counts.errors} 个结构错误，拒绝结案`);
   if (indexes.length === 0) throw new Error(`未找到排期 ID：${cleanId}`);
   const item = scheduleById(before, cleanId);
+  // [gpt] 2026-08-12：void 是教练命题失误的审计结果，不是用户完成一次有效复检。
+  // 保留原排期与冷却窗口，调用方重写题目、重新过 Gate 后再结案。
+  if (cleanOutcome === "void") {
+    return {
+      markdown: String(markdown),
+      closed: false,
+      reason: "teacher-invalid-prompt",
+      item,
+      disposition: {
+        responsibility: "teacher",
+        countAsValidAttempt: false,
+        countAsUserError: false,
+        advanceCooldown: false,
+        closeSchedule: false,
+      },
+    };
+  }
   if (item.interventionEpisodeId && structuredCount !== 3) throw new Error("干预 episode 结案必须同时提供 outcome/cold/promptIntegrity");
   if (item.observationWindow && item.observationWindow !== "immediate" && cleanDate < item.dueDate) {
     throw new Error(`${item.observationWindow.toUpperCase()} 干预复检最早 ${item.dueDate}，不能提前结案`);
@@ -435,5 +473,6 @@ export function closeScheduleItem(markdown, id, { date, result, outcome = null, 
     after = parseReviewSchedule(next, { referenceDate: cleanDate });
     if (after.counts.errors) throw new Error(`追加干预复检后的排期有 ${after.counts.errors} 个结构错误，拒绝落盘`);
   }
+  // 保持既有成功路径返回字符串，避免破坏历史调用；只有 void 返回显式“不结案”对象。
   return next;
 }

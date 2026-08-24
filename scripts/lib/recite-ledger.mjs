@@ -467,10 +467,13 @@ export function applyEvidenceEvent(markdown, parsed, {
     result,
     cold,
     promptIntegrity,
-    failurePatternCode: failurePatternCode || null,
-    diagnosisStatus: failurePatternCode ? (diagnosisStatus || "pending") : null,
+    // [gpt] 2026-08-12：题面作废不是学生栽点，统一清除用户病因并固化教练责任。
+    failurePatternCode: result === "void" ? null : failurePatternCode || null,
+    diagnosisStatus: result === "void" ? null : failurePatternCode ? (diagnosisStatus || "pending") : null,
     evidenceAnchor,
-    note: note || null,
+    note: result === "void"
+      ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", note].filter(Boolean).join("；")
+      : note || null,
   };
   const probeIssues = [];
   parseEvidenceEvents(`<!-- recite-evidence-v2 ${JSON.stringify(event)} -->`, probeIssues, parsed.referenceDate);
@@ -478,6 +481,7 @@ export function applyEvidenceEvent(markdown, parsed, {
   if (errors.length) throw new Error(errors.map((issue) => issue.message).join("；"));
 
   const lines = String(markdown).replace(/\r\n/g, "\n").split("\n");
+  // void 不代表完成一次有效“碰过”，不能刷新最后碰或冷却基线；只在正文与流水留教练事故审计。
   if (!backfill) {
     const headingIndex = entry.line - 1;
     let end = headingIndex + 1;
@@ -485,13 +489,13 @@ export function applyEvidenceEvent(markdown, parsed, {
     const fieldIndex = lines.findIndex((line, index) => index > headingIndex && index < end && /^-\s*挂(?:\s|\*)/.test(line));
     if (fieldIndex < 0) throw new Error(`${id} 缺状态字段行，不能安全记录复检`);
     const mmdd = date.slice(5);
-    if (date >= (entry.lastTouchedOn ?? "")) {
+    if (result !== "void" && date >= (entry.lastTouchedOn ?? "")) {
       if (/最后碰\s+[*]*(?:20\d{2}-)?\d{2}-\d{2}[*]*/.test(lines[fieldIndex])) lines[fieldIndex] = lines[fieldIndex].replace(/最后碰\s+[*]*(?:20\d{2}-)?\d{2}-\d{2}[*]*/, `最后碰 **${mmdd}**`);
       else lines[fieldIndex] = `${lines[fieldIndex].trimEnd()} ｜ 最后碰 **${mmdd}**`;
     }
     const checkLabel = dimension === "understanding" ? "理解检验" : cold ? "冷复检" : "复检";
-    const patternText = failurePatternCode ? `；栽点：${FAILURE_PATTERNS[failurePatternCode].label}（${event.diagnosisStatus}）` : "";
-    const noteText = note ? `；${note}` : "";
+    const patternText = event.failurePatternCode ? `；栽点：${FAILURE_PATTERNS[event.failurePatternCode].label}（${event.diagnosisStatus}）` : "";
+    const noteText = event.note ? `；${event.note}` : "";
     lines.splice(end, 0, `- **${checkLabel}（${mmdd}）**：${evidenceResultLabel(result)}${patternText}${noteText}；锚点：${evidenceAnchor}`);
   }
 

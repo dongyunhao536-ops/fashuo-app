@@ -1,8 +1,11 @@
 {
-  "_来源": "[gpt] 2026-08-11：数据随学习动作实时落账，监控只按周分析；学习低频不是故障。",
+  "_来源": "[gpt] 2026-08-12：数据随学习动作实时落账，监控只按周分析；新增 Skill Run 与 Codex 宿主守卫阈值，学习低频不是故障。",
   "localOutboxWarnMinutes": 15,
   "localOutboxErrorMinutes": 1440,
   "ingestStaleMinutes": 15,
   "reviewRequestStaleDays": 3,
-  "candidateStaleDays": 7
+  "candidateStaleDays": 7,
+  "skillRunStaleMinutes": 1440,
+  "skillStartupWarnMs": 5000,
+  "skillTurnUncheckedMinutes": 60
 }

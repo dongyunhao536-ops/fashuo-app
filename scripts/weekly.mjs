@@ -18,7 +18,9 @@ import { buildLearningController } from "./lib/learning-controller.mjs";
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语进周报叙事(2026-07-10 起)；量化v3(dashboard.ts)仍五科不动
-const STUDY_ACTIVITIES = new Set(["听课", "看书", "做题", "背诵", "带背"]); // "学了什么"只认实打实学习动作(含带背·云2026-07-07要求计入；含看书·2026-07-31补，自学看书=输入台阶)
+const STUDY_ACTIVITIES = new Set(["听课", "看书", "做题", "背诵"]);
+// [gpt] 2026-08-16：新流水统一存“背诵”；读取旧“带背/自背”时也折叠到同一展示活动。
+const canonicalActivity = (activity) => activity === "带背" || activity === "自背" ? "背诵" : activity;
 const cut = (value, limit = 90) => {
   const text = String(value ?? "").replace(/\s+/g, " ").trim();
   return text.length > limit ? `${text.slice(0, limit)}…` : text;
@@ -71,16 +73,17 @@ async function buildReview(weekStart) {
   const studyRows = study.data ?? [];
   const studyMap = new Map();
   for (const s of studyRows) {
-    if (!SUBJECTS.includes(s.subject) || !STUDY_ACTIVITIES.has(s.activity) || !s.chapter) continue;
+    const activity = canonicalActivity(s.activity);
+    if (!SUBJECTS.includes(s.subject) || !STUDY_ACTIVITIES.has(activity) || !s.chapter) continue;
     const row = studyMap.get(s.subject) ?? { chapters: new Set(), activities: new Set() };
-    row.chapters.add(String(s.chapter)); row.activities.add(s.activity); studyMap.set(s.subject, row);
+    row.chapters.add(String(s.chapter)); row.activities.add(activity); studyMap.set(s.subject, row);
   }
   const studied = [...studyMap.entries()].map(([subject, v]) => ({ subject, chapters: [...v.chapters], activities: [...v.activities] }));
 
   // 带背/背诵学习效果（feeling·掌握轨迹）：喂复盘层定"下周精度重点"；不卡章节（小结行 chapter=null 也收）
   const effects = studyRows
     .filter((s) => SUBJECTS.includes(s.subject) && s.feeling)
-    .map((s) => ({ subject: s.subject, chapter: s.chapter ?? null, activity: s.activity ?? "", feeling: String(s.feeling) }));
+    .map((s) => ({ subject: s.subject, chapter: s.chapter ?? null, activity: canonicalActivity(s.activity) ?? "", feeling: String(s.feeling) }));
   const pr = prior.data?.[0];
   const priorReport = pr ? { weekStart: String(pr.week_start), content: String(pr.content ?? "").slice(0, 1500) } : null;
 
@@ -183,7 +186,7 @@ function formatData(r) {
     `· 活动量：新增答疑卡点 ${r.activity.askPointsCreated} 条（不是答疑次数） / 教练打卡 ${r.activity.coachLogs} 条`, `· 学了什么：`];
   if (r.studied.length) for (const s of r.studied) L.push(`  - ${s.subject}：${s.chapters.join("、") || "（未记章节）"}${s.activities.length ? "　[" + s.activities.join("/") + "]" : ""}`);
   else L.push(`  - （本周无学习流水记录）`);
-  if (r.effects?.length) { L.push(`· 带背/学习效果（掌握轨迹，据此定下周精度重点）：`); for (const e of r.effects) L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`); }
+  if (r.effects?.length) { L.push(`· 背诵/学习效果（掌握轨迹，据此定下周精度重点）：`); for (const e of r.effects) L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`); }
   L.push(`· 带背挂账当前快照（${r.reciteLedger.snapshotDate}，是当前存量、不是本周新增量）：active ${r.reciteLedger.counts.active} / 可复检 ${r.reciteLedger.counts.actionable} / Anki轨 ${r.reciteLedger.counts.anki} / 已撤池 ${r.reciteLedger.counts.withdrawn} / 移交 ${r.reciteLedger.counts.transferred}`);
   L.push(`  - 分科可复检：${Object.entries(r.reciteLedger.bySubject).filter(([, n]) => n).map(([subject, n]) => `${subject}${n}`).join("/") || "无"}；最久未碰：${r.reciteLedger.oldestActive.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}`);
   L.push(`  - 已撤池轮抽候选：${r.reciteLedger.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}${r.reciteLedger.counts.warnings ? `；格式警告 ${r.reciteLedger.counts.warnings}` : ""}`);

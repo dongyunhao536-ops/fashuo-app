@@ -78,4 +78,33 @@ describe("attempt producers", () => {
     });
     expect(JSON.parse(appended.text)).toMatchObject({ operation_id: "recite-op-1", ts: "2026-08-10T00:00:00.000Z" });
   });
+
+  it("带背污染题尝试由生产器固化为教练责任 void", () => {
+    const operation = buildReciteAttemptOperation({
+      operationId: "recite-void-1",
+      entryId: "X1",
+      date: "2026-08-12",
+      dimension: "recall",
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      failurePatternCode: null,
+      diagnosisStatus: null,
+      evidenceAnchor: "污染题#1",
+      note: "responsibility=teacher",
+    }, { id: "X1", subject: "刑法", title: "程度词" });
+
+    expect(operation).toMatchObject({
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      metadata: {
+        responsibility: "teacher",
+        count_as_valid_attempt: false,
+        count_as_user_error: false,
+        advance_cooldown: false,
+        close_schedule: false,
+      },
+    });
+  });
 });

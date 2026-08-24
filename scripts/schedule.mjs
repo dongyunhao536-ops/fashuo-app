@@ -12,10 +12,12 @@ import {
   auditScheduleLinks,
   cleanScheduleValue,
   closeScheduleItem,
+  extractScheduleTargetIds,
   setScheduleDispatch,
 } from "./lib/schedule-store.mjs";
 import { commitLinkedTextFiles } from "./lib/linked-file-transaction.mjs";
 import { appendOutboxText, buildReciteAttemptOperation } from "./lib/attempt-producers.mjs";
+import { assertDaibeiTargetWritebackReady } from "./lib/skill-run.mjs";
 
 const LIVE_RECITE_LEDGER = ".local/带背挂账.md";
 const DEFAULT_OUTBOX = ".local/cuoti-pending.jsonl";
@@ -45,6 +47,47 @@ function booleanValue(options, key, fallback = false) {
   if (value === true || value === "true") return true;
   if (value === "false") return false;
   throw new Error(`--${key} 只接受 true 或 false`);
+}
+
+function numericIdList(options, key) {
+  const raw = options[key];
+  if (raw == null) return null;
+  if (raw === true) throw new Error(`--${key} 必须提供以逗号或斜杠分隔的数字 ID`);
+  const values = String(raw).split(/[,/，、\s]+/u).filter(Boolean);
+  if (!values.length || values.some((value) => !/^\d+$/u.test(value))) {
+    throw new Error(`--${key} 只接受数字 ID 列表，例如 --${key} 27,29,30`);
+  }
+  return [...new Set(values.map(Number))].sort((left, right) => left - right);
+}
+
+function assertCuotiClosureTargets(markdownText, scheduleId, optionsValue, referenceDate) {
+  const parsed = parseReviewSchedule(markdownText, { referenceDate });
+  if (parsed.counts.errors) throw new Error(`现有复盘排期有 ${parsed.counts.errors} 个结构错误，拒绝结案`);
+  const item = parsed.items.find((entry) => entry.source === "canonical" && entry.id === scheduleId);
+  if (!item) throw new Error(`未找到排期 ID：${scheduleId}`);
+  if (item.status === "completed") throw new Error(`排期已完成：${scheduleId}`);
+  if (item.route !== "cuoti-fupan" || item.dimension !== "application") return null;
+
+  const stableTargets = extractScheduleTargetIds(item);
+  const expected = stableTargets.topicIds.sort((left, right) => left - right);
+  if (!expected.length && stableTargets.knowledgeIds.length === 1) {
+    const suppliedKnowledge = optionsValue.kp && optionsValue.kp !== true ? clean(optionsValue.kp).toUpperCase() : null;
+    if (suppliedKnowledge !== stableTargets.knowledgeIds[0]) {
+      throw new Error(`知识点错题排期 ${scheduleId} 必须提供 --kp ${stableTargets.knowledgeIds[0]}，同科其他知识点不得冲抵`);
+    }
+    return { kind: "knowledge", ids: stableTargets.knowledgeIds };
+  }
+  if (!expected.length) {
+    throw new Error(`错题排期 ${scheduleId} 缺少唯一稳定 T# 或 KP-ID 目标，禁止手工结案；先补 ref/任务目标或拆成可核验排期`);
+  }
+  const supplied = numericIdList(optionsValue, "topics");
+  if (!supplied) {
+    throw new Error(`错题排期 ${scheduleId} 禁止无目标结案；单主题优先用 cuoti.mjs review T# --schedule ${scheduleId}，整组逐题留证后提供 --topics ${expected.join(",")}`);
+  }
+  if (supplied.length !== expected.length || supplied.some((id, index) => id !== expected[index])) {
+    throw new Error(`错题排期 ${scheduleId} 目标不一致：排期=${expected.map((id) => `T#${id}`).join("、")}，提交=${supplied.map((id) => `T#${id}`).join("、") || "空"}`);
+  }
+  return { kind: "topic", ids: expected };
 }
 
 const command = process.argv[2] ?? "summary";
@@ -115,6 +158,25 @@ if (command === "summary" || command === "check" || command === "audit-links") {
 } else if (command === "done") {
   const id = process.argv[3] && !process.argv[3].startsWith("--") ? clean(process.argv[3]) : requireValue(options, "id");
   const result = requireValue(options, "result");
+  // [gpt] 2026-08-12：错题排期不能靠同科其他题或自然语言 result 冲抵，结案前必须核对完整稳定目标集。
+  const cuotiClosureTopics = assertCuotiClosureTargets(markdown, id, options, today);
+  if (cuotiClosureTopics && !options["evidence-refs"]) {
+    throw new Error(`错题排期 ${id} 手工结案还必须提供 --evidence-refs，逐一列出已落库复检证据（例如 review:T#10:2026-08-12,review:T#25:2026-08-12）`);
+  }
+  if (cuotiClosureTopics && options["evidence-refs"] === true) throw new Error("--evidence-refs 必须提供非空证据引用");
+  if (cuotiClosureTopics?.kind === "topic") {
+    const evidenceTopics = extractScheduleTargetIds({ task: String(options["evidence-refs"]) }).topicIds.sort((left, right) => left - right);
+    if (evidenceTopics.length !== cuotiClosureTopics.ids.length
+      || evidenceTopics.some((topicId, index) => topicId !== cuotiClosureTopics.ids[index])) {
+      throw new Error(`错题排期 ${id} 的 --evidence-refs 必须逐一覆盖且只覆盖原目标：${cuotiClosureTopics.ids.map((topicId) => `T#${topicId}`).join("、")}`);
+    }
+  }
+  if (cuotiClosureTopics?.kind === "knowledge") {
+    const evidenceKnowledge = extractScheduleTargetIds({ task: String(options["evidence-refs"]) }).knowledgeIds;
+    if (evidenceKnowledge.length !== 1 || evidenceKnowledge[0] !== cuotiClosureTopics.ids[0]) {
+      throw new Error(`知识点错题排期 ${id} 的 --evidence-refs 必须覆盖 ${cuotiClosureTopics.ids[0]}`);
+    }
+  }
   const reciteId = options.recite && options.recite !== true ? clean(options.recite) : null;
   const reciteEvent = options.event && options.event !== true ? clean(options.event) : null;
   const reciteEvidence = options.evidence && options.evidence !== true ? clean(options.evidence) : null;
@@ -144,9 +206,18 @@ if (command === "summary" || command === "check" || command === "audit-links") {
     assertScheduleLink(markdown, id, {
       kind: "recite", targetId: reciteId, referenceDate: today, route: "daibei-pc", dimension: "recall",
     });
+    // [gpt] 2026-08-14：排期、带背条目与 Run 冻结对象在原子写入前统一核对。
+    if (options.run === true) throw new Error("--run 必须提供 Skill Run ID");
+    const runFile = options["run-file"] && options["run-file"] !== true ? String(options["run-file"]) : undefined;
+    if (options.run) assertDaibeiTargetWritebackReady({
+      runId: String(options.run),
+      reciteId,
+      scheduleId: id,
+      file: runFile,
+    });
   }
   // 必须先把排期结案结果算完并复验；排期 ID/关联有问题时，绝不能先动带背账本。
-  const closedSchedule = closeScheduleItem(markdown, id, {
+  const scheduleClosure = closeScheduleItem(markdown, id, {
     date: today,
     result,
     // [gpt] 2026-08-10：联动带背结案同时固化真实检验条件，供干预响应闭环重算。
@@ -154,7 +225,11 @@ if (command === "summary" || command === "check" || command === "audit-links") {
     cold: structuredRequested ? structuredCold : null,
     promptIntegrity: structuredRequested ? structuredPrompt : null,
   });
-  if (reciteLinkRequested) {
+  if (typeof scheduleClosure !== "string") {
+    console.log(`↩ 作废题只归责教练；排期 ${id} 保持 open、冷却不前移，重写并重新过命题 Gate 后再执行。`);
+  } else {
+    const closedSchedule = scheduleClosure;
+    if (reciteLinkRequested) {
     // [gpt] 2026-08-10：D3/D14/D30 通过只追加 observe 证据，不反复撤池；失败时仍可 rehang。
     if (!["withdraw", "rehang", "observe"].includes(reciteEvent)) throw new Error("--event 只能是 withdraw、rehang 或 observe");
     const reciteFile = options["recite-file"] && options["recite-file"] !== true ? String(options["recite-file"]) : ".local/带背挂账.md";
@@ -212,17 +287,20 @@ if (command === "summary" || command === "check" || command === "audit-links") {
     commitLinkedTextFiles(linkedWrites);
     if (stagedAttemptId) console.log(`⏳ 已同步暂存统一尝试：${stagedAttemptId}`);
     console.log(`✅ 已回写带背证据${reciteEvent === "observe" ? "" : "与挂账"}：${reciteId} ${structuredOutcome} + ${reciteEvent}（${today}）`);
-  } else {
-    writeFileSync(file, closedSchedule, "utf8");
+    } else {
+      writeFileSync(file, closedSchedule, "utf8");
+    }
+    console.log(`✅ 已完成复盘排期：${id}（${today}）${result}`);
   }
-  console.log(`✅ 已完成复盘排期：${id}（${today}）${result}`);
 } else {
   console.error("用法：node scripts/schedule.mjs <summary|check|audit-links|add|route|done> [--json] [--today YYYY-MM-DD]");
   console.error("  add --date YYYY-MM-DD --priority P0 --type 错题复检 --task \"...\" [--route cuoti-fupan --dimension application --ref T#1]");
   console.error("      [--plan W20260810-P0-1 --week 2026-08-10 --source weekly|assessment|milestone|coach --weight 1-5 --goal G-MINFALAW]");
   console.error("  route <ID> --route cuoti-fupan --dimension application（仅补齐/纠正执行路由，不改任务事实）");
   console.error("  done <ID> --result \"...\" [--outcome pass|partial|fail|void --cold true|false --prompt clean|cued|invalid]（协议化 episode 必须提供结构化结果）");
+  console.error("  done <错题整组ID> --result \"逐题证据摘要\" --topics 27,29,30 --evidence-refs \"review:T#27:日期,...\"（完整目标精确一致且必须给已落库证据引用；单主题优先用 cuoti review --schedule）");
+  console.error("  done <知识点错题ID> --result \"证据摘要\" --kp XF-0054 --evidence-refs \"attempt:XF-0054:日期\"（仅兼容无 T# 的单一 KP 精准复检）");
   console.error("  done <ID> --result \"通过/未过及证据\"");
-  console.error("  done <ID> --result \"...\" --recite <条目ID> --event withdraw|rehang|observe --outcome pass|partial|fail --cold true|false --prompt clean|cued --evidence \"教材/复检锚点\" [--pattern code --diagnosis pending|confirmed --note 说明 --outbox 路径]（原子联动写带背证据、状态、排期与尝试分母；延迟通过用 observe）");
+  console.error("  done <ID> --result \"...\" --recite <条目ID> --event withdraw|rehang|observe --outcome pass|partial|fail --cold true|false --prompt clean|cued --evidence \"教材/复检锚点\" [--run SR-...] [--pattern code --diagnosis pending|confirmed --note 说明 --outbox 路径]（原子联动写带背证据、状态、排期与尝试分母；延迟通过用 observe）");
   process.exitCode = 2;
 }

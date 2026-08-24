@@ -8,6 +8,7 @@ import {
   buildEnglishTrainingPlan,
   parseEnglishCorpus,
   parseEnglishLedger,
+  selectNextReadingAssignment,
 } from "./english-growth.mjs";
 
 function readingEntry(index, score, extra = "") {
@@ -114,6 +115,13 @@ living standards / public well-being / cultural heritage
 });
 
 describe("英语训练调度", () => {
+  it("生命周期训练轴之外还给出下一个未完成的具体篇目，并封存 2025+", () => {
+    const rows = [1, 2, 3, 4].map((text) => ({ subject: "英语", chapter: `2016 Text ${text}` }));
+    expect(selectNextReadingAssignment(rows)).toMatchObject({ year: 2017, text: 1, label: "2017 Text 1" });
+    const all = [];
+    for (let year = 2016; year <= 2024; year += 1) for (let text = 1; text <= 4; text += 1) all.push({ subject: "英语", chapter: `${year} Text ${text}` });
+    expect(selectNextReadingAssignment(all)).toBeNull();
+  });
   it("到期生命周期复检压过画像训练和普通保温", () => {
     const profile = buildEnglishCapabilityProfile(parseEnglishLedger([readingEntry(0, 1), readingEntry(1, 1), readingEntry(2, 1)].join("\n")));
     const plan = buildEnglishTrainingPlan({

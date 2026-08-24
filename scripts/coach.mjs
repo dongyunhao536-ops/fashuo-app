@@ -10,11 +10,22 @@ import { ROOT_CAUSES } from "./lib/error-taxonomy.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { buildStudyLogAttemptConfig } from "./lib/attempt-producers.mjs";
+import {
+  recordBusinessWriteback,
+  recordDaibeiProgressWriteback,
+  recordEnglishReadingWriteback,
+  validateBusinessWriteback,
+} from "./lib/skill-run.mjs";
+import {
+  normalizeStudyActivity,
+  recitationModeFromActivity,
+  withRecitationModeMarker,
+} from "./lib/study-activity.mjs";
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
-const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
-const ACTIVITIES = ["听课", "看书", "做题", "背诵", "带背", "复盘", "其他"]; // 看书=自学输入；带背=PC辅导带背(理解层，非云自背)
+// [gpt] 2026-08-23：跨科聚合活动使用“综合”，避免把整场复盘错误归到其中一科。
+const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语", "综合"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
 const DAY = 86400000;
 
 // 写回共享账本走同一个可靠 outbox（cuoti.mjs sync 也可手动重试）
@@ -33,7 +44,7 @@ async function flushOutbox() {
   } catch (error) {
     console.error(`✗ outbox 同步失败：${error instanceof Error ? error.message : String(error)}（原缓冲保留）`);
     process.exitCode = 1;
-    return;
+    return null;
   }
   if (report.failed.length) {
     console.error(`⚠️ 已同步 ${report.succeeded.length} 项；${report.failed.length} 项失败并保留在 outbox：`);
@@ -42,13 +53,25 @@ async function flushOutbox() {
   } else {
     console.log(`✅ 已同步共享账本（${report.succeeded.length} 项），outbox 已清空。`);
   }
+  return report;
 }
 
 // 记录一条学习日志（进度汇报）：先入 outbox，再立即同步；--stage 才延后
 async function log(args) {
   const f = parseFlags(args);
-  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw）");
+  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw --run）");
   const date = (f.date && f.date !== true) ? f.date : ymd;
+  let activity;
+  let recitationMode;
+  try {
+    // [gpt] 2026-08-16：带背/自背归一为“背诵”，方式写进 raw；未知显式值仍在入 outbox 前失败。
+    activity = normalizeStudyActivity(f.activity);
+    recitationMode = recitationModeFromActivity(f.activity);
+  } catch (error) {
+    console.error(`❌ 学习活动不合法：${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
   let attempt = null;
   try {
     attempt = buildStudyLogAttemptConfig(f, { date, subject: f.subject, chapter: f.chapter || null });
@@ -59,16 +82,127 @@ async function log(args) {
   }
   const op = {
     op: "study_log", subject: f.subject, chapter: f.chapter || null,
-    activity: ACTIVITIES.includes(f.activity) ? f.activity : (f.activity ? "其他" : "其他"),
+    activity,
     accuracy: f.accuracy != null && f.accuracy !== true ? Number(f.accuracy) : null,
     feeling: f.feeling && f.feeling !== true ? f.feeling : null,
-    raw: f.raw && f.raw !== true ? f.raw : null, date,
+    raw: withRecitationModeMarker(f.raw && f.raw !== true ? f.raw : null, recitationMode), date,
     ...(attempt ? { attempt } : {}),
   };
-  stage(op);
-  console.log(`⏳ 已暂存待同步·学习日志：${op.date} ${op.subject}${op.chapter ? " " + op.chapter : ""} ${op.activity}${op.accuracy != null ? " " + op.accuracy + "%" : ""}${op.feeling ? "（" + op.feeling + "）" : ""}${attempt ? " + 统一尝试分母" : ""}`);
+  // [gpt] 2026-08-21：规范 activity 之外，Run Gate 还要核验 raw 中真实保留的自背方式。
+  const recordedRecitationMode = recitationMode
+    ?? String(op.raw ?? "").match(/\[背诵方式=(带背|自背)\]/u)?.[1]
+    ?? null;
+  const runValidation = f.run && f.run !== true
+    ? validateBusinessWriteback({
+      runId: String(f.run),
+      sourceKind: attempt?.sourceKind ?? null,
+      subject: op.subject,
+      chapter: op.chapter,
+      activity: op.activity,
+      recitationMode: recordedRecitationMode,
+      sessionKey: attempt?.sessionKey ?? null,
+      score: attempt?.score ?? null,
+      maxScore: attempt?.maxScore ?? null,
+    })
+    : null;
+  // [gpt] 2026-08-21：保留 appendOutbox 生成的 operation_id；否则同步虽成功，Run 回执会因拿 undefined 匹配而漏签。
+  const stagedOp = stage(op);
+  console.log(`⏳ 已暂存待同步·学习日志：${stagedOp.date} ${stagedOp.subject}${stagedOp.chapter ? " " + stagedOp.chapter : ""} ${stagedOp.activity}${stagedOp.accuracy != null ? " " + stagedOp.accuracy + "%" : ""}${stagedOp.feeling ? "（" + stagedOp.feeling + "）" : ""}${attempt ? " + 统一尝试分母" : ""}`);
   if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
-  await flushOutbox();
+  const report = await flushOutbox();
+  if (report && f.run && f.run !== true) {
+    const succeeded = report.succeeded.find(({ op: item }) => item.operation_id === stagedOp.operation_id);
+    if (succeeded) {
+      const runId = String(f.run);
+      // [gpt] 2026-08-12：英语阅读日志的篇目、会话键、分数必须与本 Run 的本地答案键实算一致；普通业务写回不得代签。
+      if (runValidation?.businessMode === "daibei_progress") {
+        recordDaibeiProgressWriteback({
+          runId,
+          subject: stagedOp.subject,
+          chapter: stagedOp.chapter,
+          activity: stagedOp.activity,
+          recitationMode: recordedRecitationMode,
+          operationId: stagedOp.operation_id,
+        });
+      } else if (stagedOp.subject === "英语" && attempt?.sourceKind === "objective_question") {
+        recordEnglishReadingWriteback({
+          runId,
+          chapter: stagedOp.chapter,
+          sessionKey: attempt.sessionKey,
+          score: attempt.score,
+          maxScore: attempt.maxScore,
+          evidenceRef: `study-log:${stagedOp.operation_id}:applied`,
+        });
+      } else {
+        recordBusinessWriteback({
+          runId,
+          source: "coach-log",
+          evidenceRef: `${stagedOp.subject}:${stagedOp.chapter ?? stagedOp.activity}:${stagedOp.date}`,
+          expectedSkill: runValidation?.expectedSkill ?? null,
+          requiredSteps: runValidation?.requiredSteps ?? [],
+        });
+      }
+    }
+  }
+}
+
+// [gpt] 2026-08-23：按完整旧业务键唯一命中后原地更正，供误记流水纠错；不新增第二条。
+async function correctLog(args) {
+  const f = parseFlags(args);
+  const required = ["match-date", "match-subject", "match-chapter", "match-activity", "subject", "chapter", "activity"];
+  const missing = required.filter((key) => f[key] == null || f[key] === true || String(f[key]).trim() === "");
+  if (missing.length) {
+    console.error(`correct-log 缺少参数：${missing.map((key) => `--${key}`).join(" ")}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (!SUBJECTS.includes(f.subject)) {
+    console.error(`correct-log 的 --subject 不合法；允许 ${SUBJECTS.join("|")}`);
+    process.exitCode = 1;
+    return;
+  }
+  let matchActivity;
+  let activity;
+  try {
+    matchActivity = normalizeStudyActivity(f["match-activity"]);
+    activity = normalizeStudyActivity(f.activity);
+  } catch (error) {
+    console.error(`❌ 学习活动不合法：${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
+  const op = {
+    op: "study_log_correction",
+    match: {
+      date: String(f["match-date"]),
+      subject: String(f["match-subject"]),
+      chapter: String(f["match-chapter"]),
+      activity: matchActivity,
+    },
+    replacement: {
+      date: f.date && f.date !== true ? String(f.date) : String(f["match-date"]),
+      subject: String(f.subject),
+      chapter: String(f.chapter),
+      activity,
+      accuracy: f.accuracy != null && f.accuracy !== true ? Number(f.accuracy) : null,
+      feeling: f.feeling && f.feeling !== true ? String(f.feeling) : null,
+      raw: f.raw && f.raw !== true ? String(f.raw) : null,
+    },
+  };
+  const stagedOp = stage(op);
+  console.log(`⏳ 已暂存待同步·学习流水更正：${op.match.date} ${op.match.subject} ${op.match.chapter} ${op.match.activity} → ${op.replacement.subject} ${op.replacement.chapter} ${op.replacement.activity}`);
+  if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
+  const report = await flushOutbox();
+  if (report && f.run && f.run !== true) {
+    const succeeded = report.succeeded.find(({ op: item }) => item.operation_id === stagedOp.operation_id);
+    if (succeeded) {
+      recordBusinessWriteback({
+        runId: String(f.run),
+        source: "coach-log-correction",
+        evidenceRef: `${op.replacement.subject}:${op.replacement.chapter}:${op.replacement.date}`,
+      });
+    }
+  }
 }
 const today = new Date();
 const ymd = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10); // 北京日（UTC+8）——别用 UTC，深夜零点后记录会归错天
@@ -216,11 +350,14 @@ async function ledger() {
 const cmd = process.argv[2];
 if (cmd === "ledger") await ledger();
 else if (cmd === "log") await log(process.argv.slice(3));
+else if (cmd === "correct-log") await correctLog(process.argv.slice(3));
 else if (cmd === "remember") await remember(process.argv.slice(3));
 else {
-  console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|remember>");
+  console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|correct-log|remember>");
   console.log("  ledger                                     读完整共享账本");
-  console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD]  记录学习日志');
+  console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD --run SR-...]  记录学习日志');
+  console.log('  correct-log --match-date YYYY-MM-DD --match-subject 民法 --match-chapter "旧章节" --match-activity 复盘 --subject 综合 --chapter "新章节" --activity 复盘 [--feeling "..." --run SR-...]  唯一命中并原地更正学习日志');
+  console.log('      daibei 自背进度：--activity 自背 --chapter "稳定章节" --run SR-...（自动规范为 activity=背诵 并签 progress 回执）');
   console.log('      显式尝试：--attempt-source objective_question|subjective_answer --question "稳定题号" --result pass|partial|fail|void --score N --max N');
   console.log('      可选尝试字段：--session KEY --kp KP-ID --role primary|rewrite|recheck|followup --dimension application --context timed --seconds N --cold');
   console.log('  remember --fact "..." [--category 画像|倾向|里程碑|约定]  记录长期记忆 → coach_memory');

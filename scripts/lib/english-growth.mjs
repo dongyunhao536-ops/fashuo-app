@@ -40,6 +40,23 @@ export const ENGLISH_GATES = Object.freeze([
   { key: "checklist", label: "要素清单", aliases: ["要素清单", "清单回扫"] },
 ]);
 
+// [gpt] 2026-08-13：生命周期决定“练什么能力”，篇目分配必须另外给出可执行的年份/Text。
+export function selectNextReadingAssignment(studyRows = [], { firstYear = 2016, lastYear = 2024 } = {}) {
+  const completed = new Set();
+  for (const row of studyRows) {
+    if (row.subject && row.subject !== "英语") continue;
+    const match = String(row.chapter ?? "").match(/(20\d{2})\s*Text\s*([1-4])/iu);
+    if (match) completed.add(`${match[1]}-T${Number(match[2])}`);
+  }
+  for (let year = firstYear; year <= lastYear; year += 1) {
+    for (let text = 1; text <= 4; text += 1) {
+      const key = `${year}-T${text}`;
+      if (!completed.has(key)) return { year, text, key, label: `${year} Text ${text}` };
+    }
+  }
+  return null;
+}
+
 const DIAGNOSTIC_SOURCES = new Map([
   ["答案键+原文", "answer_key"],
   ["答案键＋原文", "answer_key"],

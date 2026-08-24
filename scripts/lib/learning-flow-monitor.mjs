@@ -8,6 +8,11 @@ export const DEFAULT_FLOW_THRESHOLDS = Object.freeze({
   ingestStaleMinutes: 15,
   reviewRequestStaleDays: 3,
   candidateStaleDays: 7,
+  skillRunStaleMinutes: 24 * 60,
+  skillStartupWarnMs: 5000,
+  skillTurnUncheckedMinutes: 60,
+  // [gpt] 2026-08-17：英语阅读的答案键与长难句互动若间隔超过一天，说明教学尾段被事后补签而非同场完成；只告警不阻断。
+  readingLongSentenceWarnMinutes: 24 * 60,
 });
 
 function number(value) {
@@ -125,6 +130,18 @@ function actionableIssue(code) {
     unclassified_error_event: "把未归类错题事件并入稳定主题；无法确定时保留 pending，不做猜测映射。",
     learning_schedule_overdue: "交由日报/周报重新安排逾期任务；只记学习执行欠账，不触发系统修复。",
     legacy_missing_date: "给仍需执行的旧排期补明确日期；纯历史散文保留为证据，不强行结构化。",
+    skill_run_telemetry_unreadable: "修复 Skill Run JSONL 的结构错误；不要删除损坏行来伪造连续审计。",
+    skill_run_stale: "打开对应 run 状态，确认是继续、handoff 还是 aborted；不得把未收口运行伪装成完成。",
+    skill_waiting_orphaned: "核对孤儿 waiting_user 的真实会话去向；继续时显式恢复原 Run，不再继续时按事实 aborted，禁止直接改监控数字。",
+    skill_gate_failed: "按 run 的 missing 步骤补真实工具回执后重跑硬闸；不要手工签自动步骤。",
+    daibei_phase_kind_mismatch: "按用户真实意图重建正确 Run：progress 只按 progress 收口，recall 必须进入 question/result，禁止用 plan 降级。",
+    daibei_post_progress_probe_missing: "自背进度已落账但未进入首道抽查；不要重复写流水，直接按当轮标准启动 question Run。",
+    skill_startup_slow: "下钻各 Skill 的 context_loaded 耗时，优先合并重复读取或缩短非必要上下文。",
+    skill_turn_guard_unreadable: "修复 Codex Skill 宿主守卫 JSONL；不要删除坏行来制造合规。",
+    skill_turn_unchecked: "检查 hook 是否已信任且正常触发；未经过 Stop 审计的命中请求不能算已覆盖。",
+    skill_turn_noncompliant: "按 session/turn 打开对应 Run；缺 Run 就补完整 Skill，未收口就完成硬闸，不得只改监控记录。",
+    skill_turn_guard_unobserved: "在新 Codex 任务中打开 /hooks，信任仓库守卫并重启任务；守卫未观测前不得声称宿主覆盖已启用。",
+    english_long_sentence_delay: "核对英语阅读 Run 中 answer_key_checked 到 long_sentence_reviewed 的时间间隔；同场讲解应紧跟判分，超过阈值说明教学尾段可能被事后补做，需回到原篇完成长难句互动后再收口。",
   };
   return actions[code] ?? `核对 ${code} 的事实源与消费者状态，修复后用同口径复跑监控。`;
 }
@@ -143,6 +160,12 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
   }
   for (const issue of groupedIssues(facts.recite?.issues, { domain: "recite_ledger", label: "带背账本结构" })) {
     mergeIssue(issues, issue);
+  }
+  for (const issue of groupedIssues(facts.skillExecution?.issues, { domain: "skill_execution", label: "Skill Run 遥测" })) {
+    mergeIssue(issues, issue);
+  }
+  for (const issue of groupedIssues(facts.skillTurnCoverage?.issues, { domain: "skill_execution", label: "Skill 宿主守卫" })) {
+    mergeIssue(issues, issue.code === "skill_turn_telemetry_unreadable" ? { ...issue, code: "skill_turn_guard_unreadable" } : issue);
   }
 
   if (facts.localOutbox?.parseError) {
@@ -275,6 +298,105 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
     message: `结构化排期有 ${facts.schedule.counts.overdue} 项已逾期未结案；这是学习执行状态，不冒充系统写入故障。`,
   });
 
+  const skillExecution = facts.skillExecution ?? { counts: {}, startupLatencyMs: {}, bySkill: {} };
+  if (number(skillExecution.counts?.stale)) mergeIssue(issues, {
+    code: "skill_run_stale",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.stale),
+    message: `Skill Run 有 ${skillExecution.counts.stale} 项超过 ${thresholds.skillRunStaleMinutes} 分钟仍未显式收口。`,
+    examples: (skillExecution.staleRuns ?? []).slice(0, 5).map((item) => `${item.runId}:${item.skill}`),
+  });
+  if (number(skillExecution.counts?.orphanedWaiting)) mergeIssue(issues, {
+    code: "skill_waiting_orphaned",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.orphanedWaiting),
+    message: `Skill Run 有 ${skillExecution.counts.orphanedWaiting} 项 waiting_user 超过 ${thresholds.skillRunStaleMinutes} 分钟未收到续接证据；已纳入完整率分母但保留可恢复状态。`,
+    examples: (skillExecution.orphanedWaitingRuns ?? []).slice(0, 5).map((item) => `${item.runId}:${item.skill}`),
+  });
+  if (number(skillExecution.counts?.gateFailures)) mergeIssue(issues, {
+    code: "skill_gate_failed",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.gateFailures),
+    message: `Skill 执行硬闸在窗口内阻断 ${skillExecution.counts.gateFailures} 次；阻断本身是保护，但重复命中说明流程仍在漏步。`,
+    examples: (skillExecution.gateFailureExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.phase ?? item.step ?? "?"}`),
+  });
+  // [gpt] 2026-08-21：业务写入成功不能掩盖带背阶段错配或“记完即停”的用户路径断链。
+  if (number(skillExecution.counts?.daibeiPhaseKindMismatches)) mergeIssue(issues, {
+    code: "daibei_phase_kind_mismatch",
+    severity: "error",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.daibeiPhaseKindMismatches),
+    message: `带背有 ${skillExecution.counts.daibeiPhaseKindMismatches} 个 Run 的 kind 与结束 phase 不一致，不能计为干净收口。`,
+    examples: (skillExecution.daibeiPhaseKindMismatchExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.kind}->${item.phase}`),
+  });
+  if (number(skillExecution.counts?.daibeiPostProgressProbeMissing)) mergeIssue(issues, {
+    code: "daibei_post_progress_probe_missing",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.daibeiPostProgressProbeMissing),
+    message: `带背有 ${skillExecution.counts.daibeiPostProgressProbeMissing} 次自背进度落账后超过宽限期仍未进入首道抽查。`,
+    examples: (skillExecution.daibeiPostProgressProbeMissingExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.subject}/${item.targetRef}`),
+  });
+  if (number(skillExecution.counts?.invalidHandoffs)) mergeIssue(issues, {
+    code: "skill_handoff_invalid",
+    severity: "error",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.invalidHandoffs),
+    message: `Skill 有 ${skillExecution.counts.invalidHandoffs} 次 handoff 缺目标或可核对原因。`,
+  });
+  if (number(skillExecution.counts?.unresolvedHandoffs)) mergeIssue(issues, {
+    code: "skill_handoff_unresolved",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.counts.unresolvedHandoffs),
+    message: `Skill 有 ${skillExecution.counts.unresolvedHandoffs} 次已转手但目标 Run 未启动，跨 Skill 闭环断链。`,
+    examples: (skillExecution.unresolvedHandoffExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.skill}->${item.handoffSkill}`),
+  });
+  if (number(skillExecution.startupLatencyMs?.p95) > thresholds.skillStartupWarnMs) mergeIssue(issues, {
+    code: "skill_startup_slow",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillExecution.startupLatencyMs.samples),
+    message: `Skill 启动快照 p95 ${skillExecution.startupLatencyMs.p95}ms，超过 ${thresholds.skillStartupWarnMs}ms 阈值。`,
+  });
+  const englishLongSentenceDelays = (skillExecution.englishLongSentenceDelays ?? []).filter((item) => (
+    item.delayMinutes != null && item.delayMinutes >= thresholds.readingLongSentenceWarnMinutes
+  ));
+  if (englishLongSentenceDelays.length) mergeIssue(issues, {
+    code: "english_long_sentence_delay",
+    severity: "warning",
+    domain: "skill_execution",
+    count: englishLongSentenceDelays.length,
+    message: `英语阅读有 ${englishLongSentenceDelays.length} 场的答案键到长难句讲解间隔超过 ${thresholds.readingLongSentenceWarnMinutes} 分钟，教学尾段可能被事后补签而非同场完成。`,
+    examples: englishLongSentenceDelays.slice(0, 5).map((item) => `${item.runId}:${item.delayMinutes}m`),
+  });
+  const skillTurnCoverage = facts.skillTurnCoverage ?? { counts: {}, compliance: {}, failuresByCode: {} };
+  if (skillTurnCoverage.coverage?.state === "unobserved") mergeIssue(issues, {
+    code: "skill_turn_guard_unobserved",
+    severity: "warning",
+    domain: "skill_execution",
+    message: "当前窗口未观察到 Codex SessionStart hook；宿主级 Skill 覆盖尚不能确认已生效。",
+  });
+  if (number(skillTurnCoverage.counts?.unchecked)) mergeIssue(issues, {
+    code: "skill_turn_unchecked",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillTurnCoverage.counts.unchecked),
+    message: `Skill 宿主守卫有 ${skillTurnCoverage.counts.unchecked} 个已路由请求超过 ${thresholds.skillTurnUncheckedMinutes} 分钟仍无 Stop 审计。`,
+    examples: (skillTurnCoverage.examples ?? []).filter((item) => item.failureCode === "unchecked").slice(0, 5).map((item) => `${item.turnId}:${item.expectedSkill}`),
+  });
+  if (number(skillTurnCoverage.counts?.failed)) mergeIssue(issues, {
+    code: "skill_turn_noncompliant",
+    severity: "warning",
+    domain: "skill_execution",
+    count: number(skillTurnCoverage.counts.failed),
+    message: `Skill 宿主守卫有 ${skillTurnCoverage.counts.failed} 个命中请求在一次自动续跑后仍无合规 Run。`,
+    examples: (skillTurnCoverage.examples ?? []).filter((item) => item.failureCode !== "unchecked").slice(0, 5).map((item) => `${item.turnId}:${item.expectedSkill}/${item.failureCode}`),
+  });
+
   const attempts = facts.attempts ?? [];
   const issueList = [...issues.values()].sort((a, b) => (
     SEVERITY_WEIGHT[b.severity] - SEVERITY_WEIGHT[a.severity]
@@ -326,6 +448,8 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
         recite: facts.recite?.counts ?? {},
       },
       knowledgeMapping: mapping,
+      skillExecution,
+      skillTurnCoverage,
     },
     issues: issueList,
   };
@@ -342,6 +466,8 @@ export function formatLearningFlowReport(report) {
     `- 传输：本地 outbox ${m.transport.localOutboxPending} 条；数据库未决 ingest ${Object.values(m.transport.ingestUnresolvedByStatus).reduce((sum, value) => sum + value, 0)} 条`,
     `- 流转：待办 ${m.workflow.pendingEvents} 条；答疑有效 open ${m.workflow.askPointsActive}；未归类错题事件 ${m.workflow.unclassifiedErrorEvents}；待冷检主题 ${m.workflow.awaitingColdReviewTopics}`,
     `- 接线：带背唯一主链接 ${number(m.knowledgeMapping.linked)}/${number(m.knowledgeMapping.items)}；已有证据未接线 ${number(m.knowledgeMapping.evidenceUnlinked)}；primary 歧义 ${number(m.knowledgeMapping.ambiguousLinks)}`,
+    `- Skill：启动 ${number(m.skillExecution.counts?.runs)} / 干净收口 ${number(m.skillExecution.compliance?.closedCleanly)} / 原始完整率 ${m.skillExecution.compliance?.rawRate ?? "—"}% / 活跃 ${number(m.skillExecution.counts?.active)}（孤儿等待 ${number(m.skillExecution.counts?.orphanedWaiting)}） / 过期未收口 ${number(m.skillExecution.counts?.stale)}；启动 p50/p95 ${m.skillExecution.startupLatencyMs?.p50 ?? "—"}/${m.skillExecution.startupLatencyMs?.p95 ?? "—"}ms`,
+    `- Skill 宿主：覆盖 ${m.skillTurnCoverage.coverage?.state === "observed" ? "已观测" : "未观测"}；命中 ${number(m.skillTurnCoverage.counts?.routed)} / 已审 ${number(m.skillTurnCoverage.counts?.checked)} / 自动保护 ${number(m.skillTurnCoverage.counts?.protected)} / 最终失败 ${number(m.skillTurnCoverage.counts?.failed)} / 漏审 ${number(m.skillTurnCoverage.counts?.unchecked)}；合规率 ${m.skillTurnCoverage.compliance?.rate ?? "—"}%；Prompt→Stop p50/p95 ${m.skillTurnCoverage.turnLatencyMs?.p50 ?? "—"}/${m.skillTurnCoverage.turnLatencyMs?.p95 ?? "—"}ms`,
     "",
     "## 异常与关注项",
     "",

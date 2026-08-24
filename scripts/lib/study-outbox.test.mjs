@@ -171,6 +171,43 @@ describe("study outbox", () => {
     expect(readFileSync(path, "utf8")).toContain("这不是 JSON");
   });
 
+  it("同步前预检整批错题，后段坏条目不会造成任何远端写入", async () => {
+    const path = tempPath();
+    const operations = [
+      { op: "study_log", operation_id: "would-write", subject: "民法", activity: "做题" },
+      { op: "new_error", operation_id: "bad-error", subject: "民法", knowledge: "所有权误判", entrySource: "batch" },
+    ];
+    writeOutbox(path, operations);
+    const scripted = scriptedDb([]);
+
+    await expect(syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-13",
+      now: new Date("2026-08-13T12:00:00.000Z"),
+    })).rejects.toThrow(/chapter_missing/);
+
+    expect(scripted.calls).toEqual([]);
+    expect(readOutbox(path)).toEqual(operations);
+  });
+
+  it("旧错题缓冲失败重试时保留原 payload，不把兼容字段写回导致 ingest 指纹漂移", async () => {
+    const path = tempPath();
+    const legacy = { op: "new_error", operation_id: "legacy-retry", subject: "刑法", knowledge: "旧缓冲" };
+    writeOutbox(path, [legacy]);
+    const scripted = scriptedDb([{ data: null, error: { message: "network down" } }]);
+
+    const result = await syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-13",
+      now: new Date("2026-08-13T12:00:00.000Z"),
+    });
+
+    expect(result.failed[0].error).toContain("network down");
+    expect(readOutbox(path)).toEqual([legacy]);
+  });
+
   it("主题和关联都用稳定唯一键 upsert，同一错题可以保留主主题和关联主题", async () => {
     const path = tempPath();
     writeOutbox(path, [
@@ -347,6 +384,50 @@ describe("study outbox", () => {
     expect(readOutbox(path)).toHaveLength(1);
   });
 
+  it("教练污染题可作为 void 留审计，但不改变主题状态", async () => {
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "error_review",
+      operation_id: "teacher-invalid-audit",
+      topicId: 10,
+      result: "void",
+      date: "2026-08-12",
+      variantKind: "invalid",
+      dimension: "application",
+      cold: false,
+      promptIntegrity: "invalid",
+      probeAxis: "invalid",
+      note: "responsibility=teacher；题面点名错误项",
+    }]);
+    const scripted = scriptedDb([
+      { data: null, error: null },
+      { data: [{ id: 8, review_date: "2026-08-05", result: "pass" }], error: null },
+      { data: [{ id: 10, kp_id: null }], error: null },
+    ]);
+    const result = await syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-12",
+      now: new Date("2026-08-12T12:00:00.000Z"),
+    });
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded[0].result).toMatchObject({
+      kind: "error_review",
+      masteryStatus: "monitoring",
+      disposition: {
+        responsibility: "teacher",
+        countAsValidAttempt: false,
+        countAsUserError: false,
+        advanceCooldown: false,
+        closeSchedule: false,
+      },
+    });
+    const review = scripted.calls.find((call) => call.table === "error_review").steps.find((step) => step.method === "upsert").args[0];
+    expect(review).toMatchObject({ result: "void", prompt_integrity: "invalid", cold: false, variant_kind: "invalid", probe_axis: "invalid" });
+    expect(review.note).toContain("responsibility=teacher");
+    expect(review.note).toContain("user_error=false");
+  });
+
   it("PC 答疑卡点新增与收口都走幂等 outbox", async () => {
     const path = tempPath();
     writeOutbox(path, [
@@ -468,6 +549,51 @@ describe("study outbox", () => {
     expect(resolutionCall.args[0]).toMatchObject({ status: "clarified", resolve_operation_id: "ask-verify-pass" });
   });
 
+  it("答疑污染题 void 保持卡点 open，并只返回教练责任审计", async () => {
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "ask_verification",
+      operation_id: "ask-verify-void",
+      pointId: 55,
+      kpId: "XF-0054",
+      result: "void",
+      cold: false,
+      promptIntegrity: "invalid",
+      evidenceAnchor: "污染题#1",
+      note: "追问点名错误项",
+      date: "2026-08-12",
+    }]);
+    const scripted = scriptedDb([
+      { data: { id: 55, status: "open", kp_id: "XF-0054" }, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+    ]);
+
+    const result = await syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-12",
+      now: new Date("2026-08-12T12:00:00.000Z"),
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded[0].result).toMatchObject({
+      kind: "ask_verification",
+      result: "void",
+      clarified: false,
+      disposition: {
+        responsibility: "teacher",
+        countAsValidAttempt: false,
+        countAsUserError: false,
+        advanceCooldown: false,
+        closeSchedule: false,
+      },
+    });
+    expect(scripted.calls.map((call) => call.table)).toEqual(["ask_summary", "knowledge_object_link", "knowledge_evidence"]);
+    const evidence = scripted.calls[2].steps.find((step) => step.method === "upsert").args[0];
+    expect(evidence.note).toContain("responsibility=teacher");
+  });
+
   it("答疑验证的证据写入失败时绝不提前销疑，并保留原操作重试", async () => {
     const path = tempPath();
     const operation = {
@@ -538,6 +664,42 @@ describe("study outbox", () => {
     ]);
     expect(scripted.calls).toEqual([]);
     expect(readOutbox(path)).toEqual(operations);
+  });
+
+  it("通用知识证据 void 强制清除用户栽点并写教练责任", async () => {
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "knowledge_evidence",
+      operation_id: "teacher-void-evidence",
+      kpId: "XF-0100",
+      dimension: "recall",
+      result: "void",
+      promptIntegrity: "invalid",
+      cold: false,
+      failurePatternCode: "degree_strength",
+      diagnosisStatus: "confirmed",
+      note: "题面点名错误项",
+    }]);
+    const scripted = scriptedDb([{ data: null, error: null }]);
+
+    const result = await syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-12",
+      now: new Date("2026-08-12T12:00:00.000Z"),
+    });
+
+    expect(result.failed).toEqual([]);
+    const row = scripted.calls[0].steps.find((step) => step.method === "upsert").args[0];
+    expect(row).toMatchObject({
+      result: "void",
+      prompt_integrity: "invalid",
+      cold: false,
+      failure_pattern_code: null,
+      diagnosis_status: "pending",
+    });
+    expect(row.note).toContain("responsibility=teacher");
+    expect(row.note).toContain("user_error=false");
   });
 
   it("知识前置关系走可靠 outbox，并拒绝无锚点确认", async () => {
@@ -677,6 +839,123 @@ describe("study outbox", () => {
       score: 4,
       max_score: 5,
     });
+    expect(readOutbox(path)).toEqual([]);
+  });
+
+  it("自背和带背都写成背诵，并在原始信息中保留方式", async () => {
+    const path = tempPath();
+    writeOutbox(path, [
+      { op: "study_log", operation_id: "recite-self", subject: "法制史", chapter: "第六章 清末民初", activity: "自背", raw: "用户汇报背完" },
+      { op: "study_log", operation_id: "recite-guided", subject: "法理", chapter: "守法", activity: "带背", raw: "节末总复述完成" },
+    ]);
+    const scripted = scriptedDb([
+      { data: [], error: null },
+      { data: null, error: null },
+      { data: [], error: null },
+      { data: null, error: null },
+    ]);
+
+    const result = await syncStudyOutbox({ db: scripted.db, path, today: "2026-08-16", now: new Date("2026-08-16T12:00:00.000Z") });
+
+    expect(result.failed).toEqual([]);
+    const payloads = scripted.calls
+      .map((call) => call.steps.find((step) => step.method === "upsert")?.args[0])
+      .filter(Boolean);
+    expect(payloads).toEqual([
+      expect.objectContaining({ activity: "背诵", raw_input: "[背诵方式=自背] 用户汇报背完" }),
+      expect.objectContaining({ activity: "背诵", raw_input: "[背诵方式=带背] 节末总复述完成" }),
+    ]);
+    expect(readOutbox(path)).toEqual([]);
+  });
+
+  it("同日同科同章的背诵进度复写原行，不因新 operation_id 重复插入", async () => {
+    // [gpt] 2026-08-21：业务幂等键独立于传输幂等键；重放进度只更新最近一条规范流水。
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "study_log",
+      operation_id: "recite-rewrite-2",
+      date: "2026-08-21",
+      subject: "法制史",
+      chapter: "第三章 秦汉三国两晋南北朝",
+      activity: "自背",
+      feeling: "用户汇报已背完本章",
+      raw: "用户原话：法制史第三章背诵完毕",
+    }]);
+    const scripted = scriptedDb([
+      { data: [{ id: 220, operation_id: "recite-original" }], error: null },
+      { data: null, error: null },
+    ]);
+
+    const result = await syncStudyOutbox({ db: scripted.db, path, today: "2026-08-21", now: new Date("2026-08-21T04:30:00.000Z") });
+
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded[0].result).toMatchObject({
+      kind: "study_log",
+      affected: 1,
+      action: "updated",
+      studyLogId: 220,
+      operationId: "recite-original",
+    });
+    expect(scripted.calls).toHaveLength(2);
+    expect(scripted.calls[0].steps).toEqual(expect.arrayContaining([
+      expect.objectContaining({ method: "eq", args: ["log_date", "2026-08-21"] }),
+      expect.objectContaining({ method: "eq", args: ["activity", "背诵"] }),
+    ]));
+    const update = scripted.calls[1].steps.find((step) => step.method === "update");
+    expect(update.args[0]).toMatchObject({
+      subject: "法制史",
+      chapter: "第三章 秦汉三国两晋南北朝",
+      activity: "背诵",
+      raw_input: "[背诵方式=自背] 用户原话：法制史第三章背诵完毕",
+    });
+    expect(update.args[0]).not.toHaveProperty("operation_id");
+    expect(readOutbox(path)).toEqual([]);
+  });
+
+  it("学习流水更正只在完整旧业务键唯一命中时原地更新", async () => {
+    // [gpt] 2026-08-23：整场复盘误记为单科时，应改原行而不是再插一条。
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "study_log_correction",
+      operation_id: "correct-review-log-1",
+      match: {
+        date: "2026-08-22",
+        subject: "民法",
+        chapter: "周六错题复盘·监护顺位与抵押财产范围",
+        activity: "复盘",
+      },
+      replacement: {
+        date: "2026-08-22",
+        subject: "综合",
+        chapter: "周六跨科错题复盘·法制史/刑法/法理/民法",
+        activity: "复盘",
+        feeling: "整场聚合记录",
+      },
+    }]);
+    const scripted = scriptedDb([
+      { data: [{ id: 230, operation_id: "original-review-log", attempt_expected: false }], error: null },
+      { data: [{ id: 230 }], error: null },
+    ]);
+
+    const result = await syncStudyOutbox({ db: scripted.db, path, today: "2026-08-23", now: new Date("2026-08-23T08:00:00.000Z") });
+
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded[0].result).toMatchObject({
+      kind: "study_log_correction",
+      action: "updated",
+      studyLogId: 230,
+      operationId: "original-review-log",
+    });
+    expect(scripted.calls).toHaveLength(2);
+    const update = scripted.calls[1].steps.find((step) => step.method === "update");
+    expect(update.args[0]).toMatchObject({
+      log_date: "2026-08-22",
+      subject: "综合",
+      chapter: "周六跨科错题复盘·法制史/刑法/法理/民法",
+      activity: "复盘",
+      feeling: "整场聚合记录",
+    });
+    expect(update.args[0]).not.toHaveProperty("operation_id");
     expect(readOutbox(path)).toEqual([]);
   });
 

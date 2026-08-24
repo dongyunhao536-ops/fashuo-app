@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { applyEvidenceEvent, applyTransition, formatReciteLedgerSummary, parseReciteLedger, readReciteLedger, summarizeReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
 import { appendOutboxText, buildReciteAttemptOperation } from "./lib/attempt-producers.mjs";
 import { commitLinkedTextFiles } from "./lib/linked-file-transaction.mjs";
+import { assertDaibeiTargetWritebackReady, recordAutomaticSkillStep } from "./lib/skill-run.mjs";
 
 const LIVE_LEDGER = ".local/带背挂账.md";
 const DEFAULT_OUTBOX = ".local/cuoti-pending.jsonl";
@@ -55,10 +56,21 @@ if (command === "evidence") {
   const result = requireOption(options, "result");
   const promptIntegrity = options.prompt && options.prompt !== true ? clean(options.prompt) : "clean";
   const failurePatternCode = options.pattern && options.pattern !== true ? clean(options.pattern) : null;
+  if (result === "void" && failurePatternCode) throw new Error("作废题只归责教练，不能记录用户栽点 pattern");
   const diagnosisStatus = options.diagnosis && options.diagnosis !== true ? clean(options.diagnosis) : null;
   const evidenceAnchor = requireOption(options, "anchor");
   const note = options.note && options.note !== true ? clean(options.note) : null;
   const backfill = booleanOption(options, "backfill");
+  if (options.run === true) throw new Error("--run 必须提供 Skill Run ID");
+  if (backfill && options.run) throw new Error("--backfill 只补历史结构，不能给 Skill Run 记本场结果");
+  const runFile = options["run-file"] && options["run-file"] !== true ? String(options["run-file"]) : undefined;
+  // [gpt] 2026-08-14：在触碰账本和 outbox 之前核对 Run 冻结对象；错对象时零文件写入。
+  if (options.run) assertDaibeiTargetWritebackReady({
+    runId: String(options.run),
+    reciteId: id,
+    scheduleId: options.schedule && options.schedule !== true ? clean(options.schedule) : null,
+    file: runFile,
+  });
   const markdown = readFileSync(file, "utf8");
   const applied = applyEvidenceEvent(markdown, parsed, {
     id,
@@ -79,9 +91,11 @@ if (command === "evidence") {
   if (options.outbox === true) throw new Error("--outbox 必须提供文件路径");
   const explicitOutbox = options.outbox && options.outbox !== true ? String(options.outbox) : null;
   const shouldStageAttempt = !backfill && (file === LIVE_LEDGER || explicitOutbox != null);
+  let stagedOperationId = null;
   if (shouldStageAttempt) {
     const entry = parsed.records.find((record) => record.id === id);
     const operation = buildReciteAttemptOperation(applied.event, entry);
+    stagedOperationId = operation.operation_id;
     const outbox = explicitOutbox ?? DEFAULT_OUTBOX;
     const previousOutbox = existsSync(outbox) ? readFileSync(outbox, "utf8") : "";
     const staged = appendOutboxText(previousOutbox, operation);
@@ -96,6 +110,20 @@ if (command === "evidence") {
     if (backfill && file === LIVE_LEDGER) console.log("ℹ️ backfill 仅补账本结构，不制造历史 learning_attempt。");
   }
   console.log(`✓ 已记录带背证据：${id} ${applied.event.date} ${dimension}/${result}${failurePatternCode ? ` · ${failurePatternCode}(${applied.event.diagnosisStatus})` : ""}`);
+  if (options.run && options.run !== true) {
+    if (!stagedOperationId) throw new Error("带 Run 的证据必须同时产生待同步 operation_id");
+    // [gpt] 2026-08-12：本地账本成功只证明结果已记录；远端 writeback 必须由 cuoti sync 查询 ingest_operation 后另签。
+    recordAutomaticSkillStep({
+      runId: String(options.run),
+      step: "result_recorded",
+      source: "daibei-evidence",
+      evidenceRef: `${id}:${dimension}/${result}:op=${stagedOperationId}`,
+      expectedSkill: "daibei-pc",
+      file: runFile,
+    });
+    console.log(`下一步：node --env-file=.env.local scripts/cuoti.mjs sync --run ${options.run} --operation ${stagedOperationId}`);
+  }
+  if (result === "void") console.log("↩ 本次只留教练题面事故审计：不刷新最后碰、不计有效题量、不记用户错误、不推进冷却。");
 } else if (command === "transition") {
   if (summary.counts.errors) throw new Error(`迁移前账本已有 ${summary.counts.errors} 个结构错误，先 audit 修复`);
   const id = process.argv[3] && !process.argv[3].startsWith("--") ? clean(process.argv[3]) : requireOption(options, "id");
@@ -131,7 +159,7 @@ if (command === "evidence") {
   console.error("用法：node scripts/daibei-ledger.mjs <summary|audit|check|flow|transition|evidence> [--json] [--today YYYY-MM-DD] [--file 路径]");
   console.error("  flow --from YYYY-MM-DD --to YYYY-MM-DD");
   console.error("  transition <ID> --event new|withdraw|rehang|transfer|route-anki --evidence \"教材/复检锚点\" [--note \"接收轨/说明\"]");
-  console.error("  evidence <ID> --result pass|partial|fail|void --anchor \"教材/题目锚点\" [--dimension understanding|recall] [--cold true|false] [--prompt clean|cued|invalid] [--pattern code --diagnosis pending|confirmed|rejected] [--note \"诊断\"] [--backfill] [--outbox 路径]");
+  console.error("  evidence <ID> --result pass|partial|fail|void --anchor \"教材/题目锚点\" [--dimension understanding|recall] [--cold true|false] [--prompt clean|cued|invalid] [--pattern code --diagnosis pending|confirmed|rejected] [--note \"诊断\"] [--run SR-... --schedule 排期ID] [--backfill] [--outbox 路径]");
   process.exitCode = 2;
 }
 

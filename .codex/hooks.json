@@ -1,0 +1,45 @@
+{
+  "description": "[gpt] Fashuo Skill execution guard: route strong triggers and audit Run closure without storing prompt text.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/codex-skill-guard.mjs",
+            "commandWindows": "node D:\\fashuo-app\\scripts\\codex-skill-guard.mjs",
+            "timeout": 5,
+            "statusMessage": "Starting Fashuo skill guard"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/codex-skill-guard.mjs",
+            "commandWindows": "node D:\\fashuo-app\\scripts\\codex-skill-guard.mjs",
+            "timeout": 5,
+            "statusMessage": "Routing Fashuo skill"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node scripts/codex-skill-guard.mjs",
+            "commandWindows": "node D:\\fashuo-app\\scripts\\codex-skill-guard.mjs",
+            "timeout": 5,
+            "statusMessage": "Checking Fashuo skill run"
+          }
+        ]
+      }
+    ]
+  }
+}

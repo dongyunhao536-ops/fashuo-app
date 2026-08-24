@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { createClient } from "@supabase/supabase-js";
 import { prepareMirrorGeneration } from "./lib/mirror-generation.mjs";
 import { expandMirrorScope } from "./lib/mirror-scope.mjs";
+import { resolveArchiveRoot } from "./lib/workspace-paths.mjs";
 
 /** 重试包装：sb 调用失败时（fetch failed / ETIMEDOUT / ECONNRESET），指数退避重试。
  *  国内家宽 → 阿里云 ECS 偶发 TCP 抖断，这层让幂等同步能扛过去。 */
@@ -33,7 +34,8 @@ const configBytes = readFileSync("config/mirror-scope.json");
 const cfg = JSON.parse(configBytes.toString("utf8"));
 // ARCHIVE_DIR 覆盖档案根（与 register-events.mjs 统一）：PC 不设 → 用 mirror-scope.json 的 root；
 // ECS autosync 设 ARCHIVE_DIR=/opt/fashuo-archive 指向 clone 的档案，两脚本共用同一目录（不必各维护 config）。
-const ROOT = process.env.ARCHIVE_DIR || cfg.root;
+// [gpt] 2026-08-23：Mac 会忽略配置中的 Windows 盘符并回退到同级档案仓。
+const ROOT = resolveArchiveRoot({ configRoot: cfg.root });
 // [gpt] 2026-08-10：同时接受常见的 --dry-run，避免把只读预检误当成正式同步。
 const dryRun = process.argv.includes("--dry") || process.argv.includes("--dry-run");
 

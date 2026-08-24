@@ -545,7 +545,7 @@ function takeOption(args, name) {
   return String(value).trim();
 }
 
-export function parseTopicOptions(input, { requireTopic = false } = {}) {
+export function parseTopicOptions(input, { requireTopic = false, allowStandaloneChapter = false } = {}) {
   const args = [...input];
   const title = cleanTopicTitle(takeOption(args, "--topic"));
   const chapter = takeOption(args, "--chapter");
@@ -563,11 +563,15 @@ export function parseTopicOptions(input, { requireTopic = false } = {}) {
   const role = takeOption(args, "--role") ?? "primary";
   if (!['primary', 'related'].includes(role)) throw new Error("--role 只能是 primary 或 related");
   if (requireTopic && !title) throw new Error("缺少 --topic <标准弱项主题>");
-  if (!title && [chapter, section, kpId, rootCauseNote, failurePatternCode, evidenceAnchor].some(Boolean)) {
+  if (!title && [section, kpId, rootCauseNote, failurePatternCode, evidenceAnchor].some(Boolean)) {
+    throw new Error("填写章节、病根或锚点前必须先给 --topic");
+  }
+  if (!title && chapter && !allowStandaloneChapter) {
     throw new Error("填写章节、病根或锚点前必须先给 --topic");
   }
   return {
     rest: args,
+    chapter,
     topic: title ? {
       title,
       chapter,
@@ -593,12 +597,12 @@ export function parseAddArgs(input) {
     args.splice(recurIndex, 2);
     if (!Number.isInteger(recurOf) || recurOf <= 0) throw new Error("--recur-of 需要旧错题的正整数 id");
   }
-  const { rest, topic } = parseTopicOptions(args);
+  const { rest, topic, chapter } = parseTopicOptions(args, { allowStandaloneChapter: true });
   const subject = normalizeSubject(rest.shift());
   const knowledge = rest.join(" ").trim();
   if (!subject || !SUBJECTS.includes(subject)) throw new Error(`add 需要合法科目：${SUBJECTS.join("/")}`);
   if (!knowledge) throw new Error("add 需要错题事件原文或知识点说明");
-  return { subject, knowledge, recurOf, topic };
+  return { subject, knowledge, recurOf, chapter: topic?.chapter ?? chapter ?? null, topic };
 }
 
 export function topicInsertPayload(subject, topic, nowIso = new Date().toISOString()) {

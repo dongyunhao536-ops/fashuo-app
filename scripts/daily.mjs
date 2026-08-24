@@ -17,7 +17,9 @@ const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPA
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
 const DAY = 86400000;
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语"];
-const DEEP = new Set(["复盘", "带背"]); // 深度动作（对齐周报「深度动作占比」口径；成段输出无 activity 枚举，靠 feeling 人工判）
+const DEEP = new Set(["复盘", "背诵"]); // 深度动作（对齐周报「深度动作占比」口径；成段输出无 activity 枚举，靠 feeling 人工判）
+// [gpt] 2026-08-16：读旧行时把“带背/自背”折叠为“背诵”，避免日报拆成两条轨。
+const canonicalActivity = (activity) => activity === "带背" || activity === "自背" ? "背诵" : activity;
 const LEDGER = ".local/日报台账.md";
 const DIR = ".local/日报";
 
@@ -129,10 +131,13 @@ async function collect(date) {
     throw new Error(`日报事实源读取失败：${broken.map(([name, response]) => `${name}=${response.error.message}`).join("；")}`);
   }
 
-  // 轨道断档：按 activity 看各条轨最后一次（"带背轨断了 6 天"这种信号，只看"每天有没有流水"看不出来
+  // 轨道断档：按规范 activity 看各条轨最后一次（只看“每天有没有流水”看不出具体轨道断档）
   // ——周报 P1 常点名某条轨，日报得答得上它断没断。2026-07-28 首跑就逮到带背断 6 天）
   const trackLast = {};
-  for (const row of allAct.data ?? []) if (row.activity && !(row.activity in trackLast)) trackLast[row.activity] = String(row.log_date);
+  for (const row of allAct.data ?? []) {
+    const activity = canonicalActivity(row.activity);
+    if (activity && !(activity in trackLast)) trackLast[activity] = String(row.log_date);
+  }
 
   const errorSummary = summarizeErrorBookRows(errorBook.data ?? []);
   const askSummary = summarizeAskPoints(askPoints.data ?? [], { referenceDate: date });
@@ -151,9 +156,9 @@ async function collect(date) {
 
 function fmtLog(rows) {
   if (!rows.length) return ["  （无流水记录 —— 注意：这是「没记录」，不等于「没做」）"];
-  return rows.map((r) => `  · ${[r.subject, cut(r.chapter, 30), r.activity, r.accuracy != null ? r.accuracy + "%" : ""].filter(Boolean).join(" ")}${r.feeling ? `（${cut(r.feeling, 160)}）` : ""}`);
+  return rows.map((r) => `  · ${[r.subject, cut(r.chapter, 30), canonicalActivity(r.activity), r.accuracy != null ? r.accuracy + "%" : ""].filter(Boolean).join(" ")}${r.feeling ? `（${cut(r.feeling, 160)}）` : ""}`);
 }
-const deepRatio = (rows) => `${rows.filter((r) => DEEP.has(r.activity)).length}/${rows.length}`;
+const deepRatio = (rows) => `${rows.filter((r) => DEEP.has(canonicalActivity(r.activity))).length}/${rows.length}`;
 
 function render(r) {
   const L = [];
@@ -175,7 +180,7 @@ function render(r) {
 
   L.push(`\n──── ② 昨日全天真实流水（${r.yday} 周${dow(r.yday)}·完整的一天，结算就看它）────`);
   L.push(...fmtLog(r.ydayLog));
-  L.push(`  深度动作占比（复盘+带背 ÷ 全部）：${deepRatio(r.ydayLog)}`);
+  L.push(`  深度动作占比（复盘+背诵 ÷ 全部）：${deepRatio(r.ydayLog)}`);
   const errList = (a) => a.map((e) => `${e.subject ?? "未分类"}·${cut(e.knowledge, 40)}`).join("、");
   L.push(`  错题：新增 ${r.ydayErrNew.length}${r.ydayErrNew.length ? "（" + errList(r.ydayErrNew) + "）" : ""} ／ 销账 ${r.ydayErrAbs.length}${r.ydayErrAbs.length ? "（" + errList(r.ydayErrAbs) + "）" : ""}`);
   const yse = r.ydayScheduleExecution;
@@ -195,7 +200,7 @@ function render(r) {
   L.push("  " + r.days.map((d) => `${d.d.slice(5)}${d.n ? "▊" + d.n : "·0"}`).join("  "));
   L.push(`  连续零流水：${r.gap} 天（从昨天往回数）`);
   const ago = (d) => Math.round((new Date(r.date) - new Date(d)) / DAY);
-  L.push(`  分科最后一次：${SUBJECTS.map((s) => { const v = r.lastBySubj[s]; return `${s} ${v ? `${v.log_date}(${ago(v.log_date)}天前·${v.activity})` : "❌从未"}`; }).join(" ／ ")}`);
+  L.push(`  分科最后一次：${SUBJECTS.map((s) => { const v = r.lastBySubj[s]; return `${s} ${v ? `${v.log_date}(${ago(v.log_date)}天前·${canonicalActivity(v.activity)})` : "❌从未"}`; }).join(" ／ ")}`);
   L.push(`  分轨最后一次：${Object.entries(r.trackLast).sort((a, b) => (a[1] < b[1] ? 1 : -1)).map(([a, d]) => `${a} ${d}(${ago(d)}天前)`).join(" ／ ")}`);
 
   L.push(`\n──── ⑤ 欠账池（三本账的体量；细节自己去 Read 原文）────`);

@@ -61,3 +61,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 - 来源判定以会话的 model_provider 为准（deepseek_local → deepseek；openai → gpt）；同一会话内的所有改动视为同一来源。
 - 本规则对仓库内所有文件生效（含 docs/、.agents/skills/、scripts/、src/）。
 <!-- END:change-source-marker -->
+
+<!-- BEGIN:powershell-utf8-skill-read -->
+# PowerShell 中文文本读取
+
+<!-- [gpt] 2026-08-13：Codex 独立宿主在首次读取 UTF-8 无 BOM 的 Skill 时会按系统默认编码解码，导致乱码和重复重读。 -->
+- 在 Windows PowerShell 中读取仓库内 Markdown、JSONL 或其他 UTF-8 文本时，首次命令就显式使用 `Get-Content -Encoding UTF8 -LiteralPath <路径>`；读取全文再加 `-Raw`。
+- 不得先按默认编码读取中文 Skill 再切编码重试；也不得因乱码改用全库搜索、读取实现源码或重复读取同一 Skill。
+<!-- END:powershell-utf8-skill-read -->

@@ -4,6 +4,7 @@ import {
   auditKnowledgeBaseline,
   formatKnowledgeBaselineMarkdown,
 } from "./lib/knowledge-baseline.mjs";
+import { resolveArchiveRoot } from "./lib/workspace-paths.mjs";
 
 const defaultConfigPath = fileURLToPath(
   new URL("../config/mirror-scope.json", import.meta.url),
@@ -16,7 +17,7 @@ function usage() {
     "选项：",
     "  --json             输出稳定 JSON（默认输出 Markdown）",
     "  --config <path>    指定 mirror-scope.json",
-    "  --root <path>      覆盖配置中的档案根（其次读取 ARCHIVE_DIR）",
+    "  --root <path>      覆盖配置中的档案根（其次读取 FASHUO_ARCHIVE_ROOT / ARCHIVE_DIR）",
     "  -h, --help         显示帮助",
     "",
   ].join("\n");
@@ -65,7 +66,8 @@ try {
   } else {
     const report = await auditKnowledgeBaseline({
       configPath: options.configPath,
-      archiveRoot: options.archiveRoot ?? process.env.ARCHIVE_DIR,
+      // [gpt] 2026-08-23：审计入口与同步/检索入口使用同一跨平台根目录。
+      archiveRoot: options.archiveRoot ?? resolveArchiveRoot(),
     });
     process.stdout.write(
       options.json

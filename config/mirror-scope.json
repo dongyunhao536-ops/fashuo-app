@@ -1,5 +1,5 @@
 {
-  "_comment": "content_mirror 同步范围；路径相对 ROOT（D:\\fashuo）。kind 决定 grep 工具命中。",
+  "_comment": "[gpt] content_mirror 同步范围；root 是 Windows 兼容默认值，FASHUO_ARCHIVE_ROOT/ARCHIVE_DIR 可跨平台覆盖。kind 决定 grep 工具命中。",
   "root": "D:\\fashuo",
   "sealedExamFromYear": 2025,
   "rules": [

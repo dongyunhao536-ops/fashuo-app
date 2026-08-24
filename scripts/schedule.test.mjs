@@ -1,10 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseReviewSchedule } from "./lib/assessment-ledgers.mjs";
 import { parseReciteLedger } from "./lib/recite-ledger.mjs";
+import { recordAutomaticSkillStep, startSkillRun } from "./lib/skill-run.mjs";
 
 // [gpt] 2026-08-10：覆盖“证据 → 状态 → 排期”原子结案，以及任何预检失败都不改账。
 describe("schedule CLI", () => {
@@ -14,11 +15,76 @@ describe("schedule CLI", () => {
     try {
       writeFileSync(file, "# 复盘排期\n", "utf8");
       execFileSync(process.execPath, ["scripts/schedule.mjs", "add", "--date", "2026-08-05", "--priority", "P0", "--type", "错题复检", "--task", "打 T#1", "--route", "cuoti-fupan", "--dimension", "application", "--id", "R1", "--file", file], { cwd: process.cwd(), encoding: "utf8" });
-      execFileSync(process.execPath, ["scripts/schedule.mjs", "done", "R1", "--result", "跨日通过", "--today", "2026-08-05", "--file", file], { cwd: process.cwd(), encoding: "utf8" });
+      execFileSync(process.execPath, ["scripts/schedule.mjs", "done", "R1", "--result", "跨日通过", "--topics", "1", "--evidence-refs", "review:T#1:2026-08-05", "--today", "2026-08-05", "--file", file], { cwd: process.cwd(), encoding: "utf8" });
       const parsed = parseReviewSchedule(readFileSync(file, "utf8"), { referenceDate: "2026-08-05" });
 
       expect(parsed.counts).toMatchObject({ canonical: 1, completed: 1, dueToday: 0, errors: 0 });
       expect(parsed.items[0]).toMatchObject({ id: "R1", status: "completed", completedOn: "2026-08-05", result: "跨日通过", route: "cuoti-fupan", dimension: "application" });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("错题排期拒绝无目标或错目标手工结案，整组只接受完整精确 T# 集合", () => {
+    // [gpt] 2026-08-12：同科其他题和部分完成均不能冲抵日报指定验收单。
+    const directory = mkdtempSync(join(tmpdir(), "schedule-cuouti-targets-"));
+    const file = join(directory, "schedule.md");
+    const original = "# 复盘排期\n- [ ] 2026-08-05 | P0 | id=GROUP | type=错题复检 | task=T#10/T#25 各一发 | route=cuoti-fupan | dimension=application | ref=T#10/T#25\n";
+    try {
+      writeFileSync(file, original, "utf8");
+      const run = (...args) => execFileSync(process.execPath, [
+        "scripts/schedule.mjs", "done", "GROUP", "--result", "已完成", ...args,
+        "--today", "2026-08-05", "--file", file,
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" });
+      expect(() => run()).toThrow();
+      expect(() => run("--topics", "10")).toThrow();
+      expect(() => run("--topics", "10,108")).toThrow();
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      expect(() => run("--topics", "25,10")).toThrow();
+      expect(() => run("--topics", "25,10", "--evidence-refs", "review:T#10:2026-08-05")).toThrow();
+      expect(readFileSync(file, "utf8")).toBe(original);
+
+      run("--topics", "25,10", "--evidence-refs", "review:T#10:2026-08-05,review:T#25:2026-08-05");
+      expect(parseReviewSchedule(readFileSync(file, "utf8"), { referenceDate: "2026-08-05" }).items[0]).toMatchObject({
+        id: "GROUP", status: "completed", result: "已完成",
+      });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("无稳定 T# 的错题排期拒绝模糊手工结案", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-cuouti-unstable-"));
+    const file = join(directory, "schedule.md");
+    const original = "# 复盘排期\n- [ ] 2026-08-05 | P0 | id=FUZZY | type=错题复检 | task=法理错题各打一发 | route=cuoti-fupan | dimension=application | ref=本周P0\n";
+    try {
+      writeFileSync(file, original, "utf8");
+      expect(() => execFileSync(process.execPath, [
+        "scripts/schedule.mjs", "done", "FUZZY", "--result", "做了其他法理题", "--topics", "10",
+        "--today", "2026-08-05", "--file", file,
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })).toThrow();
+      expect(readFileSync(file, "utf8")).toBe(original);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("无 T# 的知识点精准复检只接受原 KP-ID 与对应证据引用", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-cuouti-kp-"));
+    const file = join(directory, "schedule.md");
+    const original = "# 复盘排期\n- [ ] 2026-08-05 | P1 | id=KP | type=知识点精准复检 | task=XF-0054：应用检验 | route=cuoti-fupan | dimension=application | kp=XF-0054 | ref=coach-engine:knowledge:XF-0054:2026-08-05\n";
+    try {
+      writeFileSync(file, original, "utf8");
+      const base = ["scripts/schedule.mjs", "done", "KP", "--result", "陌生变式通过", "--today", "2026-08-05", "--file", file];
+      expect(() => execFileSync(process.execPath, [...base, "--kp", "XF-9999", "--evidence-refs", "attempt:XF-9999:2026-08-05"], {
+        cwd: process.cwd(), encoding: "utf8", stdio: "pipe",
+      })).toThrow();
+      expect(readFileSync(file, "utf8")).toBe(original);
+      execFileSync(process.execPath, [...base, "--kp", "XF-0054", "--evidence-refs", "attempt:XF-0054:2026-08-05"], {
+        cwd: process.cwd(), encoding: "utf8", stdio: "pipe",
+      });
+      expect(parseReviewSchedule(readFileSync(file, "utf8"), { referenceDate: "2026-08-05" }).items[0]).toMatchObject({ status: "completed" });
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }
@@ -109,6 +175,43 @@ describe("schedule CLI", () => {
         attemptRole: "recheck",
         result: "pass",
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  // [gpt] 2026-08-14：验证三对象错配时排期、挂账和 outbox 都保持原文。
+  it("带 Run 联动结案时排期、条目和冻结目标必须完全一致", () => {
+    const directory = mkdtempSync(join(tmpdir(), "schedule-run-target-"));
+    const file = join(directory, "schedule.md");
+    const reciteFile = join(directory, "ledger.md");
+    const outbox = join(directory, "pending.jsonl");
+    const runFile = join(directory, "skill-runs.jsonl");
+    try {
+      const schedule = "# 复盘排期\n- [ ] 2026-08-14 | P1 | id=R-L30 | type=带背复检 | task=L30：冷检 | route=daibei-pc | dimension=recall | ref=coach-engine:recite:L30:2026-08-14\n";
+      const ledger = `# 带背挂账
+<!-- recite-ledger: ignore-heading-counts -->
+### L30｜法理｜执法特点
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+### L31｜法理｜执法主体
+- 挂 08-02 ｜ 最后碰 **08-02** ｜ 状态：挂
+`;
+      writeFileSync(file, schedule, "utf8");
+      writeFileSync(reciteFile, ledger, "utf8");
+      const run = startSkillRun({ skill: "daibei-pc", subject: "法理", targetRef: "R-L31:recite:L31", runId: "SR-SCHEDULE-MISMATCH", file: runFile });
+      recordAutomaticSkillStep({ runId: run.runId, step: "materials_checked", source: "test", evidenceRef: "queries:L31", file: runFile });
+      recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "test", artifactHash: "a".repeat(64), artifactLength: 18, file: runFile });
+
+      expect(() => execFileSync(process.execPath, [
+        "scripts/schedule.mjs", "done", "R-L30", "--result", "通过",
+        "--recite", "L30", "--event", "withdraw", "--outcome", "pass",
+        "--cold", "true", "--prompt", "clean", "--evidence", "教材#执法特点",
+        "--today", "2026-08-14", "--file", file, "--recite-file", reciteFile, "--outbox", outbox,
+        "--run", run.runId, "--run-file", runFile,
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })).toThrow(/DAIBEI_TARGET_MISMATCH|DAIBEI_SCHEDULE_MISMATCH/);
+      expect(readFileSync(file, "utf8")).toBe(schedule);
+      expect(readFileSync(reciteFile, "utf8")).toBe(ledger);
+      expect(existsSync(outbox)).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

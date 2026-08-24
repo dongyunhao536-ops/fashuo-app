@@ -123,6 +123,13 @@ export function buildReciteAttemptOperation(event, entry) {
     metadata: {
       producer: "recite_ledger[gpt]",
       entry_title: entry.title ?? null,
+      ...(event.result === "void" ? {
+        responsibility: "teacher",
+        count_as_valid_attempt: false,
+        count_as_user_error: false,
+        advance_cooldown: false,
+        close_schedule: false,
+      } : {}),
     },
   };
   normalizeLearningAttempt(operation, event.date);

@@ -1,11 +1,18 @@
 import { describe, it, expect } from "vitest";
-import { splitCoachMeta, aggregateErrorBook, normalizeCoachActivity, COACH_META_OPEN, COACH_META_CLOSE, type ErrorBookRow } from "./coach";
+import { splitCoachMeta, aggregateErrorBook, normalizeCoachActivity, coachRecitationMode, withCoachRecitationModeMarker, COACH_META_OPEN, COACH_META_CLOSE, type ErrorBookRow } from "./coach";
 
 describe("normalizeCoachActivity 学习活动白名单", () => {
   it("保留看书，不再静默降级成其他", () => {
     expect(normalizeCoachActivity("看书")).toBe("看书");
     expect(normalizeCoachActivity("未知活动")).toBe("其他");
     expect(normalizeCoachActivity(null)).toBeNull();
+  });
+
+  it("把自背和带背统一为背诵，同时保留方式标记", () => {
+    expect(normalizeCoachActivity("自背")).toBe("背诵");
+    expect(normalizeCoachActivity("带背")).toBe("背诵");
+    expect(coachRecitationMode("自背")).toBe("自背");
+    expect(withCoachRecitationModeMarker("清末民初背完", "自背")).toBe("[背诵方式=自背] 清末民初背完");
   });
 });
 

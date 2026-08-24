@@ -1,9 +1,10 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseReciteLedger, summarizeReciteTransitions } from "./lib/recite-ledger.mjs";
+import { recordAutomaticSkillStep, startSkillRun } from "./lib/skill-run.mjs";
 
 describe("daibei-ledger CLI", () => {
   it("一次命令同步当前状态与 append-only 流水", () => {
@@ -90,6 +91,38 @@ describe("daibei-ledger CLI", () => {
         cold: true,
         projectEvidence: false,
       });
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  // [gpt] 2026-08-14：验证对象错配时业务文件零写入。
+  it("Run 冻结 L31 时拒绝把 L30 写进账本和 outbox", () => {
+    const directory = mkdtempSync(join(tmpdir(), "daibei-target-gate-"));
+    const file = join(directory, "ledger.md");
+    const outbox = join(directory, "pending.jsonl");
+    const runFile = join(directory, "skill-runs.jsonl");
+    try {
+      const original = `# 带背挂账
+<!-- recite-ledger: ignore-heading-counts -->
+### L30｜法理｜执法特点
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+### L31｜法理｜执法主体
+- 挂 08-02 ｜ 最后碰 **08-02** ｜ 状态：挂
+`;
+      writeFileSync(file, original, "utf8");
+      const run = startSkillRun({ skill: "daibei-pc", subject: "法理", targetRef: "R20260812-RECITE-L31", runId: "SR-LEDGER-MISMATCH", file: runFile });
+      recordAutomaticSkillStep({ runId: run.runId, step: "materials_checked", source: "test", evidenceRef: "queries:L31", file: runFile });
+      recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "test", artifactHash: "a".repeat(64), artifactLength: 18, file: runFile });
+
+      expect(() => execFileSync(process.execPath, [
+        "scripts/daibei-ledger.mjs", "evidence", "L30",
+        "--dimension", "recall", "--result", "pass", "--cold", "true", "--prompt", "clean",
+        "--anchor", "教材#执法特点", "--today", "2026-08-14", "--file", file, "--outbox", outbox,
+        "--run", run.runId, "--run-file", runFile,
+      ], { cwd: process.cwd(), encoding: "utf8", stdio: "pipe" })).toThrow(/DAIBEI_TARGET_MISMATCH/);
+      expect(readFileSync(file, "utf8")).toBe(original);
+      expect(existsSync(outbox)).toBe(false);
     } finally {
       rmSync(directory, { recursive: true, force: true });
     }

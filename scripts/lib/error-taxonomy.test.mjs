@@ -56,6 +56,14 @@ describe("error taxonomy", () => {
     expect(() => validateFailurePattern("粗心")).toThrow("未知栽点代码");
   });
 
+  it("add 可单独保留事件章节，主题未知时交给校验器标 pending", () => {
+    expect(parseAddArgs(["刑法", "犯罪中止时间点误判", "--chapter", "故意犯罪停止形态"])).toMatchObject({
+      subject: "刑法",
+      chapter: "故意犯罪停止形态",
+      topic: null,
+    });
+  });
+
   it("主题分类与病根认领分开：主题可确认而病根仍待认领", () => {
     const { topic } = parseTopicOptions(["--topic", "审题层级错位"]);
     expect(topic).toMatchObject({

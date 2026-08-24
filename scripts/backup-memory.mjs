@@ -1,75 +1,206 @@
-// node scripts/backup-memory.mjs
-// 灾备：把换 harness/换机时会丢的资产备份进 fashuo-archive git 仓（三个源）：
-//   ① Claude Code 历史记忆（只作迁移后的画像/决策档案）→ Claude记忆备份/
-//   ② Codex 现役规则与技能 → Codex规则备份/
-//      正本仍是 fashuo-app/.agents；这里是跨仓灾备副本，不参与技能发现。
-//   ③ fashuo-app/.local PC 工作区（带背挂账/评估报告/周报草稿/英语真题库）→ PC工作区备份/
-//      .local 被 .gitignore 排除、此前不在任何备份链里（2026-07-17 反思补上的灾备空窗）。
-//      排除 英语真题/_raw（29MB 原始 PDF，静态资产，别灌进 git）。
-// 触发：Windows 计划任务 ClaudeMemoryBackup（历史任务名）每日 22:30 + 大段规则/台账变更后手动跑。
-// 不污染同步链：content_mirror 只按 config/mirror-scope.json 白名单同步，这两个目录不在白名单。
+#!/usr/bin/env node
+// [gpt] 2026-08-23：跨平台连续性备份；支持 Windows/macOS、dry-run 与不推送模式。
+//
+// 默认仍保持既有定时任务语义：复制 → 精确暂存 → commit → push 当前分支。
+// 迁移预检：node scripts/backup-memory.mjs --dry-run
+// 本地留档但不推送：node scripts/backup-memory.mjs --no-push
+//
+// 注意：.env.local 与 _raw 原始 PDF 不进入 Git 灾备；它们应进入私有迁移包，通过受信任局域网或加密介质转移。
 import { execFileSync } from "node:child_process";
-import { rmSync, cpSync, existsSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import {
+  resolveAppRoot,
+  resolveArchiveRoot,
+  resolveCodexHome,
+  resolveLegacyMemoryRoot,
+} from "./lib/workspace-paths.mjs";
 
-const REPO = "D:/fashuo";
+const args = new Set(process.argv.slice(2));
+const dryRun = args.has("--dry-run");
+const noPush = args.has("--no-push");
+const help = args.has("--help") || args.has("-h");
+const knownArgs = new Set(["--dry-run", "--no-push", "--help", "-h"]);
+const unknownArgs = [...args].filter((argument) => !knownArgs.has(argument));
+
+if (help) {
+  console.log([
+    "用法：node scripts/backup-memory.mjs [--dry-run] [--no-push]",
+    "",
+    "  --dry-run  只验证根目录、备份源和必需档案，不复制、不提交、不推送",
+    "  --no-push  正常复制并提交，但不推送远端",
+  ].join("\n"));
+  process.exit(0);
+}
+if (unknownArgs.length) {
+  console.error(`未知参数：${unknownArgs.join(", ")}`);
+  process.exit(1);
+}
+
+const APP_ROOT = resolveAppRoot();
+const REPO = resolveArchiveRoot({ appRoot: APP_ROOT });
+const CODEX_HOME = resolveCodexHome();
+const LEGACY_MEMORY_ROOT = resolveLegacyMemoryRoot();
+const RAW_DIR_RE = /(?:^|[\\/])_raw(?:[\\/]|$)/u;
+const GIT_DIR_RE = /(?:^|[\\/])\.git(?:[\\/]|$)/u;
+
 const JOBS = [
-  { src: "C:/Users/Administrator/.claude/projects/D--fashuo-app/memory", dest: "Claude记忆备份" },
-  { src: "D:/fashuo-app/.agents", dest: "Codex规则备份" },
-  { src: "D:/fashuo-app/.local", dest: "PC工作区备份", exclude: /[\\/]_raw$/ },
+  {
+    label: "Claude 历史记忆",
+    src: LEGACY_MEMORY_ROOT,
+    dest: "Claude记忆备份",
+    optional: true,
+  },
+  {
+    label: "Codex 现役 Skills",
+    src: join(APP_ROOT, ".agents"),
+    dest: "Codex规则备份",
+  },
+  {
+    label: "Codex 项目配置",
+    src: join(APP_ROOT, ".codex"),
+    dest: "Codex项目配置备份/.codex",
+  },
+  {
+    label: "项目 AGENTS.md",
+    src: join(APP_ROOT, "AGENTS.md"),
+    dest: "Codex项目配置备份/AGENTS.md",
+  },
+  {
+    label: "Codex 现役记忆",
+    src: join(CODEX_HOME, "memories"),
+    dest: "Codex记忆备份",
+    exclude: GIT_DIR_RE,
+  },
+  {
+    label: "PC 工作区",
+    src: join(APP_ROOT, ".local"),
+    dest: "PC工作区备份",
+    exclude: RAW_DIR_RE,
+  },
 ];
 
-// [gpt] 2026-08-10：这些小型派生教材文本是 content_mirror 的必需输入；PDF 本体仍不进 git。
-// 过去备份任务只 add 三个备份目录，导致已生成的带背 OCR 永久停在 untracked。
 const REQUIRED_ARCHIVE_ASSETS = [
   "教材/带背/_文本/法理学_带背_文本.txt",
   "教材/带背/_文本/法制史_带背_文本.txt",
   "教材/带背/_文本/刑法_带背_文本.txt",
 ];
 
-const git = (...args) =>
-  execFileSync("git", args, { cwd: REPO, encoding: "utf8" }).trim();
-
-let copied = 0;
-for (const { src, dest, exclude } of JOBS) {
-  if (!existsSync(src)) {
-    console.error(`源目录不存在，跳过: ${src}`);
-    continue;
+function assertInsideArchive(target) {
+  const absolute = resolve(target);
+  const rel = relative(REPO, absolute);
+  if (!rel || rel === "." || rel.startsWith(`..${sep}`) || rel === ".." || isAbsolute(rel)) {
+    throw new Error(`备份目标越界：${absolute}`);
   }
-  // 镜像式覆盖：先删后拷，源里删掉的文件在备份里也消失（git 历史仍可找回）
-  rmSync(`${REPO}/${dest}`, { recursive: true, force: true });
-  cpSync(src, `${REPO}/${dest}`, {
-    recursive: true,
-    filter: exclude ? (p) => !exclude.test(p) : undefined,
-  });
-  git("add", "-A", "--", dest);
-  copied++;
+  return absolute;
 }
-if (!copied) {
-  console.error("所有源目录都不存在，未备份任何内容。");
+
+function git(...gitArgs) {
+  return execFileSync("git", gitArgs, { cwd: REPO, encoding: "utf8" }).trim();
+}
+
+function copyAtomically(job) {
+  const destination = assertInsideArchive(join(REPO, job.dest));
+  const staging = assertInsideArchive(`${destination}.next-${process.pid}`);
+  mkdirSync(dirname(staging), { recursive: true });
+  rmSync(staging, { recursive: true, force: true });
+  cpSync(job.src, staging, {
+    recursive: statSync(job.src).isDirectory(),
+    filter: job.exclude ? (source) => !job.exclude.test(source) : undefined,
+  });
+  rmSync(destination, { recursive: true, force: true });
+  renameSync(staging, destination);
+}
+
+if (!existsSync(REPO)) {
+  console.error(`档案根不存在：${REPO}`);
+  process.exit(1);
+}
+if (!existsSync(join(REPO, ".git"))) {
+  console.error(`档案根不是 Git 仓库：${REPO}`);
   process.exit(1);
 }
 
-for (const asset of REQUIRED_ARCHIVE_ASSETS) {
-  if (!existsSync(`${REPO}/${asset}`)) {
-    console.error(`必需档案资产不存在，拒绝提交不完整备份: ${asset}`);
-    process.exit(1);
-  }
+const missingRequiredAssets = REQUIRED_ARCHIVE_ASSETS.filter((asset) => !existsSync(join(REPO, asset)));
+if (missingRequiredAssets.length) {
+  console.error(`必需档案资产缺失，拒绝备份：\n${missingRequiredAssets.map((asset) => `- ${asset}`).join("\n")}`);
+  process.exit(1);
 }
-git("add", "--", ...REQUIRED_ARCHIVE_ASSETS);
 
-const staged = git("diff", "--cached", "--name-only");
-if (!staged) {
-  console.log("记忆/PC工作区无变化，跳过提交。");
+const availableJobs = [];
+for (const job of JOBS) {
+  if (!existsSync(job.src)) {
+    const message = `${job.label}源不存在：${job.src}`;
+    if (job.optional) console.warn(`跳过可选项：${message}`);
+    else {
+      console.error(message);
+      process.exitCode = 1;
+    }
+    continue;
+  }
+  availableJobs.push(job);
+}
+if (process.exitCode) process.exit(process.exitCode);
+
+console.log(`应用根：${APP_ROOT}`);
+console.log(`档案根：${REPO}`);
+console.log(`Codex 根：${CODEX_HOME}`);
+for (const job of availableJobs) console.log(`- ${job.label}: ${job.src} → ${job.dest}`);
+
+if (dryRun) {
+  console.log(`✓ dry-run 通过：${availableJobs.length} 个备份源与 ${REQUIRED_ARCHIVE_ASSETS.length} 个必需档案均可用；未写文件、未执行 Git。`);
   process.exit(0);
 }
 
-const today = new Date().toISOString().slice(0, 10);
-git("commit", "-m", `PC连续性资产自动备份 ${today}`);
+const preexistingStaged = git("diff", "--cached", "--name-only");
+if (preexistingStaged) {
+  console.error(`档案仓已有暂存改动，拒绝混入自动备份提交：\n${preexistingStaged}`);
+  process.exit(1);
+}
+
+for (const job of availableJobs) copyAtomically(job);
+
+const stagedPaths = [...new Set([
+  ...availableJobs.map((job) => job.dest),
+  ...REQUIRED_ARCHIVE_ASSETS,
+])];
+git("add", "-A", "--", ...stagedPaths);
+
+const staged = git("diff", "--cached", "--name-only");
+if (!staged) {
+  console.log("连续性资产无变化，跳过提交。");
+  process.exit(0);
+}
+
+const today = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+}).format(new Date());
+git("commit", "-m", `[gpt] 跨平台连续性资产自动备份 ${today}`);
+
+if (noPush) {
+  console.log(`✓ 已提交 ${staged.split(/\r?\n/u).length} 个文件，按 --no-push 未推送。`);
+  process.exit(0);
+}
+
+const branch = git("branch", "--show-current");
+if (!branch) {
+  console.error("当前处于 detached HEAD，已提交但拒绝自动推送。");
+  process.exit(2);
+}
 try {
-  git("push", "origin", "master");
-  console.log(`已备份并推送 ${staged.split("\n").length} 个文件:\n${staged}`);
-} catch (e) {
-  // 推送失败（断网/SSH 问题）不致命：本地已提交，下次推送会带上
-  console.error(`本地已提交但推送失败（下次运行会重推）: ${e.message}`);
+  git("push", "origin", branch);
+  console.log(`✓ 已备份并推送 ${staged.split(/\r?\n/u).length} 个文件到 origin/${branch}。`);
+} catch (error) {
+  console.error(`本地已提交但推送失败（下次运行会重推）：${error.message}`);
   process.exit(2);
 }
