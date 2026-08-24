@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendOutbox,
+  isTransientSyncError,
   processOutbox,
   readOutbox,
   syncStudyOutbox,
@@ -146,14 +147,63 @@ describe("study outbox", () => {
     const result = await processOutbox(operations, async (op) => {
       if (op.operation_id === "retry") throw new Error("network down");
       return { affected: 1 };
-    });
+    }, { retries: 0 });
 
     expect(result.succeeded.map(({ op }) => op.operation_id)).toEqual(["ok"]);
-    expect(result.failed).toEqual([{ op: operations[1], error: "network down" }]);
+    // [claude] 2026-08-24：失败项现在附带 attempts/transient，供上游区分抖动与真错。
+    expect(result.failed).toEqual([{ op: operations[1], attempts: 1, transient: true, error: "network down" }]);
 
     const path = tempPath();
     writeOutbox(path, result.failed.map(({ op }) => op));
     expect(readOutbox(path)).toEqual([operations[1]]);
+  });
+
+  // [claude] 2026-08-24：云的网络本身不稳，一次抖动就让整条复检写回失败、Run 被迫中止。
+  // 写回由 operation_id 保证幂等，缺的只是"别一碰就放弃"。
+  it("瞬时网络故障重试后成功，不制造第二条流水", async () => {
+    const waited = [];
+    let calls = 0;
+    const result = await processOutbox([{ op: "error_review", operation_id: "flaky" }], async () => {
+      calls += 1;
+      if (calls < 3) throw new Error("fetch failed");
+      return { affected: 1 };
+    }, { wait: async (ms) => { waited.push(ms); } });
+
+    expect(calls).toBe(3);
+    expect(waited).toEqual([500, 2000]);
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded[0].attempts).toBe(3);
+  });
+
+  it("校验类错误不重试——重试多少次还是错，只会拖慢并掩盖真问题", async () => {
+    let calls = 0;
+    const result = await processOutbox([{ op: "new_error", operation_id: "bad" }], async () => {
+      calls += 1;
+      throw new Error("ERROR_ENTRY_INVALID｜缺少章节");
+    }, { wait: async () => {} });
+
+    expect(calls).toBe(1);
+    expect(result.failed[0].transient).toBe(false);
+    expect(result.failed[0].attempts).toBe(1);
+  });
+
+  it("重试用尽仍失败时，报最后一次的错并标记为瞬时", async () => {
+    const result = await processOutbox([{ op: "study_log", operation_id: "down" }], async () => {
+      throw new Error("ECONNRESET");
+    }, { wait: async () => {} });
+
+    expect(result.failed[0].attempts).toBe(3);
+    expect(result.failed[0].transient).toBe(true);
+    expect(result.failed[0].error).toContain("ECONNRESET");
+  });
+
+  it("瞬时判定覆盖真实网络症状，且不把业务错误误判成抖动", () => {
+    for (const message of ["fetch failed", "socket hang up", "ETIMEDOUT", "TLS handshake failure", "request timed out"]) {
+      expect(isTransientSyncError(new Error(message))).toBe(true);
+    }
+    for (const message of ["ERROR_ENTRY_INVALID｜缺少章节", "错题事件写入后未能取回 id", "主题标题不能为空"]) {
+      expect(isTransientSyncError(new Error(message))).toBe(false);
+    }
   });
 
   it("可以在 Windows 上原子替换已经存在的 outbox", () => {
@@ -202,6 +252,8 @@ describe("study outbox", () => {
       path,
       today: "2026-08-13",
       now: new Date("2026-08-13T12:00:00.000Z"),
+      // 本例验的是失败 payload 原样保留，不验重试；关掉重试才能确定性断言。
+      retryOptions: { retries: 0 },
     });
 
     expect(result.failed[0].error).toContain("network down");

@@ -34,7 +34,7 @@ import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs"
 import { loadEventAbsorptionProofs } from "./lib/error-absorption.mjs";
 import { buildFailurePortrait, formatFailurePortrait } from "./lib/knowledge-state.mjs";
 import { loadLocalMaterialCorpus, sortMaterialRows } from "./lib/material-corpus.mjs";
-import { assertCuotiJudgmentReady, assertSkillRunPrerequisites, recordAutomaticSkillStep, recordBusinessWriteback, validateDaibeiIngestReceipt } from "./lib/skill-run.mjs";
+import { assertCuotiJudgmentReady, assertSkillRunPrerequisites, readSkillRun, recordAutomaticSkillStep, recordBusinessWriteback, recordWritebackDeferred, validateDaibeiIngestReceipt } from "./lib/skill-run.mjs";
 import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
 import { validateErrorEntry } from "./lib/error-entry.mjs";
 import {
@@ -1029,7 +1029,7 @@ async function review(rest) {
       return fail(`排期关联预校验失败：${error instanceof Error ? error.message : String(error)}`);
     }
   }
-  appendPending(op);
+  const staged = appendPending(op);
   const qualifies = op.result === "pass" && op.cold && op.promptIntegrity === "clean" && op.dimension === "application" && op.transferLevel >= 3;
   const reviewKind = op.cold ? "冷复检" : op.result === "void" ? "作废题" : "非冷检";
   console.log(`⏳ 已暂存待同步·T#${topicId} ${reviewKind} ${result}｜${REVIEW_VARIANTS[op.variantKind].label} L${op.transferLevel}${op.assessmentContext !== "practice" ? `｜${op.assessmentContext}/${op.durationSeconds}s` : ""}${op.angle ? `｜角度 ${op.angle}` : ""}${op.failurePatternCode ? `｜定向栽点 ${FAILURE_PATTERNS[op.failurePatternCode].label}` : ""}${op.date ? `｜${op.date}` : ""}${scheduleId ? `｜结案排期 ${scheduleId}` : ""}`);
@@ -1041,7 +1041,26 @@ async function review(rest) {
   }
   const synced = await sync([]);
   if (!synced) {
-    if (scheduleId) console.error(`⚠️ 复检证据暂存但同步失败；排期 ${scheduleId} 未结案。修复后先重跑 sync，再核对证据并重跑同一 review --schedule；禁止用无目标的 schedule.mjs done 代替。`);
+    // [claude] 2026-08-24：同步失败以前只打一行字就 return，Run 上不留任何痕迹，
+    // 于是断网被记成"判了题不写回"。现在留痕并给出可直接执行的续跑命令。
+    if (runId) {
+      try {
+        recordWritebackDeferred({
+          runId,
+          source: "cuoti-review",
+          reason: "远端同步失败；复检证据已暂存本地 outbox",
+          operationId: staged.operation_id,
+          evidenceRef: `T#${topicId}:${op.result}`,
+          expectedSkill: "cuoti-fupan",
+        });
+      } catch (error) {
+        console.error(`⚠️ 延迟写回留痕失败：${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+    console.error("⚠️ 复检证据已暂存本地 outbox，但远端同步失败——证据没丢，只是还没落库。");
+    console.error(`   网络恢复后续跑：node --env-file=.env.local scripts/cuoti.mjs sync${runId ? ` --run ${runId} --operation ${staged.operation_id}` : ""}`);
+    console.error("   不要重跑 review（会重复入账），也不要因此把本轮当作没做。");
+    if (scheduleId) console.error(`   排期 ${scheduleId} 未结案；补同步后再核对证据并重跑同一 review --schedule；禁止用无目标的 schedule.mjs done 代替。`);
     return;
   }
   if (scheduleId) {
@@ -1131,18 +1150,36 @@ async function sync(rest) {
   const ops = readPending();
   if (!ops.length && !operationId) { console.log("缓冲为空，没有要同步的。"); return true; }
   let trackedRun = null;
+  let deferredResume = false;
   if (runId) {
+    // [claude] 2026-08-24：原来这里写死 expectedSkill=daibei-pc，于是断网后
+    // cuoti 的复检证据虽然躺在 outbox 里，却没有任何路径能把它接回原 Run。
+    // 现在按 Run 自身的 skill 决定门槛，cuoti 走延迟写回补同步。
+    let existing;
     try {
-      trackedRun = assertSkillRunPrerequisites({
-        runId,
-        expectedSkill: "daibei-pc",
-        steps: ["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded"],
-      });
+      existing = readSkillRun(runId);
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
-    if (!String(trackedRun.steps.result_recorded.evidenceRef ?? "").includes(`op=${operationId}`)) {
-      return fail(`Skill Run 的本地结果回执与 operation_id 不一致：${operationId}`);
+    deferredResume = existing.skill === "cuoti-fupan" && Boolean(existing.deferredWriteback);
+    if (deferredResume) {
+      if (existing.deferredWriteback.operationId !== operationId) {
+        return fail(`该 Run 待补同步的 operation 是 ${existing.deferredWriteback.operationId}，与 ${operationId} 不符`);
+      }
+      trackedRun = existing;
+    } else {
+      try {
+        trackedRun = assertSkillRunPrerequisites({
+          runId,
+          expectedSkill: "daibei-pc",
+          steps: ["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded"],
+        });
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+      if (!String(trackedRun.steps.result_recorded.evidenceRef ?? "").includes(`op=${operationId}`)) {
+        return fail(`Skill Run 的本地结果回执与 operation_id 不一致：${operationId}`);
+      }
     }
   }
   const absorbIds = [...new Set(ops.filter((o) => o.op === "absorb").flatMap((o) => o.ids ?? []))];
@@ -1193,7 +1230,27 @@ async function sync(rest) {
     process.exitCode = 1;
     if (!runId || targetFailed) return false;
   }
-  if (runId) {
+  if (runId && deferredResume) {
+    // [claude] 2026-08-24：断网延迟的复检证据补同步成功——把回执接回原 Run，
+    // 让它能正常收口，而不是只能记成 aborted。门槛不变：仍要求这一批真的落库了。
+    const stillPending = readPending().some((o) => o.operation_id === operationId);
+    if (stillPending) return fail(`operation ${operationId} 仍留在 outbox，未真正落库；修网络后重跑本命令`);
+    recordAutomaticSkillStep({
+      runId,
+      step: "result_recorded",
+      source: "cuoti-review-deferred",
+      evidenceRef: trackedRun.deferredWriteback.evidenceRef ?? `op=${operationId}`,
+      expectedSkill: "cuoti-fupan",
+    });
+    recordAutomaticSkillStep({
+      runId,
+      step: "writeback_verified",
+      source: "cuoti-sync-deferred",
+      evidenceRef: `deferred:${operationId}:applied`,
+      expectedSkill: "cuoti-fupan",
+    });
+    console.log(`SKILL_WRITEBACK_VERIFIED｜${runId}｜${operationId}（延迟写回已补回执，可正常收口）`);
+  } else if (runId) {
     const verification = await db.from("ingest_operation")
       .select("operation_id,op_type,status")
       .eq("operation_id", operationId)

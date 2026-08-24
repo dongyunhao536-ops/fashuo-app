@@ -337,6 +337,7 @@ export function reconstructSkillRuns(events = []) {
       steps: {},
       checkpoints: [],
       blocked: [],
+      deferredWriteback: null,
       end: null,
       events: [],
     };
@@ -362,7 +363,20 @@ export function reconstructSkillRuns(events = []) {
         artifactHash: event.artifactHash ?? null,
         artifactLength: event.artifactLength ?? null,
       };
+      // [claude] 2026-08-24：写回真成功后，之前的延迟标记不再成立。
+      if (event.step === "writeback_verified" && event.status === "pass") current.deferredWriteback = null;
       if (!current.end) current.status = "active";
+    } else if (event.event === "writeback_deferred") {
+      // [claude] 2026-08-24：证据已进本地 outbox、只是远端没同步上。
+      // 这既不是"完成"也不是"放弃"，此前没有这一档，断网只能被迫记成 aborted。
+      current.deferredWriteback = {
+        source: event.source ?? null,
+        reason: event.reason ?? null,
+        operationId: event.operationId ?? null,
+        evidenceRef: event.evidenceRef ?? null,
+        observedAt: event.observedAt,
+      };
+      if (!current.end) current.status = "deferred";
     } else if (event.event === "checkpoint_passed") {
       current.checkpoints.push({ phase: event.phase, observedAt: event.observedAt });
       if (!current.end) current.status = event.phase.endsWith("question") ? "waiting_user" : "active";
@@ -375,6 +389,8 @@ export function reconstructSkillRuns(events = []) {
         phase: event.phase ?? null,
         handoffSkill: event.handoffSkill ?? null,
         handoffReason: event.handoffReason ?? null,
+        // 事件自带的标记优先；老事件没有这个字段时回落到运行期状态。
+        deferredWriteback: event.deferredWriteback ?? current.deferredWriteback ?? null,
         observedAt: event.observedAt,
       };
       current.status = event.outcome;
@@ -382,6 +398,11 @@ export function reconstructSkillRuns(events = []) {
     runs.set(event.runId, current);
   }
   return runs;
+}
+
+// [claude] 2026-08-24：补同步要按 Run 自身的 skill 决定门槛，调用方得先读得到 Run。
+export function readSkillRun(runId, file = DEFAULT_SKILL_RUN_FILE) {
+  return loadRun(runId, file);
 }
 
 function loadRun(runId, file) {
@@ -681,6 +702,42 @@ export function recordAutomaticSkillStep({
     file,
     now,
   });
+}
+
+/**
+ * [claude] 2026-08-24：证据已落本地 outbox、远端同步失败时留痕。
+ *
+ * 病因：写回步骤只在成功时才签，失败不产生任何遥测。2026-08-24 云三次断网，
+ * 四个 cuoti Run 被迫记成 aborted，监控显示"判了题没写回"，而证据其实躺在
+ * outbox 里、网络恢复后自己同步上了（error_review T#94 迟到 19 分钟落库）。
+ * 结果是状态机与现实脱节，我据此误诊为"模型偷懒放弃"。
+ *
+ * 本函数不放宽任何门槛：它不签 writeback_verified，只记录"停在哪、怎么续"。
+ */
+export function recordWritebackDeferred({
+  runId,
+  source,
+  reason = null,
+  operationId = null,
+  evidenceRef = null,
+  expectedSkill = null,
+  file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
+} = {}) {
+  const run = loadRun(runId, file);
+  if (run.end) throw new Error(`Skill Run 已结束，不能再记延迟写回：${runId}`);
+  if (expectedSkill && run.skill !== expectedSkill) {
+    throw new Error(`Skill Run 路由不一致：预期 ${expectedSkill}，实际 ${run.skill}`);
+  }
+  appendEvent({
+    ...eventBase({ runId, event: "writeback_deferred", now }),
+    skill: run.skill,
+    source: safeToken(source, "source", { required: true, max: 60 }),
+    reason: safeToken(reason, "reason", { max: 200 }),
+    operationId: safeToken(operationId, "operationId", { max: 80 }),
+    evidenceRef: safeToken(evidenceRef, "evidenceRef", { max: 200 }),
+  }, file);
+  return loadRun(runId, file);
 }
 
 export function recordBusinessWriteback({
@@ -1243,6 +1300,13 @@ export function endSkillRun({
     outcome,
     handoffSkill: normalizedHandoffSkill,
     handoffReason: normalizedHandoffReason,
+    // [claude] 2026-08-24：因同步失败而中止的 Run，证据其实在 outbox 里等着补同步。
+    // 打上标记，监控才能把"基础设施抖动"和"真放弃"分开，不再一律记成不合规。
+    deferredWriteback: run.deferredWriteback ? {
+      source: run.deferredWriteback.source,
+      reason: run.deferredWriteback.reason,
+      operationId: run.deferredWriteback.operationId,
+    } : null,
   }, file);
   return loadRun(runId, file);
 }
@@ -1322,6 +1386,10 @@ export function summarizeSkillRuns(input = {}, {
   const gateFailureReasons = summarizeGateFailureReasons(gateFailures);
   const completed = runs.filter((run) => run.end?.outcome === "completed");
   const aborted = runs.filter((run) => run.end?.outcome === "aborted");
+  // [claude] 2026-08-24：证据已落 outbox、只差远端同步的，不能和"真放弃"混为一谈。
+  // 2026-08-24 云三次断网就是这样被记成 4 个 aborted，看上去像模型不肯收口。
+  const deferredWriteback = runs.filter((run) => run.deferredWriteback || run.end?.deferredWriteback);
+  const abandonedAborted = aborted.filter((run) => !run.end?.deferredWriteback);
   const handoff = runs.filter((run) => run.end?.outcome === "handoff");
   const invalidHandoffs = handoff.filter((run) => !run.end?.handoffSkill || !run.end?.handoffReason);
   const unresolvedHandoffs = handoff.filter((run) => {
@@ -1433,6 +1501,10 @@ export function summarizeSkillRuns(input = {}, {
       orphanedWaiting: orphanedWaiting.length,
       quarantined: quarantinedDaibeiRuns.length,
       aborted: aborted.length,
+      // 拆开看：deferredWriteback 是基础设施抖动（证据在 outbox，可补同步），
+      // abandonedAborted 才是真放弃。混在一起会让 aborted 这个数字失去意义。
+      deferredWriteback: deferredWriteback.length,
+      abandonedAborted: abandonedAborted.length,
       handoff: handoff.length,
       stale: stale.length,
       gateFailures: gateFailures.length,
@@ -1477,6 +1549,21 @@ export function summarizeSkillRuns(input = {}, {
     // （后者是 daibei-pc/plan 同一处 8 天复发 5 次），全靠离线脚本才统计出来。
     // 聚合进报表，才能让"哪一步在被反复跳过"自己浮出来。
     gateFailureReasons,
+    // 待补同步的 Run 要能被点名，否则"证据在 outbox 里"等于没人知道。
+    deferredWritebackExamples: deferredWriteback.slice(-10).map((run) => {
+      const mark = run.deferredWriteback ?? run.end?.deferredWriteback ?? {};
+      return {
+        runId: run.runId,
+        skill: run.skill,
+        outcome: run.end?.outcome ?? null,
+        source: mark.source ?? null,
+        reason: mark.reason ?? null,
+        operationId: mark.operationId ?? null,
+        resume: mark.operationId
+          ? `node --env-file=.env.local scripts/cuoti.mjs sync --run ${run.runId} --operation ${mark.operationId}`
+          : "node --env-file=.env.local scripts/cuoti.mjs sync",
+      };
+    }),
     gateFailureExamples: gateFailures.slice(-10).map((event) => ({
       runId: event.runId,
       skill: event.skill,

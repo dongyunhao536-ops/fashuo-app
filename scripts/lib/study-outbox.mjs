@@ -81,17 +81,63 @@ export function writeOutbox(path, operations) {
   renameSync(temp, path);
 }
 
-export async function processOutbox(operations, handler) {
+// [claude] 2026-08-24：只对瞬时网络故障重试。
+// 校验类错误重试多少次都还是错，重试只会拖慢并掩盖真问题。
+const TRANSIENT_PATTERNS = [
+  /fetch failed/i,
+  /network|socket hang up|premature close/i,
+  /ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EPIPE/i,
+  /timeout|timed out/i,
+  /TLS|SSL|handshake/i,
+  /\b5\d{2}\b.*(gateway|unavailable|timeout)|(gateway|unavailable).*\b5\d{2}\b/i,
+];
+
+export function isTransientSyncError(error) {
+  const message = error instanceof Error
+    ? `${error.message} ${error.cause instanceof Error ? error.cause.message : ""}`
+    : String(error ?? "");
+  return TRANSIENT_PATTERNS.some((pattern) => pattern.test(message));
+}
+
+const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+
+/**
+ * [claude] 2026-08-24：网络抖动时有界重试。
+ *
+ * 2026-08-24 云网络本身不稳，一次抖动就让整条复检写回失败、Run 被迫中止。
+ * 这里的写回本来就由 operation_id 保证幂等（withIngestAudit + 稳定 operation_id），
+ * 所以重试不会制造重复流水；缺的只是"别一碰就放弃"。
+ */
+export async function processOutbox(operations, handler, {
+  retries = 2,
+  retryDelaysMs = [500, 2000],
+  isTransient = isTransientSyncError,
+  wait = sleep,
+} = {}) {
   const succeeded = [];
   const failed = [];
   for (const op of operations) {
-    try {
-      const result = await handler(op);
-      succeeded.push({ op, result });
-    } catch (error) {
+    let lastError;
+    let attempts = 0;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      attempts = attempt + 1;
+      try {
+        const result = await handler(op);
+        succeeded.push({ op, result, attempts });
+        lastError = undefined;
+        break;
+      } catch (error) {
+        lastError = error;
+        if (attempt === retries || !isTransient(error)) break;
+        await wait(retryDelaysMs[Math.min(attempt, retryDelaysMs.length - 1)]);
+      }
+    }
+    if (lastError !== undefined) {
       failed.push({
         op,
-        error: error instanceof Error ? error.message : String(error),
+        attempts,
+        transient: isTransient(lastError),
+        error: lastError instanceof Error ? lastError.message : String(lastError),
       });
     }
   }
@@ -941,7 +987,8 @@ async function applyOperation(db, op, today, nowIso) {
   throw new Error(`不认识的 outbox 操作：${op.op}`);
 }
 
-export async function syncStudyOutbox({ db, path, today, now = new Date() }) {
+// [claude] 2026-08-24：retryOptions 透传给 processOutbox，让调用方与测试能决定重试策略。
+export async function syncStudyOutbox({ db, path, today, now = new Date(), retryOptions = {} }) {
   const operations = readOutbox(path);
   // [gpt] 2026-08-13：先校验整批再做任何远端调用，防止后段坏条目造成半批写入。
   const validatedOperations = operations.map((op, index) => {
@@ -963,6 +1010,7 @@ export async function syncStudyOutbox({ db, path, today, now = new Date() }) {
       handlerVersion: STUDY_OUTBOX_HANDLER_VERSION,
       handler: () => applyOperation(db, op, today, nowIso),
     }),
+    retryOptions,
   );
   writeOutbox(path, result.failed.map(({ op }) => op._ingestPayload ?? op));
   return { total: validatedOperations.length, ...result };
