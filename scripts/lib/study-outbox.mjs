@@ -108,9 +108,13 @@ const sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
  * 这里的写回本来就由 operation_id 保证幂等（withIngestAudit + 稳定 operation_id），
  * 所以重试不会制造重复流水；缺的只是"别一碰就放弃"。
  */
+// [claude] 2026-08-24：退避窗口按实测链路定。ECS 8443 跨境反代实测
+// ICMP 0% 丢包但抖动大（49–201ms，stddev 34ms），PostgREST p90 185ms/max 298ms。
+// 原来的 500ms+2000ms 只扛 2.5 秒，断几秒就顶不住；1+4+10 覆盖约 15 秒，
+// 能吃掉大多数短暂中断。真长时间断网仍会失败，但那时走 deferred 通路，证据不丢。
 export async function processOutbox(operations, handler, {
-  retries = 2,
-  retryDelaysMs = [500, 2000],
+  retries = 3,
+  retryDelaysMs = [1000, 4000, 10000],
   isTransient = isTransientSyncError,
   wait = sleep,
 } = {}) {

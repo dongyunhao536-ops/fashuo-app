@@ -151,6 +151,22 @@ export function recoveryHints(skill, missing = [], context = {}) {
 }
 
 /**
+ * [claude] 2026-08-24：同一 Run 内反复单查询检索时的提醒。
+ *
+ * 2026-08-24 实测有个 Run 连打 7 次 `material`（每次 queries:1），本该一次
+ * `material-batch`。脚本本身只要 127ms，代价全在往返上。前两次不打扰——
+ * 两个争点分开查是合理的；第三次起才提示。
+ */
+export function repeatedMaterialHint(events = [], { threshold = 3 } = {}) {
+  const singles = events.filter((event) => (
+    event?.event === "step" && event.step === "materials_checked" && event.evidenceRef === "queries:1"
+  )).length;
+  if (singles < threshold) return null;
+  return `本 Run 已第 ${singles} 次单查询检索。多个争点请一次跑 material-batch --query <词1> --query <词2> ...，`
+    + `一次加载复用到底、每个争点仍独立出结果，可省掉 ${singles - 1} 次往返。`;
+}
+
+/**
  * 追加到阻断错误信息末尾的文本；无可给建议时返回空串。
  */
 export function formatRecovery(skill, missing = [], context = {}) {

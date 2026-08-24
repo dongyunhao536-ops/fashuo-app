@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatRecovery, recoveryHint, recoveryHints } from "./skill-run-recovery.mjs";
+import { formatRecovery, recoveryHint, recoveryHints, repeatedMaterialHint } from "./skill-run-recovery.mjs";
 import {
   SKILL_AUTOMATIC_STEPS,
   SKILL_MANUAL_STEPS,
@@ -154,5 +154,35 @@ describe("阻断原因聚合", () => {
 
   it("空输入不炸", () => {
     expect(summarizeGateFailureReasons()).toEqual({ total: 0, byStep: {}, bySkillPhase: {} });
+  });
+});
+
+// [claude] 2026-08-24：2026-08-24 实测一个 Run 连打 7 次单查询检索，
+// 本该一次 material-batch；脚本只要 127ms，代价全在往返上。
+describe("重复单查询提醒", () => {
+  const single = { event: "step", step: "materials_checked", evidenceRef: "queries:1" };
+  const batch = { event: "step", step: "materials_checked", evidenceRef: "queries:5" };
+
+  it("前两次不打扰——两个争点分开查是合理的", () => {
+    expect(repeatedMaterialHint([])).toBeNull();
+    expect(repeatedMaterialHint([single])).toBeNull();
+    expect(repeatedMaterialHint([single, single])).toBeNull();
+  });
+
+  it("第三次起提示，并算出能省几次往返", () => {
+    const hint = repeatedMaterialHint([single, single, single]);
+    expect(hint).toContain("第 3 次");
+    expect(hint).toContain("material-batch");
+    expect(hint).toContain("省掉 2 次");
+  });
+
+  it("批量检索不计入——它本来就是被推荐的用法", () => {
+    expect(repeatedMaterialHint([batch, batch, batch])).toBeNull();
+    expect(repeatedMaterialHint([single, batch, single, batch])).toBeNull();
+  });
+
+  it("只数本 Run 的材料步骤，别的步骤不参与计数", () => {
+    const noise = { event: "step", step: "question_integrity_pass", evidenceRef: "queries:1" };
+    expect(repeatedMaterialHint([noise, noise, noise, single])).toBeNull();
   });
 });

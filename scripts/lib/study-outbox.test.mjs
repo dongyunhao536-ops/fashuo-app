@@ -170,7 +170,8 @@ describe("study outbox", () => {
     }, { wait: async (ms) => { waited.push(ms); } });
 
     expect(calls).toBe(3);
-    expect(waited).toEqual([500, 2000]);
+    // 退避按 ECS 8443 跨境链路实测定档，覆盖约 15 秒的短暂中断。
+    expect(waited).toEqual([1000, 4000]);
     expect(result.failed).toEqual([]);
     expect(result.succeeded[0].attempts).toBe(3);
   });
@@ -192,7 +193,7 @@ describe("study outbox", () => {
       throw new Error("ECONNRESET");
     }, { wait: async () => {} });
 
-    expect(result.failed[0].attempts).toBe(3);
+    expect(result.failed[0].attempts).toBe(4);
     expect(result.failed[0].transient).toBe(true);
     expect(result.failed[0].error).toContain("ECONNRESET");
   });

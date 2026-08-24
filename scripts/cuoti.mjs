@@ -34,6 +34,7 @@ import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs"
 import { loadEventAbsorptionProofs } from "./lib/error-absorption.mjs";
 import { buildFailurePortrait, formatFailurePortrait } from "./lib/knowledge-state.mjs";
 import { loadLocalMaterialCorpus, sortMaterialRows } from "./lib/material-corpus.mjs";
+import { repeatedMaterialHint } from "./lib/skill-run-recovery.mjs";
 import { assertCuotiJudgmentReady, assertSkillRunPrerequisites, readSkillRun, recordAutomaticSkillStep, recordBusinessWriteback, recordWritebackDeferred, validateDaibeiIngestReceipt } from "./lib/skill-run.mjs";
 import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
 import { validateErrorEntry } from "./lib/error-entry.mjs";
@@ -612,7 +613,7 @@ async function runMaterialQueries({ source, queries, runId = null }) {
 
   console.log(buildMaterialBatchOutput(corpus, queries));
   if (runId) {
-    recordAutomaticSkillStep({
+    const run = recordAutomaticSkillStep({
       runId,
       step: "materials_checked",
       status: "pass",
@@ -620,6 +621,11 @@ async function runMaterialQueries({ source, queries, runId = null }) {
       evidenceRef: `queries:${queries.length}`,
       durationMs: Date.now() - startedAt,
     });
+    // [claude] 2026-08-24：在使用现场提醒，比写进 skill 文档管用。
+    if (queries.length === 1) {
+      const hint = repeatedMaterialHint(run?.events ?? []);
+      if (hint) console.error(`ℹ️ ${hint}`);
+    }
   }
 }
 
