@@ -1258,6 +1258,29 @@ function inWindow(value, start, end) {
   return (!start || date >= start) && (!end || date <= end);
 }
 
+// [claude] 2026-08-23：把阻断按"缺了哪一步"聚合。只报总数看不出模式，
+// 而模式才是可行动的信息：同一步被反复跳过说明该步的触发时机或提示有问题，
+// 不是随机失误。byStep 回答"哪一步在漏"，bySkillPhase 回答"漏在哪条路径上"。
+export function summarizeGateFailureReasons(gateFailures = []) {
+  const byStep = new Map();
+  const bySkillPhase = new Map();
+  for (const event of gateFailures) {
+    const missing = Array.isArray(event?.missing) && event.missing.length
+      ? event.missing
+      : (event?.step ? [event.step] : []);
+    for (const raw of missing) {
+      // intake_question×2 这类带计数后缀的归一到同一类，否则每个数字自成一类。
+      const step = String(raw).replace(/×\d+$/u, "×N");
+      byStep.set(step, (byStep.get(step) ?? 0) + 1);
+    }
+    if (!event?.skill) continue;
+    const key = `${event.skill}/${event.phase ?? "未标阶段"}`;
+    bySkillPhase.set(key, (bySkillPhase.get(key) ?? 0) + 1);
+  }
+  const rank = (map) => Object.fromEntries([...map.entries()].sort((left, right) => right[1] - left[1]));
+  return { total: gateFailures.length, byStep: rank(byStep), bySkillPhase: rank(bySkillPhase) };
+}
+
 export function summarizeSkillRuns(input = {}, {
   nowIso = new Date().toISOString(),
   windowStart = null,
@@ -1296,6 +1319,7 @@ export function summarizeSkillRuns(input = {}, {
     ["checkpoint_blocked", "end_blocked"].includes(event.event)
       || (event.event === "step" && event.status === "fail")
   )));
+  const gateFailureReasons = summarizeGateFailureReasons(gateFailures);
   const completed = runs.filter((run) => run.end?.outcome === "completed");
   const aborted = runs.filter((run) => run.end?.outcome === "aborted");
   const handoff = runs.filter((run) => run.end?.outcome === "handoff");
@@ -1448,6 +1472,11 @@ export function summarizeSkillRuns(input = {}, {
       lastEventAt: run.lastEventAt,
       ageMinutes: Math.floor((nowMs - new Date(run.lastEventAt).getTime()) / 60000),
     })),
+    // [claude] 2026-08-23：原来只给 10 条样例，看不出模式。2026-08-13～08-23 的
+    // 21 次阻断里 question_integrity_pass 缺 7 次、context_loaded 缺 6 次
+    // （后者是 daibei-pc/plan 同一处 8 天复发 5 次），全靠离线脚本才统计出来。
+    // 聚合进报表，才能让"哪一步在被反复跳过"自己浮出来。
+    gateFailureReasons,
     gateFailureExamples: gateFailures.slice(-10).map((event) => ({
       runId: event.runId,
       skill: event.skill,
@@ -1496,13 +1525,22 @@ export function buildSkillExecutionContext(run) {
   if (!run?.runId || !run?.skill) throw new Error("缺少可用的 Skill Run");
   const phases = SKILL_WORKFLOWS[run.skill];
   // [claude] 2026-08-23：phases 只说"要哪些步骤"，不说"每步归谁签"，模型得等被
-  // 阻断才发现。这里在启动时就把签发命令一次给全，把 Gate 从事后阻断改成事前告知。
+  // 阻断才发现。这里在启动时就把签发命令给出，把 Gate 从事后阻断改成事前告知。
+  // 只列自动步骤：它们是模型唯一猜不出的部分。手工步骤的写法已由下面的
+  // commands.step/checkpoint/end 模板覆盖，重复列出只会撑大每轮必读的启动载荷；
+  // 手工步骤该写什么证据引用，仍在真正阻断时由补救指令给出。
   const stepCommands = {};
+  const seenHint = new Map();
   for (const steps of Object.values(phases ?? {})) {
     for (const step of steps) {
-      if (stepCommands[step]) continue;
+      if (stepCommands[step] || !AUTO_STEPS.has(step)) continue;
       const hint = recoveryHint(run.skill, step, { runId: run.runId, subject: run.subject });
-      if (hint) stepCommands[step] = hint;
+      if (!hint) continue;
+      // 同一条命令同时签多步（如 cuoti 的 result_recorded + writeback_verified）时
+      // 只写一遍正文，其余回指，避免把同一段长命令重复塞进每轮必读的启动载荷。
+      const first = seenHint.get(hint);
+      stepCommands[step] = first ? `同 ${first}` : hint;
+      if (!first) seenHint.set(hint, step);
     }
   }
   return {

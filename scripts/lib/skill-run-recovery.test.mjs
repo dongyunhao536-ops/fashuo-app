@@ -7,7 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatRecovery, recoveryHint, recoveryHints } from "./skill-run-recovery.mjs";
-import { buildSkillExecutionContext, endSkillRun, startSkillRun } from "./skill-run.mjs";
+import {
+  SKILL_AUTOMATIC_STEPS,
+  SKILL_MANUAL_STEPS,
+  buildSkillExecutionContext,
+  endSkillRun,
+  startSkillRun,
+  summarizeGateFailureReasons,
+} from "./skill-run.mjs";
 
 function harness() {
   return { file: join(mkdtempSync(join(tmpdir(), "skill-recovery-")), "skill-runs.jsonl") };
@@ -102,15 +109,50 @@ describe("接线到真实阻断", () => {
     const { file } = harness();
     const run = startSkillRun({ skill: "cuoti-fupan", subject: "刑法", kind: "review", file, runId: "SR-EXEC" });
     const execution = buildSkillExecutionContext(run);
-    expect(Object.keys(execution.stepCommands)).toEqual(
-      expect.arrayContaining(["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded"]),
-    );
     expect(execution.stepCommands.materials_checked).toContain("cuoti.mjs material");
     expect(execution.stepCommands.question_integrity_pass).toContain("question-integrity.mjs");
-    // phases 里出现的每一步都要能答出"归谁签"，否则模型仍要靠猜。
+    // phases 里每个自动步骤都要能答出"归谁签"，否则模型仍要靠猜。
     const covered = new Set(Object.keys(execution.stepCommands));
     for (const steps of Object.values(execution.phases)) {
-      for (const step of steps) expect(covered.has(step)).toBe(true);
+      for (const step of steps) {
+        if (SKILL_AUTOMATIC_STEPS.includes(step)) expect(covered.has(step)).toBe(true);
+      }
     }
+    // 手工步骤不进启动载荷：它们由 commands 模板覆盖，重复列出只会撑大每轮必读内容。
+    for (const step of SKILL_MANUAL_STEPS) expect(covered.has(step)).toBe(false);
+    // 但真正阻断时仍要给出该写什么证据引用。
+    expect(recoveryHint("cuoti-fupan", "target_frozen", { runId: run.runId })).toContain("T#/事件号");
+  });
+});
+
+// [claude] 2026-08-23：阻断只报总数看不出模式，21 次跳步 + 12 次 Gate 判失败
+// 里 question_integrity_pass 占 19 次，此前全靠离线脚本才统计得出。
+describe("阻断原因聚合", () => {
+  it("按缺失步骤与 skill/阶段两个维度排名，把反复被跳的那一步顶出来", () => {
+    const reasons = summarizeGateFailureReasons([
+      { event: "checkpoint_blocked", skill: "cuoti-fupan", phase: "question", missing: ["question_integrity_pass"] },
+      { event: "checkpoint_blocked", skill: "cuoti-fupan", phase: "question", missing: ["materials_checked", "question_integrity_pass"] },
+      { event: "end_blocked", skill: "daibei-pc", phase: "plan", missing: ["context_loaded"] },
+      // step status=fail：Gate 真的跑了但判草稿不合格，与"跳过没跑"是两回事，都要计入摩擦。
+      { event: "step", status: "fail", skill: "cuoti-fupan", phase: null, step: "question_integrity_pass" },
+    ]);
+
+    expect(reasons.total).toBe(4);
+    expect(Object.keys(reasons.byStep)[0]).toBe("question_integrity_pass");
+    expect(reasons.byStep.question_integrity_pass).toBe(3);
+    expect(reasons.byStep.context_loaded).toBe(1);
+    expect(Object.keys(reasons.bySkillPhase)[0]).toBe("cuoti-fupan/question");
+  });
+
+  it("带计数后缀的 intake_question×N 归一，不让每个数字各成一类", () => {
+    const reasons = summarizeGateFailureReasons([
+      { event: "end_blocked", skill: "cuoti-fupan", phase: "intake", missing: ["intake_question×1"] },
+      { event: "end_blocked", skill: "cuoti-fupan", phase: "intake", missing: ["intake_question×3"] },
+    ]);
+    expect(reasons.byStep).toEqual({ "intake_question×N": 2 });
+  });
+
+  it("空输入不炸", () => {
+    expect(summarizeGateFailureReasons()).toEqual({ total: 0, byStep: {}, bySkillPhase: {} });
   });
 });
