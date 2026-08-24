@@ -7,6 +7,8 @@ import { currentCodexTurnReference } from "./skill-turn-guard.mjs";
 import { assertStudySubject, normalizeStudySubject } from "./study-subject.mjs";
 import { extractDaibeiReciteIds } from "./daibei-target.mjs";
 import { canonicalObservabilityFile, discoverObservabilityFiles } from "./observability-paths.mjs";
+// [claude] 2026-08-23：阻断必须同时说明怎么补，否则模型要么再花一次往返查规则、要么瞎猜再阻断。
+import { formatRecovery, recoveryHint } from "./skill-run-recovery.mjs";
 
 export const SKILL_RUN_SCHEMA_VERSION = 1;
 export const DEFAULT_SKILL_RUN_FILE = process.env.FASHUO_SKILL_RUN_FILE
@@ -1106,9 +1108,11 @@ export function checkpointSkillRun({
       required: state.required,
       missing: state.missing,
     }, file);
-    throw new SkillRunGateError(`SKILL_RUN_BLOCK｜${run.skill}/${normalizedPhase} 缺步骤：${state.missing.join(",")}`, {
-      runId, skill: run.skill, phase: normalizedPhase, ...state,
-    });
+    throw new SkillRunGateError(
+      `SKILL_RUN_BLOCK｜${run.skill}/${normalizedPhase} 缺步骤：${state.missing.join(",")}`
+        + formatRecovery(run.skill, state.missing, { runId, subject: run.subject, phase: normalizedPhase }),
+      { runId, skill: run.skill, phase: normalizedPhase, ...state },
+    );
   }
   appendEvent({
     ...eventBase({ runId, event: "checkpoint_passed", now }),
@@ -1167,9 +1171,12 @@ export function endSkillRun({
         required: [expectedPhase],
         missing,
       }, file);
-      throw new SkillRunGateError(`SKILL_RUN_END_BLOCK｜daibei-pc kind=${run.kind ?? "空"} 不能按 ${normalizedPhase} 收口；应为 ${expectedPhase}`, {
-        runId, skill: run.skill, phase: normalizedPhase, required: [expectedPhase], missing,
-      });
+      throw new SkillRunGateError(
+        `SKILL_RUN_END_BLOCK｜daibei-pc kind=${run.kind ?? "空"} 不能按 ${normalizedPhase} 收口；应为 ${expectedPhase}`
+          // [claude] 2026-08-23：只报"应为 X"仍要模型自己推怎么走；直接给下一步。
+          + `\n补救：\n  - 先按 --phase ${expectedPhase.split("|")[0]} 收口当前 Run；换阶段要另建 Run，不要改写本 Run 的 kind`,
+        { runId, skill: run.skill, phase: normalizedPhase, required: [expectedPhase], missing },
+      );
     }
     // [gpt] 2026-08-20：英语已进入真实阅读判分后，不得改用 plan 阶段绕过 reading_grading 闭环。
     if (run.skill === "yingyu-pc" && normalizedPhase === "plan" && run.steps.answer_key_checked?.status === "pass") {
@@ -1196,9 +1203,11 @@ export function endSkillRun({
         required: state.required,
         missing: state.missing,
       }, file);
-      throw new SkillRunGateError(`SKILL_RUN_END_BLOCK｜${run.skill}/${normalizedPhase} 缺步骤：${state.missing.join(",")}`, {
-        runId, skill: run.skill, phase: normalizedPhase, ...state,
-      });
+      throw new SkillRunGateError(
+        `SKILL_RUN_END_BLOCK｜${run.skill}/${normalizedPhase} 缺步骤：${state.missing.join(",")}`
+          + formatRecovery(run.skill, state.missing, { runId, subject: run.subject, phase: normalizedPhase }),
+        { runId, skill: run.skill, phase: normalizedPhase, ...state },
+      );
     }
     if (run.skill === "cuoti-fupan" && normalizedPhase === "result") {
       assertCuotiJudgmentConsistency(run);
@@ -1218,9 +1227,11 @@ export function endSkillRun({
           required: [...state.required, `intake_question×${gate.expected ?? "?"}`],
           missing: [`intake_question×${gate.missing}`],
         }, file);
-        throw new SkillRunGateError(`SKILL_RUN_END_BLOCK｜${run.skill}/${normalizedPhase} ${gate.reason}`, {
-          runId, skill: run.skill, phase: normalizedPhase, missing: [`intake_question_missing:${gate.missing}`], ...state,
-        });
+        throw new SkillRunGateError(
+          `SKILL_RUN_END_BLOCK｜${run.skill}/${normalizedPhase} ${gate.reason}`
+            + formatRecovery(run.skill, [`intake_question×${gate.missing}`], { runId, subject: run.subject, phase: normalizedPhase }),
+          { runId, skill: run.skill, phase: normalizedPhase, missing: [`intake_question_missing:${gate.missing}`], ...state },
+        );
       }
     }
     if (run.skill === "daibei-pc" && normalizedPhase === "result") assertDaibeiResultConsistency(run);
@@ -1484,11 +1495,22 @@ export function summarizeSkillRuns(input = {}, {
 export function buildSkillExecutionContext(run) {
   if (!run?.runId || !run?.skill) throw new Error("缺少可用的 Skill Run");
   const phases = SKILL_WORKFLOWS[run.skill];
+  // [claude] 2026-08-23：phases 只说"要哪些步骤"，不说"每步归谁签"，模型得等被
+  // 阻断才发现。这里在启动时就把签发命令一次给全，把 Gate 从事后阻断改成事前告知。
+  const stepCommands = {};
+  for (const steps of Object.values(phases ?? {})) {
+    for (const step of steps) {
+      if (stepCommands[step]) continue;
+      const hint = recoveryHint(run.skill, step, { runId: run.runId, subject: run.subject });
+      if (hint) stepCommands[step] = hint;
+    }
+  }
   return {
     schemaVersion: SKILL_RUN_SCHEMA_VERSION,
     runId: run.runId,
     skill: run.skill,
     phases,
+    stepCommands,
     materialFlag: `--run ${run.runId}`,
     commands: {
       step: `node scripts/skill-run.mjs step --run ${run.runId} --step <手工步骤> [--ref <证据引用>]`,

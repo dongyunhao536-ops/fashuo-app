@@ -56,9 +56,11 @@ This version has breaking changes — APIs, conventions, and file structure may 
 <!-- BEGIN:change-source-marker -->
 # 改动来源标记（2026-08-07 云定）
 
-- 用 DeepSeek API 完成的代码/skill/文档改动，必须在改动处或提交信息中标注 [deepseek]；原生 GPT（Codex 原生模型）改动标 [gpt]；无法判定时标 [unknown] 并在最终答复中说明。
-- 每次 DeepSeek 会话结束时，在 docs/改动来源记录.md 追加一行记录（日期、会话主题、改动文件清单、来源判定依据）。原生 GPT 会话做代码改动时同样追加，来源标 gpt。
-- 来源判定以会话的 model_provider 为准（deepseek_local → deepseek；openai → gpt）；同一会话内的所有改动视为同一来源。
+- 用 DeepSeek API 完成的代码/skill/文档改动，必须在改动处或提交信息中标注 [deepseek]；原生 GPT（Codex 原生模型）改动标 [gpt]；Claude Code（Anthropic 宿主）改动标 [claude]；无法判定时标 [unknown] 并在最终答复中说明。<!-- [claude] 2026-08-23：补 Claude 位次，此前无标可用。 -->
+- 每次 DeepSeek 会话结束时，在 docs/改动来源记录.md 追加一行记录（日期、会话主题、改动文件清单、来源判定依据）。原生 GPT 与 Claude 会话做代码改动时同样追加，来源分别标 gpt / claude。
+- 来源判定以会话宿主与 model_provider 为准（deepseek_local → deepseek；openai → gpt；Claude Code → claude）；同一会话内的所有改动视为同一来源。
+- 跨宿主接手时：修复他方遗留问题，提交信息按被修对象标原来源，并在正文用 `[claude]`/`[gpt]` 分段说明谁改了哪一块，不把他人工作整体改记到自己名下。<!-- [claude] 2026-08-23 -->
+
 - 本规则对仓库内所有文件生效（含 docs/、.agents/skills/、scripts/、src/）。
 <!-- END:change-source-marker -->
 

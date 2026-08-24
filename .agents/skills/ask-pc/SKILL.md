@@ -18,7 +18,7 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 ## 默认快路径
 
 1. 先运行 `node scripts/skill-run.mjs start --skill ask-pc --subject <科目> --kind answer --json`。用户已经给出问题，不加载个人快照。
-2. 拆出题目中每个会影响答案的核心概念或争点。单一争点运行 `node scripts/cuoti.mjs material <连续短词> [refine] --run <SR-ID>`；多个独立争点一次运行 `material-batch`，但每个争点分别查询。
+2. 拆出题目中每个会影响答案的核心概念或争点。单一争点运行 `node --env-file=.env.local scripts/cuoti.mjs material <连续短词> [refine] --run <SR-ID>`；多个独立争点一次运行 `material-batch`，但每个争点分别查询。检索命令必须带 `--env-file=.env.local`，否则读不到档案根直接失败。<!-- [claude] 2026-08-23 -->
 3. 内部完成六项核对：题型与问法、心得提示、易混点、《考试分析》锚点、真题口径、法律更新与前后矛盾。六项是思考检查，不是固定展示模板。
 4. 按下列裁判顺序定结论：用户明确指定的参考答案或评分标准 → 《考试分析》 → 讲义 → 法硕真题。心得和易混库只负责提示争点。材料未明文时明确降级，不把学理争议写成法硕定论。
 5. 输出“结论 → 关键规则 → 题干涵摄/选项排除 → 易错边界”。把出处紧贴对应结论；末尾只给紧凑证据条，不重复整段检索结果。

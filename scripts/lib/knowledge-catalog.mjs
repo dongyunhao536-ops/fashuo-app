@@ -1,8 +1,15 @@
 // [gpt] 2026-08-10：把退役 kp_state 中仍然有效的稳定 ID/材料元数据，
 // 与 Anki 卡片元数据合并成只读目录。这里绝不读取或解释旧掌握字段。
 import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+// [claude] 2026-08-23：原来硬编码 D:/fashuo，迁到 macOS 后必然落空。
+// 而 loadAnkiExtract 找不到文件只返回 available:false 不抛错，
+// 于是 assessment/knowledge 静默少一个证据源，评估四维会无声偏低。
+import { resolveArchiveRoot } from "./workspace-paths.mjs";
 
-export const DEFAULT_ANKI_EXTRACT_PATH = "D:/fashuo/考点库/anki_extracted.json";
+export function defaultAnkiExtractPath(options = {}) {
+  return join(resolveArchiveRoot(options), "考点库", "anki_extracted.json");
+}
 
 function asArray(value) {
   return Array.isArray(value) ? value : [];
@@ -72,8 +79,11 @@ export function toAnkiReference(note) {
   };
 }
 
-export function loadAnkiExtract(path = process.env.ANKI_EXTRACTED_PATH || DEFAULT_ANKI_EXTRACT_PATH) {
-  if (!path || !existsSync(path)) return { path, notes: [], available: false, issue: "Anki 导出文件不存在" };
+export function loadAnkiExtract(path = process.env.ANKI_EXTRACTED_PATH || defaultAnkiExtractPath()) {
+  if (!path || !existsSync(path)) {
+    // 缺源必须能被上游看见：报出实际找过的路径，别只说"不存在"。
+    return { path, notes: [], available: false, issue: `Anki 导出文件不存在：${path}` };
+  }
   const parsed = JSON.parse(readFileSync(path, "utf8"));
   if (!Array.isArray(parsed)) throw new Error(`Anki 导出不是数组：${path}`);
   return { path, notes: parsed, available: true, issue: null };

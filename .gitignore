@@ -43,6 +43,10 @@ yarn-error.log*
 # 电脑端错题复盘的本地待同步缓冲（说"同步"才落库到系统，见 scripts/cuoti.mjs）
 /.local/
 
+# [claude] 2026-08-23：单场 Skill Run 的临时产物，判题/监控命令读完即弃，不进版本库
+/cuoti-judgment-*.json
+/.tmp-monitor.json
+
 # vercel
 .vercel
 

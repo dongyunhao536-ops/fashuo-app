@@ -1,5 +1,5 @@
 // [gpt] 2026-08-11：PC 单用户检索直接读取本地权威档案；范围、排除与完整性规则和线上镜像一致。
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { expandMirrorScope } from "./mirror-scope.mjs";
 import { prepareMirrorGeneration } from "./mirror-generation.mjs";
 import { resolveArchiveRoot } from "./workspace-paths.mjs";
@@ -39,6 +39,17 @@ export async function loadLocalMaterialCorpus({
   const config = JSON.parse(configBytes.toString("utf8"));
   // [gpt] 2026-08-23：本地五源检索与同步链共享跨平台档案根解析。
   const root = archiveRoot ?? resolveArchiveRoot({ configRoot: config.root });
+  // [claude] 2026-08-23：档案根不存在时先说清楚。否则 glob 全空，
+  // 报错退化成"必需镜像资产未匹配：教材/带背/..."——看起来像少同步了一个文件，
+  // 实际是整个根目录没找到。macOS 上漏 --env-file 就会走到这里。
+  if (!existsSync(root) || !statSync(root).isDirectory()) {
+    throw new Error(
+      `档案根不存在：${root}\n`
+      + `  - 命令要带 --env-file=.env.local 才能读到 FASHUO_ARCHIVE_ROOT；\n`
+      + `  - 或在 .env.local 设 FASHUO_ARCHIVE_ROOT=<档案仓绝对路径>。\n`
+      + `  - config/mirror-scope.json 的 root=${config.root ?? "未设"} 在非 Windows 上不适用，只作兜底。`,
+    );
+  }
   const scope = await expandMirrorScope(config, { root });
   if (scope.files.length === 0) {
     throw new Error(`本地材料范围为空：${root}`);
