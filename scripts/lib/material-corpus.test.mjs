@@ -23,7 +23,7 @@ describe("material corpus", () => {
     ]);
   });
 
-  // [claude] 2026-08-23：档案根找不到时曾退化成"必需镜像资产未匹配：教材/带背/..."，
+  // [claude] 2026-08-24：档案根找不到时曾退化成"必需镜像资产未匹配：教材/带背/..."，
   // 看起来像少同步一个文件，实际整个根都不在——macOS 上漏 --env-file 就是这个症状。
   it("档案根不存在时直接点名根目录并给出补法，不伪装成缺单个资产", async () => {
     const dir = mkdtempSync(join(tmpdir(), "material-root-"));

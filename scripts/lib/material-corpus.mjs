@@ -39,7 +39,7 @@ export async function loadLocalMaterialCorpus({
   const config = JSON.parse(configBytes.toString("utf8"));
   // [gpt] 2026-08-23：本地五源检索与同步链共享跨平台档案根解析。
   const root = archiveRoot ?? resolveArchiveRoot({ configRoot: config.root });
-  // [claude] 2026-08-23：档案根不存在时先说清楚。否则 glob 全空，
+  // [claude] 2026-08-24：档案根不存在时先说清楚。否则 glob 全空，
   // 报错退化成"必需镜像资产未匹配：教材/带背/..."——看起来像少同步了一个文件，
   // 实际是整个根目录没找到。macOS 上漏 --env-file 就会走到这里。
   if (!existsSync(root) || !statSync(root).isDirectory()) {

@@ -2,7 +2,7 @@
 // 与 Anki 卡片元数据合并成只读目录。这里绝不读取或解释旧掌握字段。
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-// [claude] 2026-08-23：原来硬编码 D:/fashuo，迁到 macOS 后必然落空。
+// [claude] 2026-08-24：原来硬编码 D:/fashuo，迁到 macOS 后必然落空。
 // 而 loadAnkiExtract 找不到文件只返回 available:false 不抛错，
 // 于是 assessment/knowledge 静默少一个证据源，评估四维会无声偏低。
 import { resolveArchiveRoot } from "./workspace-paths.mjs";

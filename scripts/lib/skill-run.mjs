@@ -7,7 +7,7 @@ import { currentCodexTurnReference } from "./skill-turn-guard.mjs";
 import { assertStudySubject, normalizeStudySubject } from "./study-subject.mjs";
 import { extractDaibeiReciteIds } from "./daibei-target.mjs";
 import { canonicalObservabilityFile, discoverObservabilityFiles } from "./observability-paths.mjs";
-// [claude] 2026-08-23：阻断必须同时说明怎么补，否则模型要么再花一次往返查规则、要么瞎猜再阻断。
+// [claude] 2026-08-24：阻断必须同时说明怎么补，否则模型要么再花一次往返查规则、要么瞎猜再阻断。
 import { formatRecovery, recoveryHint } from "./skill-run-recovery.mjs";
 
 export const SKILL_RUN_SCHEMA_VERSION = 1;
@@ -1173,7 +1173,7 @@ export function endSkillRun({
       }, file);
       throw new SkillRunGateError(
         `SKILL_RUN_END_BLOCK｜daibei-pc kind=${run.kind ?? "空"} 不能按 ${normalizedPhase} 收口；应为 ${expectedPhase}`
-          // [claude] 2026-08-23：只报"应为 X"仍要模型自己推怎么走；直接给下一步。
+          // [claude] 2026-08-24：只报"应为 X"仍要模型自己推怎么走；直接给下一步。
           + `\n补救：\n  - 先按 --phase ${expectedPhase.split("|")[0]} 收口当前 Run；换阶段要另建 Run，不要改写本 Run 的 kind`,
         { runId, skill: run.skill, phase: normalizedPhase, required: [expectedPhase], missing },
       );
@@ -1258,7 +1258,7 @@ function inWindow(value, start, end) {
   return (!start || date >= start) && (!end || date <= end);
 }
 
-// [claude] 2026-08-23：把阻断按"缺了哪一步"聚合。只报总数看不出模式，
+// [claude] 2026-08-24：把阻断按"缺了哪一步"聚合。只报总数看不出模式，
 // 而模式才是可行动的信息：同一步被反复跳过说明该步的触发时机或提示有问题，
 // 不是随机失误。byStep 回答"哪一步在漏"，bySkillPhase 回答"漏在哪条路径上"。
 export function summarizeGateFailureReasons(gateFailures = []) {
@@ -1472,7 +1472,7 @@ export function summarizeSkillRuns(input = {}, {
       lastEventAt: run.lastEventAt,
       ageMinutes: Math.floor((nowMs - new Date(run.lastEventAt).getTime()) / 60000),
     })),
-    // [claude] 2026-08-23：原来只给 10 条样例，看不出模式。2026-08-13～08-23 的
+    // [claude] 2026-08-24：原来只给 10 条样例，看不出模式。2026-08-13～08-23 的
     // 21 次阻断里 question_integrity_pass 缺 7 次、context_loaded 缺 6 次
     // （后者是 daibei-pc/plan 同一处 8 天复发 5 次），全靠离线脚本才统计出来。
     // 聚合进报表，才能让"哪一步在被反复跳过"自己浮出来。
@@ -1524,7 +1524,7 @@ export function summarizeSkillRuns(input = {}, {
 export function buildSkillExecutionContext(run) {
   if (!run?.runId || !run?.skill) throw new Error("缺少可用的 Skill Run");
   const phases = SKILL_WORKFLOWS[run.skill];
-  // [claude] 2026-08-23：phases 只说"要哪些步骤"，不说"每步归谁签"，模型得等被
+  // [claude] 2026-08-24：phases 只说"要哪些步骤"，不说"每步归谁签"，模型得等被
   // 阻断才发现。这里在启动时就把签发命令给出，把 Gate 从事后阻断改成事前告知。
   // 只列自动步骤：它们是模型唯一猜不出的部分。手工步骤的写法已由下面的
   // commands.step/checkpoint/end 模板覆盖，重复列出只会撑大每轮必读的启动载荷；
