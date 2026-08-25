@@ -13,6 +13,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -78,6 +79,13 @@ const JOBS = [
     src: CLAUDE_HOOKS_ROOT,
     dest: "Claude现役Hooks备份",
     include: /^fashuo-.*\.mjs$/u,
+    // [claude] 2026-08-25：线上 handler 与仓库规范版本必须逐字节一致。缺了这层，
+    // 装好之后谁直接改线上文件，仓库副本会静默过期——灾备照抄线上，两者不一致时无人告警。
+    // 值为仓库内规范版本的相对路径；白名单命中却不在本表里的文件同样拒绝，
+    // 那正是"生产件不在 Git"的老问题，不该再出现第二次。
+    canonical: Object.freeze({
+      "fashuo-claude-observe.mjs": "scripts/claude-skill-guard.mjs",
+    }),
   },
   {
     label: "Codex 现役 Skills",
@@ -162,6 +170,39 @@ function assertNonEmptySource(job) {
   return items;
 }
 
+// [claude] 2026-08-25：漂移检测。两边不一致时**不知道哪份是权威**，盲目备份会把
+// 一个来路不明的版本当成规范版归档，比不备份更坏——与本文件既有的"复制完整性校验
+// 失败就保留上一版、拒绝替换"是同一套 fail-closed 逻辑。
+function assertNoCanonicalDrift(job) {
+  if (!job.canonical) return [];
+  const checked = [];
+  for (const item of inventory(job.src, job.exclude, job.include)) {
+    const name = basename(item.path);
+    const repoRelative = job.canonical[name];
+    if (!repoRelative) {
+      throw new Error(
+        `${job.label}发现未登记的生产件：${name}\n`
+        + "  它命中备份白名单却没有仓库规范版本，正是「生产件不在 Git」那个老问题。\n"
+        + `  补救：把它的规范版本放进仓库，并登记到 backup-memory.mjs 的 canonical 表。`,
+      );
+    }
+    const live = readFileSync(join(job.src, item.path));
+    const repo = readFileSync(join(APP_ROOT, repoRelative));
+    if (!live.equals(repo)) {
+      throw new Error(
+        `${job.label}与仓库规范版本已漂移：${name}\n`
+        + `  线上：${join(job.src, item.path)}\n`
+        + `  仓库：${repoRelative}\n`
+        + "  两边不一致时无法判定哪份权威，拒绝备份。补救二选一：\n"
+        + `    - 线上是对的 → cp '${join(job.src, item.path)}' '${join(APP_ROOT, repoRelative)}' 后提交\n`
+        + `    - 仓库是对的 → cp '${join(APP_ROOT, repoRelative)}' '${join(job.src, item.path)}'`,
+      );
+    }
+    checked.push(name);
+  }
+  return checked;
+}
+
 function copyAtomically(job) {
   const destination = assertInsideArchive(join(REPO, job.dest));
   const staging = assertInsideArchive(`${destination}.next-${process.pid}`);
@@ -205,6 +246,7 @@ if (missingRequiredAssets.length) {
 
 const availableJobs = [];
 const sourceCounts = new Map();
+const canonicalChecked = new Map();
 for (const job of JOBS) {
   if (!existsSync(job.src)) {
     const message = `${job.label}源不存在：${job.src}`;
@@ -214,6 +256,8 @@ for (const job of JOBS) {
   }
   try {
     sourceCounts.set(job.label, assertNonEmptySource(job).length);
+    const drifted = assertNoCanonicalDrift(job);
+    if (drifted.length) canonicalChecked.set(job.label, drifted);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
@@ -229,7 +273,9 @@ console.log(`Codex 根：${CODEX_HOME}`);
 console.log(`Claude Skills 根：${CLAUDE_SKILLS_ROOT}`);
 console.log(`Claude Hooks 根：${CLAUDE_HOOKS_ROOT}`);
 for (const job of availableJobs) {
-  console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）`);
+  const drift = canonicalChecked.get(job.label);
+  const suffix = drift ? `｜规范版本一致：${drift.join("、")}` : "";
+  console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）${suffix}`);
 }
 
 if (dryRun) {

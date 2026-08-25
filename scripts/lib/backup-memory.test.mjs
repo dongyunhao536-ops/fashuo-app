@@ -38,7 +38,9 @@ describe("backup-memory dry-run", () => {
     claudeHooksRoot = join(root, ".claude", "hooks");
 
     // 白名单之外的两个文件必须始终存在：settings 含权限/代理配置，绝不能进档案。
+    // 线上 handler 与仓库规范版本内容一致，漂移检测才应放行。
     writeFixture(join(claudeHooksRoot, "fashuo-claude-observe.mjs"), "// guard");
+    writeFixture(join(appRoot, "scripts", "claude-skill-guard.mjs"), "// guard");
     writeFixture(join(claudeHooksRoot, "settings.local.json"), "{}");
     writeFixture(join(claudeHooksRoot, "unrelated-hook.mjs"), "// other");
     writeFixture(join(appRoot, ".agents", "skills", "fixture.md"));
@@ -115,6 +117,35 @@ describe("backup-memory dry-run", () => {
     expect(result.stdout).toContain("Claude 现役 Hooks");
     // 目录里放了 3 个文件，只有 1 个命中白名单。
     expect(result.stdout).toMatch(/Claude 现役 Hooks[^\n]*（1 个文件）/u);
+  });
+
+  // [claude] 2026-08-25：装好之后若有人直接改线上文件，仓库副本会静默过期，
+  // 灾备照抄线上而无人告警。两边不一致时无法判定哪份权威，故 fail-closed。
+  it("线上 handler 与仓库规范版本漂移时拒绝备份，并给出双向补救", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    writeFixture(join(claudeHooksRoot, "fashuo-claude-observe.mjs"), "// guard\n// 有人直接改了线上");
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("与仓库规范版本已漂移");
+    expect(result.stderr).toContain("线上是对的");
+    expect(result.stderr).toContain("仓库是对的");
+    expect(`${result.stdout}${result.stderr}`).not.toContain("dry-run 通过");
+  });
+
+  it("命中白名单却没有仓库规范版本的生产件同样拒绝", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    writeFixture(join(claudeHooksRoot, "fashuo-claude-newhook.mjs"), "// 新加的没登记");
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("发现未登记的生产件");
+    expect(result.stderr).toContain("fashuo-claude-newhook.mjs");
+  });
+
+  it("内容一致时放行，并报告校验过哪些规范版本", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    const result = run();
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("规范版本一致：fashuo-claude-observe.mjs");
   });
 
   it("Hooks 源缺失、或存在但白名单一个都没命中时退出 1", () => {
