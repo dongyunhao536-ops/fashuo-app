@@ -1,4 +1,5 @@
 // [gpt] 2026-08-24：锁定 Claude 记忆缺失/空目录不得再被 dry-run 假绿放行。
+// [gpt] 2026-08-25：Claude 现役 Skills 是第七个必需源，不得只留在单机用户目录。
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +25,7 @@ describe("backup-memory dry-run", () => {
   let archiveRoot;
   let codexHome;
   let claudeMemoryRoot;
+  let claudeSkillsRoot;
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), "fashuo-backup-"));
@@ -31,12 +33,14 @@ describe("backup-memory dry-run", () => {
     archiveRoot = join(root, "fashuo");
     codexHome = join(root, ".codex");
     claudeMemoryRoot = join(root, ".claude", "memory");
+    claudeSkillsRoot = join(root, ".claude", "skills");
 
     writeFixture(join(appRoot, ".agents", "skills", "fixture.md"));
     writeFixture(join(appRoot, ".codex", "hooks.json"), "{}");
     writeFixture(join(appRoot, "AGENTS.md"));
     writeFixture(join(codexHome, "memories", "fixture.md"));
     writeFixture(join(appRoot, ".local", "ledger.md"));
+    writeFixture(join(claudeSkillsRoot, "ask-pc", "SKILL.md"));
     mkdirSync(join(archiveRoot, ".git"), { recursive: true });
     for (const asset of REQUIRED_ARCHIVE_ASSETS) writeFixture(join(archiveRoot, asset));
   });
@@ -49,6 +53,7 @@ describe("backup-memory dry-run", () => {
       FASHUO_APP_ROOT: appRoot,
       FASHUO_ARCHIVE_ROOT: archiveRoot,
       FASHUO_CLAUDE_MEMORY_ROOT: memoryRoot,
+      FASHUO_CLAUDE_SKILLS_ROOT: claudeSkillsRoot,
       CODEX_HOME: codexHome,
     };
     delete env.FASHUO_LEGACY_MEMORY_ROOT;
@@ -69,13 +74,28 @@ describe("backup-memory dry-run", () => {
     expect(result.stderr).toContain("Claude 项目记忆源为空");
   });
 
-  it("六个必需源均非空时才返回成功，并报告实际文件数", () => {
+  it("Claude 现役 Skills 缺失或为空时退出 1", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    rmSync(claudeSkillsRoot, { recursive: true, force: true });
+    let result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Claude 现役 Skills源不存在");
+    expect(`${result.stdout}${result.stderr}`).not.toContain("dry-run 通过");
+
+    mkdirSync(claudeSkillsRoot, { recursive: true });
+    result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Claude 现役 Skills源为空");
+  });
+
+  it("七个必需源均非空时才返回成功，并报告实际文件数", () => {
     writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
     writeFixture(join(claudeMemoryRoot, "rule.md"));
     const result = run();
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("Claude 项目记忆");
     expect(result.stdout).toContain("（2 个文件）");
-    expect(result.stdout).toContain("全部 6 个必需备份源均存在且非空");
+    expect(result.stdout).toContain("Claude 现役 Skills");
+    expect(result.stdout).toContain("全部 7 个必需备份源均存在且非空");
   });
 });

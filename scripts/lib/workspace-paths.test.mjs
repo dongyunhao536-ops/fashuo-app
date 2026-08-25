@@ -7,6 +7,7 @@ import {
   resolveAppRoot,
   resolveArchiveRoot,
   resolveClaudeMemoryRoot,
+  resolveClaudeSkillsRoot,
   resolveExamTextRoot,
 } from "./workspace-paths.mjs";
 
@@ -65,5 +66,15 @@ describe("workspace paths", () => {
       appRoot: "/Users/dyh/Projects/fashuo-app",
       userHome: "/Users/dyh",
     })).toBe(resolve("/tmp/claude-memory"));
+  });
+
+  it("Claude 现役 Skills 默认取用户目录并允许显式覆盖", () => {
+    expect(resolveClaudeSkillsRoot({ env: {}, userHome: "/Users/dyh" })).toBe(
+      "/Users/dyh/.claude/skills",
+    );
+    expect(resolveClaudeSkillsRoot({
+      env: { FASHUO_CLAUDE_SKILLS_ROOT: "/tmp/claude-skills" },
+      userHome: "/Users/dyh",
+    })).toBe(resolve("/tmp/claude-skills"));
   });
 });

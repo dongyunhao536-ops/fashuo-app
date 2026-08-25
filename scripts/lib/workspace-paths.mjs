@@ -41,6 +41,14 @@ export function resolveCodexHome({ env = process.env } = {}) {
   return resolve(firstNonEmpty(env.CODEX_HOME) ?? join(homedir(), ".codex"));
 }
 
+// [gpt] 2026-08-25：仓库外 ~/.claude/skills 是 Claude 宿主现役入口，必须独立纳入灾备。
+export function resolveClaudeSkillsRoot({
+  env = process.env,
+  userHome = homedir(),
+} = {}) {
+  return resolve(firstNonEmpty(env.FASHUO_CLAUDE_SKILLS_ROOT) ?? join(userHome, ".claude", "skills"));
+}
+
 export function claudeProjectPathKey(appRoot) {
   const normalized = String(appRoot ?? "").trim();
   if (!normalized) throw new Error("Claude 项目路径不能为空");

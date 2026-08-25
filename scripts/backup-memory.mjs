@@ -22,6 +22,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   resolveAppRoot,
   resolveArchiveRoot,
+  resolveClaudeSkillsRoot,
   resolveCodexHome,
   resolveLegacyMemoryRoot,
 } from "./lib/workspace-paths.mjs";
@@ -51,6 +52,7 @@ const APP_ROOT = resolveAppRoot();
 const REPO = resolveArchiveRoot({ appRoot: APP_ROOT });
 const CODEX_HOME = resolveCodexHome();
 const LEGACY_MEMORY_ROOT = resolveLegacyMemoryRoot();
+const CLAUDE_SKILLS_ROOT = resolveClaudeSkillsRoot();
 const RAW_DIR_RE = /(?:^|[\\/])_raw(?:[\\/]|$)/u;
 const GIT_DIR_RE = /(?:^|[\\/])\.git(?:[\\/]|$)/u;
 
@@ -59,6 +61,12 @@ const JOBS = [
     label: "Claude 项目记忆",
     src: LEGACY_MEMORY_ROOT,
     dest: "Claude记忆备份",
+  },
+  // [gpt] 2026-08-25：九个 Claude 现役入口只存在于用户目录；缺失或为空必须 fail-closed。
+  {
+    label: "Claude 现役 Skills",
+    src: CLAUDE_SKILLS_ROOT,
+    dest: "Claude现役Skills备份",
   },
   {
     label: "Codex 现役 Skills",
@@ -192,6 +200,7 @@ if (process.exitCode) process.exit(process.exitCode);
 console.log(`应用根：${APP_ROOT}`);
 console.log(`档案根：${REPO}`);
 console.log(`Codex 根：${CODEX_HOME}`);
+console.log(`Claude Skills 根：${CLAUDE_SKILLS_ROOT}`);
 for (const job of availableJobs) {
   console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）`);
 }
