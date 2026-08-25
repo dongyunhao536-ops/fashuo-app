@@ -127,7 +127,12 @@ export function main(argv = process.argv.slice(2)) {
     const runLog = readSkillRunEvents();
     const turnLog = readSkillTurnEvents();
     const summary = summarizeSkillRuns(runLog, { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
-    const host = summarizeSkillTurns(turnLog, { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
+    const host = summarizeSkillTurns(turnLog, {
+      nowIso: now.toISOString(),
+      windowStart: start,
+      windowEnd: end,
+      runInput: runLog,
+    });
     host.guardNotInvokedRuns = findGuardNotInvokedRuns(runLog, turnLog, { windowStart: start, windowEnd: end });
     host.counts.guardNotInvoked = host.guardNotInvokedRuns.length;
     // [gpt] 保留既有 Run 摘要字段，追加 host，避免即时诊断再次看不见“整个 Skill 都没启动”。

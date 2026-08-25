@@ -2,7 +2,7 @@
 
 export const PRODUCER_HOSTS = Object.freeze(["codex", "claude", "unknown"]);
 export const IDENTITY_STATES = Object.freeze(["full", "host_only", "legacy"]);
-export const TURN_ID_SOURCES = Object.freeze(["turn_id", "prompt_id", "explicit", "none", "legacy"]);
+export const TURN_ID_SOURCES = Object.freeze(["turn_id", "prompt_id", "session_latest", "explicit", "none", "legacy"]);
 
 function token(value, { max = 100 } = {}) {
   const normalized = String(value ?? "").trim();
@@ -40,7 +40,13 @@ export function resolveHookIdentity(payload = {}, {
   let turnIdSource = "none";
   if (!sessionEvent && producerHost === "claude") {
     turnId = token(payload.prompt_id);
-    turnIdSource = turnId ? "prompt_id" : "none";
+    // [gpt] 2026-08-25：Claude Code 官方 Stop schema 不保证 prompt_id（部分真实版本会额外提供）。
+    // 缺失时保留“按本 session 最新 prompt_routed 对账”的显式来源，后续只允许 Claude 使用该回落。
+    turnIdSource = turnId
+      ? "prompt_id"
+      : payload.hook_event_name === "Stop" && sessionId
+        ? "session_latest"
+        : "none";
   } else if (!sessionEvent && producerHost === "codex") {
     turnId = token(payload.turn_id);
     turnIdSource = turnId ? "turn_id" : "none";

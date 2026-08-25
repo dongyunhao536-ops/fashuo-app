@@ -143,6 +143,7 @@ function readLocalFacts(referenceDate, windowStart, windowEnd, nowIso = new Date
     windowStart,
     windowEnd,
     uncheckedStaleMinutes: Number(thresholds().skillTurnUncheckedMinutes ?? 60),
+    runInput: skillRunLog,
   });
   skillTurnCoverage.guardNotInvokedRuns = findGuardNotInvokedRuns(skillRunLog, skillTurnLog, { windowStart, windowEnd });
   skillTurnCoverage.counts.guardNotInvoked = skillTurnCoverage.guardNotInvokedRuns.length;

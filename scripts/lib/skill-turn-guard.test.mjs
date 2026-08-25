@@ -7,6 +7,7 @@ import {
   createPromptRoutedEvent,
   createStopCheckedEvent,
   evaluateTurnCompliance,
+  latestPromptEvent,
   routeSkillPrompt,
   summarizeSkillTurns,
 } from "./skill-turn-guard.mjs";
@@ -17,6 +18,7 @@ function run(overrides = {}) {
     runId: "SR-1",
     skill: "cuoti-fupan",
     sessionId: "session-1",
+    runPurpose: "learning",
     status: "waiting_user",
     lastEventAt: "2026-08-12T01:00:01.000Z",
     events: [{ turnId: "turn-1" }],
@@ -125,6 +127,69 @@ describe("Skill 宿主路由", () => {
 });
 
 describe("Skill Stop 审计", () => {
+  it("Claude Stop 无 prompt_id 时只回落到同 session 最新 Claude prompt", () => {
+    const older = createPromptRoutedEvent({
+      producer_host: "claude",
+      session_id: "claude-session",
+      prompt_id: "prompt-old",
+      prompt: "复盘错题",
+    }, new Map(), "2026-08-12T01:00:00Z");
+    const latest = createPromptRoutedEvent({
+      producer_host: "claude",
+      session_id: "claude-session",
+      prompt_id: "prompt-new",
+      prompt: "带我背法理",
+    }, new Map(), "2026-08-12T01:01:00Z");
+    const codex = createPromptRoutedEvent({
+      producer_host: "codex",
+      session_id: "codex-session",
+      turn_id: "turn-codex",
+      prompt: "复盘错题",
+    }, new Map(), "2026-08-12T01:02:00Z");
+
+    expect(latestPromptEvent([older, latest], "claude-session", null)?.turnId).toBe("prompt-new");
+    expect(latestPromptEvent([codex], "codex-session", null)).toBeNull();
+    expect(latestPromptEvent([older, { ...codex, sessionId: "claude-session" }], "claude-session", null)).toBeNull();
+    expect(latestPromptEvent([
+      older,
+      latest,
+      { event: "stop_checked", sessionId: "claude-session", turnId: "prompt-new", continued: true },
+    ], "claude-session", null)?.turnId).toBe("prompt-new");
+    expect(latestPromptEvent([
+      older,
+      latest,
+      { event: "stop_checked", sessionId: "claude-session", turnId: "prompt-new", continued: false },
+    ], "claude-session", null)).toBeNull();
+  });
+
+  it("Claude Stop 回落后用真实 prompt_id 落 stop_checked，并保留 purpose", () => {
+    const prompt = createPromptRoutedEvent({
+      producer_host: "claude",
+      session_id: "claude-session",
+      prompt_id: "claude-prompt",
+      prompt: "复盘错题",
+    }, new Map(), "2026-08-12T01:00:00Z");
+    const check = createStopCheckedEvent(
+      {
+        producer_host: "claude",
+        hook_event_name: "Stop",
+        session_id: "claude-session",
+        stop_hook_active: false,
+      },
+      prompt,
+      { compliant: true, run: run({ runPurpose: "diagnostic" }) },
+      { now: "2026-08-12T01:00:01Z" },
+    );
+    expect(check).toMatchObject({
+      producerHost: "claude",
+      sessionId: "claude-session",
+      turnId: "claude-prompt",
+      turnIdSource: "session_latest",
+      identityState: "full",
+      runPurpose: "diagnostic",
+    });
+  });
+
   it("普通自背进度落账后没有更晚的抽查 Run 时阻断 Stop", () => {
     const prompt = createPromptRoutedEvent({
       session_id: "session-1",
@@ -164,6 +229,30 @@ describe("Skill Stop 审计", () => {
     const prompt = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-1", prompt: "复盘错题" }, new Map(), "2026-08-12T01:00:00Z");
     expect(evaluateTurnCompliance(prompt, new Map([["SR-1", run()]])).compliant).toBe(true);
     expect(evaluateTurnCompliance(prompt, new Map())).toMatchObject({ compliant: false, failureCode: "missing_run" });
+  });
+
+  it("已路由学习入口不能用 diagnostic Run 绕过守卫和学习合规分母", () => {
+    const prompt = createPromptRoutedEvent({
+      session_id: "session-1",
+      turn_id: "turn-1",
+      prompt: "复盘错题",
+    }, new Map(), "2026-08-12T01:00:00Z");
+    const diagnosticRun = run({ runPurpose: "diagnostic" });
+    const result = evaluateTurnCompliance(prompt, new Map([[diagnosticRun.runId, diagnosticRun]]));
+    expect(result).toMatchObject({ compliant: false, failureCode: "run_purpose_mismatch" });
+    const check = createStopCheckedEvent(
+      { session_id: "session-1", turn_id: "turn-1", stop_hook_active: false },
+      prompt,
+      result,
+      { now: "2026-08-12T01:00:01Z" },
+    );
+    expect(check).toMatchObject({ runPurpose: "diagnostic", compliancePurpose: "learning" });
+    const summary = summarizeSkillTurns([prompt, check], {
+      windowStart: "2026-08-12",
+      windowEnd: "2026-08-12",
+    });
+    expect(summary.counts).toMatchObject({ routed: 1, checked: 1, failed: 1 });
+    expect(summary.compliance).toMatchObject({ eligible: 1, rate: 0 });
   });
 
   it("本轮刚放行的题面必须原样出现在最终消息，改一个字也阻断", () => {
@@ -285,5 +374,98 @@ describe("Skill Stop 审计", () => {
     const summary = summarizeSkillTurns([prompt, check], { windowStart: "2026-08-12", windowEnd: "2026-08-12" });
     expect(summary.turnLatencyMs).toMatchObject({ samples: 1, p50: 2500, p95: 2500, max: 2500, boundary: "user_prompt_submit_to_final_stop" });
     expect(summary.turnLatencyMs.bySkill["cuoti-fupan"]).toMatchObject({ samples: 1, p50: 2500 });
+  });
+
+  it("学习宿主合规率排除 diagnostic/simulation，但旧回执仍按 learning 兼容", () => {
+    const prompt = (turnId, observedAt) => createPromptRoutedEvent({
+      session_id: "session-1",
+      turn_id: turnId,
+      prompt: "复盘错题",
+    }, new Map(), observedAt);
+    const learningPrompt = prompt("turn-learning", "2026-08-12T01:00:00.000Z");
+    const diagnosticPrompt = prompt("turn-diagnostic", "2026-08-12T01:01:00.000Z");
+    const simulationPrompt = prompt("turn-simulation", "2026-08-12T01:02:00.000Z");
+    const legacyPrompt = prompt("turn-legacy", "2026-08-12T01:03:00.000Z");
+    const diagnosticUncheckedPrompt = prompt("turn-diagnostic-unchecked", "2026-08-12T01:04:00.000Z");
+    const runInput = [{
+      schemaVersion: 2,
+      event: "started",
+      runId: "SR-DIAGNOSTIC-UNCHECKED",
+      runPurpose: "diagnostic",
+      producerHost: "codex",
+      sessionId: "session-1",
+      turnId: "turn-diagnostic-unchecked",
+      observedAt: "2026-08-12T01:04:00.500Z",
+    }];
+    const checks = [
+      createStopCheckedEvent(
+        { session_id: "session-1", turn_id: "turn-learning" },
+        learningPrompt,
+        { compliant: true, run: run({ runPurpose: "learning" }) },
+        { now: "2026-08-12T01:00:01.000Z" },
+      ),
+      createStopCheckedEvent(
+        { session_id: "session-1", turn_id: "turn-diagnostic" },
+        diagnosticPrompt,
+        { compliant: false, failureCode: "blocked_run", run: run({ runPurpose: "diagnostic" }) },
+        { continued: true, now: "2026-08-12T01:01:02.000Z" },
+      ),
+      createStopCheckedEvent(
+        { session_id: "session-1", turn_id: "turn-simulation" },
+        simulationPrompt,
+        { compliant: true, run: run({ runPurpose: "simulation" }) },
+        { now: "2026-08-12T01:02:03.000Z" },
+      ),
+      {
+        ...createStopCheckedEvent(
+          { session_id: "session-1", turn_id: "turn-legacy" },
+          legacyPrompt,
+          { compliant: true, run: run({ runPurpose: "learning" }) },
+          { now: "2026-08-12T01:03:04.000Z" },
+        ),
+        runPurpose: undefined,
+      },
+    ];
+    const summary = summarizeSkillTurns([
+      learningPrompt,
+      diagnosticPrompt,
+      simulationPrompt,
+      legacyPrompt,
+      diagnosticUncheckedPrompt,
+      ...checks,
+    ], {
+      nowIso: "2026-08-12T03:00:00Z",
+      windowStart: "2026-08-12",
+      windowEnd: "2026-08-12",
+      runInput,
+    });
+
+    expect(summary.counts).toMatchObject({ routed: 2, checked: 2, passed: 2, protected: 0, failed: 0 });
+    expect(summary.compliance).toMatchObject({ eligible: 2, rate: 100 });
+    expect(summary.turnLatencyMs).toMatchObject({ samples: 2, p50: 1000, p95: 4000 });
+    expect(summary.purposeScope).toMatchObject({
+      selected: "learning",
+      legacyFallback: "learning",
+      stopCheckedByPurpose: { learning: 2, diagnostic: 1, simulation: 1 },
+      routedByPurpose: { learning: 2, diagnostic: 2, simulation: 1 },
+      excludedRouted: 3,
+    });
+    const diagnostic = summarizeSkillTurns([
+      learningPrompt,
+      diagnosticPrompt,
+      simulationPrompt,
+      legacyPrompt,
+      diagnosticUncheckedPrompt,
+      ...checks,
+    ], {
+      nowIso: "2026-08-12T03:00:00Z",
+      windowStart: "2026-08-12",
+      windowEnd: "2026-08-12",
+      runPurpose: "diagnostic",
+      runInput,
+    });
+    expect(diagnostic.counts).toMatchObject({ routed: 2, checked: 1, protected: 1, failed: 0, unchecked: 1 });
+    expect(diagnostic.purposeScope).toMatchObject({ selected: "diagnostic", excludedRouted: 3 });
+    expect(() => summarizeSkillTurns([], { runPurpose: "other" })).toThrow(/runPurpose/);
   });
 });
