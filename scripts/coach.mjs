@@ -11,6 +11,12 @@ import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mj
 import { appendOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { buildStudyLogAttemptConfig } from "./lib/attempt-producers.mjs";
 import {
+  isSequentialCoverageActivity,
+  loadGeneratedExamOutline,
+  planCoverageRange,
+  resolveOutlineChapter,
+} from "./lib/coverage-range.mjs";
+import {
   recordBusinessWriteback,
   recordDaibeiProgressWriteback,
   recordEnglishReadingWriteback,
@@ -24,6 +30,7 @@ import {
 
 const db = createClient(process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const cfg = JSON.parse(readFileSync("config/coach.json", "utf8"));
+const EXAM_OUTLINE = loadGeneratedExamOutline();
 // [gpt] 2026-08-23：跨科聚合活动使用“综合”，避免把整场复盘错误归到其中一科。
 const SUBJECTS = ["刑法", "民法", "法理", "宪法", "法制史", "英语", "综合"]; // 英语=公共课(2026-07-10 起)，账本同库、量化v3不计入
 const DAY = 86400000;
@@ -35,6 +42,30 @@ function parseFlags(args) {
   const o = {};
   for (let i = 0; i < args.length; i++) if (args[i].startsWith("--")) o[args[i].slice(2)] = (args[i + 1] && !args[i + 1].startsWith("--")) ? args[++i] : true;
   return o;
+}
+
+function explicitTrue(value) {
+  return value === true || ["1", "true", "yes"].includes(String(value ?? "").trim().toLowerCase());
+}
+
+function appendRawMarker(raw, marker) {
+  const value = raw == null ? "" : String(raw).trim();
+  if (!marker) return value || null;
+  return value ? `${value} ${marker}` : marker;
+}
+
+// [gpt] 2026-08-25：只在目标能唯一归章时读同科同活动最近轨迹；无法归章只提示，不为抽象风险增加查询。
+async function loadCoveragePriorRows(subject, activity) {
+  let query = db.from("study_log")
+    .select("id, chapter, activity, log_date")
+    .eq("subject", subject)
+    .not("chapter", "is", null);
+  query = activity === "背诵"
+    ? query.in("activity", ["背诵", "带背", "自背"])
+    : query.eq("activity", activity);
+  const response = await query.order("id", { ascending: false }).limit(40);
+  if (response.error) throw new Error(`覆盖区间前置读取失败：${response.error.message}`);
+  return response.data ?? [];
 }
 
 async function flushOutbox() {
@@ -72,6 +103,47 @@ async function log(args) {
     process.exitCode = 1;
     return;
   }
+  let coveragePlan;
+  try {
+    const coverageFrom = f["coverage-from"] && f["coverage-from"] !== true
+      ? String(f["coverage-from"])
+      : null;
+    const coverageGapConfirmed = explicitTrue(f["coverage-gap-confirmed"]);
+    const coverageGapReason = f["coverage-gap-reason"] && f["coverage-gap-reason"] !== true
+      ? String(f["coverage-gap-reason"])
+      : null;
+    const targetResolution = resolveOutlineChapter(EXAM_OUTLINE, f.subject, f.chapter);
+    const priorRows = isSequentialCoverageActivity(activity) && targetResolution.state === "resolved"
+      ? await loadCoveragePriorRows(f.subject, activity)
+      : [];
+    coveragePlan = planCoverageRange({
+      examOutline: EXAM_OUTLINE,
+      subject: f.subject,
+      activity,
+      target: f.chapter || null,
+      priorRows,
+      coverageFrom,
+      coverageGapConfirmed,
+      coverageGapReason,
+    });
+  } catch (error) {
+    console.error(`❌ 覆盖区间前置校验失败：${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+    return;
+  }
+  if (coveragePlan.status === "blocked" || coveragePlan.status === "invalid") {
+    console.error(`❌ ${coveragePlan.code}：${coveragePlan.message}`);
+    if (coveragePlan.prior?.chapter) console.error(`   上一可确认落点：${coveragePlan.prior.chapter.label}`);
+    if (coveragePlan.target) console.error(`   本次终点：${coveragePlan.target.label}`);
+    if (coveragePlan.pendingUnits?.length) console.error(`   待确认区间：${coveragePlan.pendingUnits.map((unit) => unit.label).join("、")}`);
+    if (coveragePlan.status === "blocked") {
+      console.error(`→ 本次确实覆盖了整段：补 --coverage-from "${coveragePlan.pendingUnits?.[0]?.label ?? "区间起点"}"，一次写齐各章流水。`);
+      console.error('→ 确实选学或跳过：补 --coverage-gap-confirmed --coverage-gap-reason "原因"；不会伪造中间覆盖。');
+    }
+    process.exitCode = 2;
+    return;
+  }
+  if (coveragePlan.status === "hint") console.error(`⚠️ ${coveragePlan.code}：${coveragePlan.message}`);
   let attempt = null;
   try {
     attempt = buildStudyLogAttemptConfig(f, { date, subject: f.subject, chapter: f.chapter || null });
@@ -80,14 +152,34 @@ async function log(args) {
     process.exitCode = 1;
     return;
   }
-  const op = {
-    op: "study_log", subject: f.subject, chapter: f.chapter || null,
-    activity,
-    accuracy: f.accuracy != null && f.accuracy !== true ? Number(f.accuracy) : null,
-    feeling: f.feeling && f.feeling !== true ? f.feeling : null,
-    raw: withRecitationModeMarker(f.raw && f.raw !== true ? f.raw : null, recitationMode), date,
-    ...(attempt ? { attempt } : {}),
-  };
+  const baseRaw = withRecitationModeMarker(f.raw && f.raw !== true ? f.raw : null, recitationMode);
+  const explicitRange = coveragePlan.unitsToWrite.length > 1
+    ? `[覆盖区间=${coveragePlan.unitsToWrite[0].label}→${coveragePlan.unitsToWrite.at(-1).label}]`
+    : null;
+  const confirmedGap = coveragePlan.coverageGapReason
+    ? `[覆盖跳跃已确认=${coveragePlan.pendingUnits.map((unit) => unit.label).join("、") || "无中间单元"}；原因=${coveragePlan.coverageGapReason}]`
+    : null;
+  const rangeMarker = [explicitRange, confirmedGap].filter(Boolean).join(" ") || null;
+  const plannedOps = coveragePlan.unitsToWrite.map((unit) => ({
+    unit,
+    op: {
+      op: "study_log",
+      subject: f.subject,
+      chapter: unit.isTarget ? (f.chapter || unit.label || null) : unit.label,
+      activity,
+      accuracy: unit.isTarget && f.accuracy != null && f.accuracy !== true ? Number(f.accuracy) : null,
+      feeling: unit.isTarget && f.feeling && f.feeling !== true ? f.feeling : null,
+      raw: appendRawMarker(unit.isTarget ? baseRaw : null, rangeMarker),
+      date,
+      ...(unit.isTarget && attempt ? { attempt } : {}),
+    },
+  }));
+  const op = plannedOps.find(({ unit }) => unit.isTarget)?.op ?? plannedOps.at(-1)?.op;
+  if (!op) {
+    console.error("❌ 覆盖区间没有生成可写入单元，已中止");
+    process.exitCode = 1;
+    return;
+  }
   // [gpt] 2026-08-21：规范 activity 之外，Run Gate 还要核验 raw 中真实保留的自背方式。
   const recordedRecitationMode = recitationMode
     ?? String(op.raw ?? "").match(/\[背诵方式=(带背|自背)\]/u)?.[1]
@@ -106,8 +198,12 @@ async function log(args) {
     })
     : null;
   // [gpt] 2026-08-21：保留 appendOutbox 生成的 operation_id；否则同步虽成功，Run 回执会因拿 undefined 匹配而漏签。
-  const stagedOp = stage(op);
-  console.log(`⏳ 已暂存待同步·学习日志：${stagedOp.date} ${stagedOp.subject}${stagedOp.chapter ? " " + stagedOp.chapter : ""} ${stagedOp.activity}${stagedOp.accuracy != null ? " " + stagedOp.accuracy + "%" : ""}${stagedOp.feeling ? "（" + stagedOp.feeling + "）" : ""}${attempt ? " + 统一尝试分母" : ""}`);
+  const stagedPlans = plannedOps.map(({ unit, op: plannedOp }) => ({ unit, stagedOp: stage(plannedOp) }));
+  const stagedOp = stagedPlans.find(({ unit }) => unit.isTarget)?.stagedOp ?? stagedPlans.at(-1).stagedOp;
+  if (stagedPlans.length > 1) console.log(`⏳ 已按显式覆盖区间一次暂存 ${stagedPlans.length} 条学习日志（每章一条，不把终点当唯一覆盖单元）：`);
+  for (const { stagedOp: item } of stagedPlans) {
+    console.log(`${stagedPlans.length > 1 ? "   ·" : "⏳ 已暂存待同步·学习日志："} ${item.date} ${item.subject}${item.chapter ? " " + item.chapter : ""} ${item.activity}${item.accuracy != null ? " " + item.accuracy + "%" : ""}${item.feeling ? "（" + item.feeling + "）" : ""}${item.attempt ? " + 统一尝试分母" : ""}`);
+  }
   if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
   const report = await flushOutbox();
   if (report && f.run && f.run !== true) {
@@ -356,6 +452,7 @@ else {
   console.log("用法：node --env-file=.env.local scripts/coach.mjs <ledger|log|correct-log|remember>");
   console.log("  ledger                                     读完整共享账本");
   console.log('  log --subject 刑法 --activity 复盘 --chapter "..." [--accuracy N --feeling "..." --date YYYY-MM-DD --run SR-...]  记录学习日志');
+  console.log('      顺序活动跳章：--coverage-from "起始章" 一次补齐；确实跳过则 --coverage-gap-confirmed --coverage-gap-reason "原因"');
   console.log('  correct-log --match-date YYYY-MM-DD --match-subject 民法 --match-chapter "旧章节" --match-activity 复盘 --subject 综合 --chapter "新章节" --activity 复盘 [--feeling "..." --run SR-...]  唯一命中并原地更正学习日志');
   console.log('      daibei 自背进度：--activity 自背 --chapter "稳定章节" --run SR-...（自动规范为 activity=背诵 并签 progress 回执）');
   console.log('      显式尝试：--attempt-source objective_question|subjective_answer --question "稳定题号" --result pass|partial|fail|void --score N --max N');
