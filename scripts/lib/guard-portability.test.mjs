@@ -15,22 +15,28 @@ function invoke(input) {
   const directory = mkdtempSync(join(tmpdir(), "guard-portability-"));
   directories.push(directory);
   const turnFile = join(directory, "turns.jsonl");
+  const result = invokeInDirectory(directory, input);
+  return {
+    result,
+    events: readFileSync(turnFile, "utf8").trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)),
+  };
+}
+
+function invokeInDirectory(directory, input, env = {}) {
   const result = spawnSync(process.execPath, ["scripts/codex-skill-guard.mjs"], {
     cwd: process.cwd(),
     env: {
       ...process.env,
       FASHUO_PRODUCER_HOST: "codex",
       CODEX_THREAD_ID: "session-1",
-      FASHUO_SKILL_TURN_FILE: turnFile,
+      FASHUO_SKILL_TURN_FILE: join(directory, "turns.jsonl"),
       FASHUO_SKILL_RUN_FILE: join(directory, "runs.jsonl"),
+      ...env,
     },
     input: JSON.stringify(input),
     encoding: "utf8",
   });
-  return {
-    result,
-    events: readFileSync(turnFile, "utf8").trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line)),
-  };
+  return result;
 }
 
 describe("Skill guard 宿主可移植性", () => {
@@ -102,5 +108,47 @@ describe("Skill guard 宿主可移植性", () => {
       turnId: "turn-1",
     }])).toEqual([]);
     expect(findGuardNotInvokedRuns([{ ...started, runPurpose: "simulation" }], [])).toEqual([]);
+  });
+
+  it("Claude Stop 正式载荷没有 prompt_id 时仍按 session 对账并落审计", () => {
+    const directory = mkdtempSync(join(tmpdir(), "guard-portability-claude-"));
+    directories.push(directory);
+    const env = {
+      FASHUO_PRODUCER_HOST: "claude",
+      FASHUO_SESSION_ID: "claude-session",
+      CODEX_THREAD_ID: "",
+    };
+    const prompt = invokeInDirectory(directory, {
+      hook_event_name: "UserPromptSubmit",
+      session_id: "claude-session",
+      prompt_id: "claude-prompt",
+      prompt: "复盘错题",
+    }, env);
+    expect(prompt.status).toBe(0);
+    expect(JSON.parse(prompt.stdout)).toMatchObject({
+      hookSpecificOutput: { hookEventName: "UserPromptSubmit" },
+    });
+
+    const stop = invokeInDirectory(directory, {
+      hook_event_name: "Stop",
+      session_id: "claude-session",
+      stop_hook_active: false,
+      last_assistant_message: "测试结束",
+    }, env);
+    expect(stop.status).toBe(0);
+    expect(JSON.parse(stop.stdout)).toMatchObject({ decision: "block" });
+    const events = readFileSync(join(directory, "turns.jsonl"), "utf8")
+      .trim().split(/\r?\n/u).filter(Boolean).map((line) => JSON.parse(line));
+    expect(events.at(-1)).toMatchObject({
+      event: "stop_checked",
+      producerHost: "claude",
+      sessionId: "claude-session",
+      turnId: "claude-prompt",
+      turnIdSource: "session_latest",
+      identityState: "full",
+      failureCode: "missing_run",
+      continued: true,
+      runPurpose: "learning",
+    });
   });
 });

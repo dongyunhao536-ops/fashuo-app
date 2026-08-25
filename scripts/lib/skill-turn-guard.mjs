@@ -29,6 +29,7 @@ const CONTROLLED_SKILLS = new Set([
 ]);
 
 const RETRY_PATTERN = /^SKILL_EXECUTION_GUARD_RETRY\|skill=([a-z-]+)\|code=([a-z_]+)/u;
+const RUN_PURPOSES = new Set(["learning", "diagnostic", "simulation"]);
 const SYSTEM_DIAGNOSTIC_INTENT = /(?:诊断|监控|迁移|升级|代码|脚本|配置|故障|速度慢|日志|遥测|机制|执行.{0,8}(?:慢|异常|问题|不严格|不完整)|为什么.{0,8}(?:不执行|没执行|失效))/u;
 const EXPLICIT_SKILL_USE = /(?:使用|调用|按|走)\s*(?:ask-pc|coach-pc|cuoti-fupan|daibei-pc|lunshu-pc|yingyu-pc)/iu;
 const LEGAL_DOMAIN = /(?:法硕|法律|刑法|民法|法理|宪法|法制史|犯罪|罪名|合同|侵权|物权|债权|人格权|婚姻|继承|居住权|租赁权|占有|所有权|监护|代理|时效|法条|司法解释|案例)/u;
@@ -110,7 +111,7 @@ function eventBase({
     throw new Error("新 Skill Turn 事件 identityState 只接受 full|host_only");
   }
   if (!TURN_ID_SOURCES.includes(normalizedTurnIdSource) || normalizedTurnIdSource === "legacy") {
-    throw new Error("新 Skill Turn 事件 turnIdSource 只接受 turn_id|prompt_id|explicit|none");
+    throw new Error("新 Skill Turn 事件 turnIdSource 只接受 turn_id|prompt_id|session_latest|explicit|none");
   }
   return {
     schemaVersion: SKILL_TURN_SCHEMA_VERSION,
@@ -326,9 +327,22 @@ export function createSessionSeenEvent(payload = {}, now = new Date()) {
 }
 
 export function latestPromptEvent(events, sessionId, turnId) {
-  return [...(events ?? [])].reverse().find((event) => (
-    event.event === "prompt_routed" && event.sessionId === sessionId && event.turnId === turnId
-  )) ?? null;
+  const candidates = [...(events ?? [])].reverse().filter((event) => (
+    event.event === "prompt_routed" && event.sessionId === sessionId
+  ));
+  if (turnId) return candidates.find((event) => event.turnId === turnId) ?? null;
+  // [gpt] 2026-08-25：Claude Stop 缺 prompt_id 时按同 session 最新一轮回落；
+  // Codex 缺 turn_id 仍须 fail-open，不得借此把载荷缺字段静默掩盖。
+  const latest = candidates[0];
+  if (latest?.producerHost !== "claude") return null;
+  // 若这一轮已经完成最终 Stop 审计，新一轮 UserPromptSubmit 又没有留下事件，
+  // 不得把新的 Stop 错配给旧轮次；第一次 continued=true 后的重试仍可继续匹配。
+  const latestCheck = [...(events ?? [])].reverse().find((event) => (
+    event.event === "stop_checked"
+      && event.sessionId === latest.sessionId
+      && event.turnId === latest.turnId
+  ));
+  return latestCheck && !latestCheck.continued ? null : latest;
 }
 
 export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssistantMessage = null } = {}) {
@@ -342,6 +356,11 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
     .filter((item) => item.events.some((event) => event.turnId === promptEvent.turnId))
     .sort((left, right) => String(right.lastEventAt).localeCompare(String(left.lastEventAt)))[0] ?? null;
   if (!run) return { applicable: true, compliant: false, failureCode: "missing_run", run: null };
+  // prompt_routed 只代表真实学习入口；模型不能用 diagnostic/simulation 标签绕过 Stop 守卫，
+  // 再让统计层把这次失败从学习分母里排除。系统诊断本来就不会产生 expectedSkill。
+  if (RUN_PURPOSES.has(run.runPurpose) && run.runPurpose !== "learning") {
+    return { applicable: true, compliant: false, failureCode: "run_purpose_mismatch", run };
+  }
   if (run.status === "waiting_user") {
     const checkpoint = [...run.events].reverse().find((event) => (
       event.event === "checkpoint_passed" && String(event.phase).endsWith("question") && event.turnId === promptEvent.turnId
@@ -380,7 +399,19 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
 }
 
 export function createStopCheckedEvent(payload = {}, promptEvent, result, { continued = false, now = new Date() } = {}) {
-  const identity = resolveHookIdentity(payload);
+  const hookIdentity = resolveHookIdentity(payload);
+  const fallbackTurnId = hookIdentity.turnIdSource === "session_latest" ? promptEvent?.turnId ?? null : null;
+  const identity = fallbackTurnId
+    ? {
+      ...hookIdentity,
+      turnId: fallbackTurnId,
+      identityState: hookIdentity.sessionId ? "full" : hookIdentity.identityState,
+    }
+    : hookIdentity;
+  const rawRunPurpose = safeToken(result?.run?.runPurpose, "runPurpose", { max: 20 });
+  // 旧 Run 与 missing_run 没有 purpose；为兼容既有学习遥测，均按 learning 计入。
+  const runPurpose = RUN_PURPOSES.has(rawRunPurpose) ? rawRunPurpose : "learning";
+  const compliancePurpose = result?.failureCode === "run_purpose_mismatch" ? "learning" : runPurpose;
   return {
     ...eventBase({ event: "stop_checked", ...identity, now }),
     expectedSkill: promptEvent?.expectedSkill ?? null,
@@ -390,6 +421,8 @@ export function createStopCheckedEvent(payload = {}, promptEvent, result, { cont
     failureCode: result?.failureCode ?? null,
     continued: Boolean(continued),
     stopHookActive: Boolean(payload.stop_hook_active),
+    runPurpose,
+    compliancePurpose,
   };
 }
 
@@ -432,25 +465,65 @@ export function summarizeSkillTurns(input = {}, {
   windowStart = null,
   windowEnd = null,
   uncheckedStaleMinutes = 60,
+  runPurpose = "learning",
+  runInput = [],
 } = {}) {
+  if (!RUN_PURPOSES.has(runPurpose)) throw new Error("runPurpose 只接受 learning|diagnostic|simulation");
   const events = Array.isArray(input) ? input : input.events ?? [];
   const issues = Array.isArray(input) ? [] : input.issues ?? [];
   const telemetrySources = Array.isArray(input) ? [] : input.files ?? [];
-  const prompts = events.filter((event) => event.event === "prompt_routed" && event.expectedSkill && inWindow(event.observedAt, windowStart, windowEnd));
+  const allPrompts = events.filter((event) => event.event === "prompt_routed" && event.expectedSkill && inWindow(event.observedAt, windowStart, windowEnd));
   const sessions = events.filter((event) => event.event === "session_seen" && inWindow(event.observedAt, windowStart, windowEnd));
   const observedEvents = events.filter((event) => inWindow(event.observedAt, windowStart, windowEnd));
   const guardErrors = observedEvents.filter((event) => event.event === "guard_error");
+  const runEvents = Array.isArray(runInput) ? runInput : runInput.events ?? [];
+  const purposeByRunId = new Map(runEvents
+    .filter((event) => event.event === "started" && event.runId)
+    .map((event) => [event.runId, RUN_PURPOSES.has(event.runPurpose) ? event.runPurpose : "learning"]));
+  const purposeByTurn = new Map();
+  const setTurnPurpose = (key, purpose) => {
+    if (!key) return;
+    if (!purposeByTurn.has(key)) {
+      purposeByTurn.set(key, purpose);
+      return;
+    }
+    const previous = purposeByTurn.get(key);
+    if (previous !== purpose) purposeByTurn.set(key, null);
+  };
+  for (const event of runEvents) {
+    const purpose = purposeByRunId.get(event.runId);
+    if (!purpose || !event.sessionId || !event.turnId) continue;
+    setTurnPurpose(`${event.producerHost ?? "unknown"}:${event.sessionId}:${event.turnId}`, purpose);
+    setTurnPurpose(`${event.sessionId}:${event.turnId}`, purpose);
+  }
   const checksByTurn = new Map();
   for (const event of events.filter((item) => item.event === "stop_checked")) {
     checksByTurn.set(`${event.sessionId}:${event.turnId}`, event);
   }
-  const checked = prompts.map((prompt) => ({ prompt, check: checksByTurn.get(`${prompt.sessionId}:${prompt.turnId}`) ?? null }));
+  const allChecked = allPrompts.map((prompt) => ({ prompt, check: checksByTurn.get(`${prompt.sessionId}:${prompt.turnId}`) ?? null }));
+  const pairPurpose = ({ prompt, check }) => {
+    if (RUN_PURPOSES.has(check?.compliancePurpose)) return check.compliancePurpose;
+    if (RUN_PURPOSES.has(check?.runPurpose)) return check.runPurpose;
+    return purposeByTurn.get(`${prompt.producerHost ?? "unknown"}:${prompt.sessionId}:${prompt.turnId}`)
+      ?? purposeByTurn.get(`${prompt.sessionId}:${prompt.turnId}`)
+      ?? "learning";
+  };
+  // 旧 stop_checked 与尚未审计的路由没有 purpose，按 learning 兼容；已有明确
+  // diagnostic/simulation 回执的轮次从学习合规率、漏审与耗时中排除。历史漏审
+  // 没有 stop_checked 时，再按同 host/session/turn 的 Run purpose 归类。
+  const checked = allChecked.filter((pair) => pairPurpose(pair) === runPurpose);
+  const prompts = checked.map(({ prompt }) => prompt);
   const nowMs = new Date(nowIso).getTime();
   const unchecked = checked.filter(({ prompt, check }) => !check
     && Number.isFinite(nowMs)
     && (nowMs - new Date(prompt.observedAt).getTime()) / 60000 >= uncheckedStaleMinutes);
   const finalFailures = checked.filter(({ check }) => check && !check.compliant && !check.continued);
-  const protectedRuns = events.filter((event) => event.event === "stop_checked" && event.continued && inWindow(event.observedAt, windowStart, windowEnd));
+  const protectedRuns = events.filter((event) => (
+    event.event === "stop_checked"
+      && event.continued
+      && (event.compliancePurpose ?? event.runPurpose ?? "learning") === runPurpose
+      && inWindow(event.observedAt, windowStart, windowEnd)
+  ));
   const passed = checked.filter(({ check }) => check?.compliant);
   // [gpt] 2026-08-20：宿主可观测耗时定义为 UserPromptSubmit 到最终 Stop；用户等待与 Skill 自动步骤另行统计。
   const turnLatencies = checked.flatMap(({ prompt, check }) => {
@@ -466,6 +539,26 @@ export function summarizeSkillTurns(input = {}, {
   });
   return {
     telemetrySources,
+    purposeScope: {
+      selected: runPurpose,
+      legacyFallback: "learning",
+      stopCheckedByPurpose: Object.fromEntries([...RUN_PURPOSES].map((purpose) => [
+        purpose,
+        observedEvents.filter((event) => event.event === "stop_checked" && (event.runPurpose ?? "learning") === purpose).length,
+      ])),
+      complianceCheckedByPurpose: Object.fromEntries([...RUN_PURPOSES].map((purpose) => [
+        purpose,
+        observedEvents.filter((event) => (
+          event.event === "stop_checked"
+            && (event.compliancePurpose ?? event.runPurpose ?? "learning") === purpose
+        )).length,
+      ])),
+      routedByPurpose: Object.fromEntries([...RUN_PURPOSES].map((purpose) => [
+        purpose,
+        allChecked.filter((pair) => pairPurpose(pair) === purpose).length,
+      ])),
+      excludedRouted: allPrompts.length - prompts.length,
+    },
     counts: {
       routed: prompts.length,
       sessions: new Set(sessions.map((event) => event.sessionId)).size,

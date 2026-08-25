@@ -608,6 +608,56 @@ describe("Skill Run 硬闸", () => {
 });
 
 describe("Skill Run 监控摘要", () => {
+  it("学习摘要排除 diagnostic/simulation，同时保留按 purpose 单独查看", () => {
+    const { file } = harness();
+    for (const [runId, runPurpose, minute] of [
+      ["SR-PURPOSE-LEARNING", "learning", "00"],
+      ["SR-PURPOSE-DIAGNOSTIC", "diagnostic", "01"],
+      ["SR-PURPOSE-SIMULATION", "simulation", "02"],
+    ]) {
+      const started = startSkillRun({
+        skill: "coach-pc",
+        file,
+        runId,
+        runPurpose,
+        now: `2026-08-25T01:${minute}:00Z`,
+      });
+      endSkillRun({
+        runId: started.runId,
+        outcome: "aborted",
+        abortReason: "test_fixture",
+        abortSource: "system",
+        file,
+        now: `2026-08-25T01:${minute}:01Z`,
+      });
+    }
+
+    const parsed = readSkillRunEvents(file);
+    const learning = summarizeSkillRuns(parsed, {
+      nowIso: "2026-08-25T02:00:00Z",
+      windowStart: "2026-08-25",
+      windowEnd: "2026-08-25",
+    });
+    expect(learning.counts).toMatchObject({ runs: 1, aborted: 1, abandonedAborted: 1 });
+    expect(learning.compliance).toMatchObject({ eligible: 1, rawStarted: 1, rawRate: 0 });
+    expect(learning.purposeScope).toEqual({
+      selected: "learning",
+      legacyFallback: "learning",
+      byPurpose: { learning: 1, diagnostic: 1, simulation: 1 },
+      excluded: 2,
+    });
+
+    const diagnostic = summarizeSkillRuns(parsed, {
+      nowIso: "2026-08-25T02:00:00Z",
+      windowStart: "2026-08-25",
+      windowEnd: "2026-08-25",
+      runPurpose: "diagnostic",
+    });
+    expect(diagnostic.counts).toMatchObject({ runs: 1, aborted: 1 });
+    expect(diagnostic.purposeScope).toMatchObject({ selected: "diagnostic", excluded: 2 });
+    expect(() => summarizeSkillRuns(parsed, { runPurpose: "other" })).toThrow(/runPurpose/);
+  });
+
   it("把带背阶段错配和进度后未抽查从干净收口中剔除", () => {
     const { file } = harness();
     const events = [

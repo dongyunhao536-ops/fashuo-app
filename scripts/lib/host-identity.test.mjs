@@ -45,6 +45,33 @@ describe("host identity", () => {
     });
   });
 
+  it("Claude Stop 无 prompt_id 时显式标记按 session 最新轮次回落", () => {
+    expect(resolveHookIdentity({
+      hook_event_name: "Stop",
+      session_id: "claude-session",
+      stop_hook_active: false,
+    }, { env: { FASHUO_PRODUCER_HOST: "claude" } })).toEqual({
+      producerHost: "claude",
+      sessionId: "claude-session",
+      turnId: null,
+      turnIdSource: "session_latest",
+      identityState: "host_only",
+    });
+  });
+
+  it("Codex Stop 缺 turn_id 时不借用 Claude 的 session 回落", () => {
+    expect(resolveHookIdentity({
+      hook_event_name: "Stop",
+      session_id: "codex-session",
+      stop_hook_active: false,
+    }, { env: { FASHUO_PRODUCER_HOST: "codex" } })).toMatchObject({
+      producerHost: "codex",
+      turnId: null,
+      turnIdSource: "none",
+      identityState: "host_only",
+    });
+  });
+
   it("运行时会话优先显式参数，再取 FASHUO_SESSION_ID，最后兼容 CODEX_THREAD_ID", () => {
     expect(runtimeSessionId({ env: { FASHUO_SESSION_ID: "claude", CODEX_THREAD_ID: "codex" }, sessionId: "explicit" })).toBe("explicit");
     expect(runtimeSessionId({ env: { FASHUO_SESSION_ID: "claude", CODEX_THREAD_ID: "codex" } })).toBe("claude");

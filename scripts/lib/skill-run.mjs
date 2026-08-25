@@ -1469,14 +1469,20 @@ export function summarizeSkillRuns(input = {}, {
   windowEnd = null,
   staleMinutes = 24 * 60,
   postProgressProbeGraceMinutes = 10,
+  runPurpose = "learning",
 } = {}) {
+  if (!RUN_PURPOSES.has(runPurpose)) throw new Error("runPurpose 只接受 learning|diagnostic|simulation");
   const events = Array.isArray(input) ? input : input.events ?? [];
   const parseIssues = Array.isArray(input) ? [] : input.issues ?? [];
   const telemetrySources = Array.isArray(input) ? [] : input.files ?? [];
   const nowMs = new Date(nowIso).getTime();
-  const runs = [...reconstructSkillRuns(events).values()].filter((run) => (
+  const allRuns = [...reconstructSkillRuns(events).values()].filter((run) => (
     run.startedAt && (inWindow(run.startedAt, windowStart, windowEnd) || (!run.end && inWindow(run.lastEventAt, windowStart, windowEnd)))
   ));
+  // [gpt] 2026-08-25：诊断/仿真 Run 保留遥测，但不得污染学习完成率、失败数和耗时。
+  // schema v1 与早期 v2 没有 purpose，按历史默认 learning 兼容，避免重算旧窗口时数据消失。
+  const effectivePurpose = (run) => RUN_PURPOSES.has(run.runPurpose) ? run.runPurpose : "learning";
+  const runs = allRuns.filter((run) => effectivePurpose(run) === runPurpose);
   const startupLatency = runs.flatMap((run) => {
     const value = run.steps.context_loaded?.durationMs;
     return Number.isFinite(value) ? [value] : [];
@@ -1609,6 +1615,15 @@ export function summarizeSkillRuns(input = {}, {
   return {
     schemaVersion: SKILL_RUN_SCHEMA_VERSION,
     telemetrySources,
+    purposeScope: {
+      selected: runPurpose,
+      legacyFallback: "learning",
+      byPurpose: Object.fromEntries([...RUN_PURPOSES].map((purpose) => [
+        purpose,
+        allRuns.filter((run) => effectivePurpose(run) === purpose).length,
+      ])),
+      excluded: allRuns.length - runs.length,
+    },
     counts: {
       runs: runs.length,
       completed: completed.length,
