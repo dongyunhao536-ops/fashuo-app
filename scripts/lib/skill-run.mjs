@@ -33,6 +33,10 @@ const AUTO_STEPS = new Set([
   // [gpt] 2026-08-16：英语阅读不能只凭判分/流水收口；语料、干扰项实证与生命周期由专用校验器自动落证。
   "reading_artifacts_verified",
   "lifecycle_checked",
+  // [claude] 2026-08-25：六步预检由手工签改为脚本签。原先它只是白名单里的一个字符串，
+  // 没有任何脚本产出或校验，2026-08-25 答疑实测中我在没读过其定义的情况下就 --done 签了它。
+  // 现由 ask.mjs preflight 从 materials_checked 的真实每类命中数推导判权后自动落证。
+  "preflight_checked",
 ]);
 
 const RUN_PURPOSES = new Set(["learning", "diagnostic", "simulation"]);
@@ -42,7 +46,6 @@ const MANUAL_STEPS = new Set([
   "target_frozen",
   "priority_checked",
   "source_checked",
-  "preflight_checked",
   "reference_answer_checked",
   "rubric_applied",
   "response_verified",

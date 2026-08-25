@@ -594,6 +594,40 @@ export function buildMaterialBatchOutput(corpus, queries) {
     .join("\n\n══════════ 下一组独立检索 ══════════\n\n");
 }
 
+// [claude] 2026-08-25：把每类材料的真实命中数签进 Run，让 ask-pc 的六步预检能从
+// 检索回执推导，而不是靠执行者自己填。原先 evidenceRef 只有 queries:N，预检的
+// 「心得/易混/教材/真题各命中没有」四项无从校验，只能自签——这正是 8-25 答疑
+// 实测里我签了 preflight_checked 却没做预检的口子。
+export function summarizeMaterialHits(corpus, queries) {
+  const totals = Object.fromEntries(KINDS.map(([kind]) => [kind, 0]));
+  for (const { keyword, refine } of queries ?? []) {
+    for (const [kind] of KINDS) {
+      const { totalHits } = grep(corpus.get(kind) ?? [], keyword, refine);
+      totals[kind] += totalHits;
+    }
+  }
+  return totals;
+}
+
+export function formatMaterialEvidenceRef(queries, hits) {
+  const parts = [`q:${(queries ?? []).length}`];
+  for (const [kind] of KINDS) parts.push(`${kind}:${hits?.[kind] ?? 0}`);
+  return parts.join("|");
+}
+
+export function parseMaterialEvidenceRef(evidenceRef) {
+  const out = { queries: 0 };
+  for (const [kind] of KINDS) out[kind] = 0;
+  for (const part of String(evidenceRef ?? "").split("|")) {
+    const [key, rawValue] = part.split(":");
+    const value = Number(rawValue);
+    if (!Number.isInteger(value) || value < 0) continue;
+    if (key === "q" || key === "queries") out.queries = value;
+    else if (key in out) out[key] = value;
+  }
+  return out;
+}
+
 async function loadDbMaterialCorpus() {
   const entries = await Promise.all(KINDS.map(async ([kind]) => {
     const response = await db.from("content_mirror").select("path, content, start_line").eq("kind", kind);
@@ -620,7 +654,7 @@ async function runMaterialQueries({ source, queries, runId = null }) {
       step: "materials_checked",
       status: "pass",
       source: "cuoti-material",
-      evidenceRef: `queries:${queries.length}`,
+      evidenceRef: formatMaterialEvidenceRef(queries, summarizeMaterialHits(corpus, queries)),
       durationMs: Date.now() - startedAt,
     });
     // [claude] 2026-08-24：在使用现场提醒，比写进 skill 文档管用。

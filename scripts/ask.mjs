@@ -9,7 +9,16 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { assertScheduleLink, closeScheduleItem } from "./lib/schedule-store.mjs";
 import { appendOutbox, readOutbox, syncStudyOutbox } from "./lib/study-outbox.mjs";
 import { askPointLabel, summarizeAskPoints } from "./lib/ask-point-summary.mjs";
-import { assertSkillRunPrerequisites, recordBusinessWriteback } from "./lib/skill-run.mjs";
+import { assertSkillRunPrerequisites, readSkillRun, recordAutomaticSkillStep, recordBusinessWriteback } from "./lib/skill-run.mjs";
+import { parseMaterialEvidenceRef } from "./cuoti.mjs";
+import {
+  AskPreflightError,
+  assertPreflightSignable,
+  buildPreflightChecklist,
+  describeVerdict,
+  formatPreflightEvidenceRef,
+} from "./lib/ask-preflight.mjs";
+import { AskEvidenceCardError, renderAskEvidenceCard, validateAskEvidenceCard } from "./lib/ask-evidence-card.mjs";
 
 let database = null;
 function db() {
@@ -240,6 +249,86 @@ async function verify(options) {
   }
 }
 
+// [claude] 2026-08-25：六步预检从"执行者填表"改为"从检索回执推导"。
+// 第 2/4/5 项一律读 materials_checked 里各类材料的真实命中数，执行者只能提供
+// 第 1 项归类与第 6 项法律更新；判权算完才签 preflight_checked，零实锤直接拒签。
+function preflight(options) {
+  const runId = options.run;
+  if (!runId || runId === true) {
+    console.error("preflight 必须提供 --run SR-...；预检的全部证据都来自该 Run 的检索回执");
+    process.exit(2);
+  }
+  let run;
+  try {
+    run = readSkillRun(runId);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+  if (run.skill !== "ask-pc") {
+    console.error(`Skill Run 路由不一致：预期 ask-pc，实际 ${run.skill}`);
+    process.exit(2);
+  }
+  const materials = run.steps?.materials_checked;
+  if (materials?.status !== "pass") {
+    console.error(
+      "ASK_PREFLIGHT_BLOCK｜本 Run 还没有 materials_checked 回执，无从推导预检。\n"
+      + "补救：先运行 node --env-file=.env.local scripts/cuoti.mjs material-batch --query <争点特征词> ... --run "
+      + runId,
+    );
+    process.exit(2);
+  }
+  const hits = parseMaterialEvidenceRef(materials.evidenceRef);
+  let built;
+  try {
+    built = buildPreflightChecklist({
+      category: options.category,
+      hits,
+      queries: hits.queries,
+      updated: options.updated === true ? null : options.updated,
+    });
+    assertPreflightSignable(built, { discussionOnly: options["discussion-only"] === true });
+  } catch (error) {
+    if (error instanceof AskPreflightError) {
+      console.error(`${error.code}｜${error.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
+  recordAutomaticSkillStep({
+    runId,
+    step: "preflight_checked",
+    status: "pass",
+    source: "ask-preflight",
+    evidenceRef: formatPreflightEvidenceRef(built),
+    expectedSkill: "ask-pc",
+  });
+  console.log(`ASK_PREFLIGHT_PASS｜${built.verdict}`);
+  console.log(built.checklist);
+  if (built.verdict !== "normal") console.error(`⚠️ ${describeVerdict(built.verdict)}`);
+}
+
+// 证据卡：出处四件套缺一即 BLOCK，杜绝"只报行号"。
+function card(options) {
+  if (!options.file || options.file === true) {
+    console.error("card 必须提供 --file <证据卡.json>");
+    process.exit(2);
+  }
+  let validated;
+  try {
+    validated = validateAskEvidenceCard(JSON.parse(readFileSync(options.file, "utf8")));
+  } catch (error) {
+    if (error instanceof AskEvidenceCardError) {
+      console.error(`ASK_EVIDENCE_CARD_BLOCK｜${error.issues.length} 项`);
+      for (const item of error.issues) console.error(`- ${item.code} [${item.field}] ${item.message}`);
+      process.exit(2);
+    }
+    throw error;
+  }
+  console.log("ASK_EVIDENCE_CARD_PASS");
+  console.log(renderAskEvidenceCard(validated));
+}
+
 function pending() {
   const operations = readOutbox(OUTBOX).filter((op) => ["ask_point", "ask_verification", "resolve_ask_point"].includes(op.op));
   if (!operations.length) return console.log("没有待同步的答疑卡点操作。");
@@ -256,6 +345,12 @@ if (command === "list") await list(options);
 else if (command === "add") await add(options);
 else if (command === "verify") await verify(options);
 else if (command === "resolve") await resolve(options);
+else if (command === "preflight") preflight(options);
+else if (command === "card") card(options);
 else if (command === "pending") pending();
 else if (command === "sync") await sync();
-else console.log("用法：node --env-file=.env.local scripts/ask.mjs <list|add|verify|resolve|pending|sync> ...");
+else {
+  console.log("用法：node --env-file=.env.local scripts/ask.mjs <list|add|verify|resolve|preflight|card|pending|sync> ...");
+  console.log("  preflight --run SR-... --category <科目/章节/题型> [--updated <法律更新说明>] [--discussion-only]");
+  console.log("  card --file <证据卡.json>");
+}

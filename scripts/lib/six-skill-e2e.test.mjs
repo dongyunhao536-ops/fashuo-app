@@ -44,9 +44,14 @@ describe("六个主 Skill 端到端仿真", () => {
     const { file } = harness();
 
     const ask = startSkillRun({ skill: "ask-pc", subject: "民法", runId: "SR-E2E-ASK", file });
-    auto(file, ask.runId, "materials_checked", { evidenceRef: "queries:居住权+租赁权" });
+    // [claude] 2026-08-25：materials_checked 回执改带每类命中数，它是 preflight 的唯一推导来源；
+    // preflight_checked 已移出手工步骤，只能由 ask.mjs preflight 自动落证，不再进 --done。
+    auto(file, ask.runId, "materials_checked", { evidenceRef: "q:2|xinde:3|textbook:9|yixiao:0|exam:4|zhenti:0" });
     auto(file, ask.runId, "context_loaded");
-    expect(endSkillRun({ runId: ask.runId, phase: "answer", done: ["preflight_checked", "response_verified"], evidenceRef: "六步预检+证据卡", file }).status).toBe("completed");
+    auto(file, ask.runId, "preflight_checked", { evidenceRef: "民法/居住权/概念辨析|solid:3|normal" });
+    expect(() => endSkillRun({ runId: ask.runId, phase: "answer", done: ["preflight_checked"], evidenceRef: "手签预检", file }))
+      .toThrow(/preflight_checked 不能通过 --done 手工补签/u);
+    expect(endSkillRun({ runId: ask.runId, phase: "answer", done: ["response_verified"], evidenceRef: "末检一致性复核", file }).status).toBe("completed");
 
     const coach = startSkillRun({ skill: "coach-pc", runId: "SR-E2E-COACH", file });
     auto(file, coach.runId, "context_loaded");
