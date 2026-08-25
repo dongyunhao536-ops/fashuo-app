@@ -49,6 +49,15 @@ export function resolveClaudeSkillsRoot({
   return resolve(firstNonEmpty(env.FASHUO_CLAUDE_SKILLS_ROOT) ?? join(userHome, ".claude", "skills"));
 }
 
+// [claude] 2026-08-25：Claude 宿主守卫 handler 在仓库外且被 gitignore 排除，
+// 此前既不进 Git 也不在六源备份链；文件丢失或换机后无从恢复。
+export function resolveClaudeHooksRoot({
+  env = process.env,
+  userHome = homedir(),
+} = {}) {
+  return resolve(firstNonEmpty(env.FASHUO_CLAUDE_HOOKS_ROOT) ?? join(userHome, ".claude", "hooks"));
+}
+
 export function claudeProjectPathKey(appRoot) {
   const normalized = String(appRoot ?? "").trim();
   if (!normalized) throw new Error("Claude 项目路径不能为空");

@@ -18,10 +18,11 @@ import {
   rmSync,
   statSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   resolveAppRoot,
   resolveArchiveRoot,
+  resolveClaudeHooksRoot,
   resolveClaudeSkillsRoot,
   resolveCodexHome,
   resolveLegacyMemoryRoot,
@@ -53,6 +54,7 @@ const REPO = resolveArchiveRoot({ appRoot: APP_ROOT });
 const CODEX_HOME = resolveCodexHome();
 const LEGACY_MEMORY_ROOT = resolveLegacyMemoryRoot();
 const CLAUDE_SKILLS_ROOT = resolveClaudeSkillsRoot();
+const CLAUDE_HOOKS_ROOT = resolveClaudeHooksRoot();
 const RAW_DIR_RE = /(?:^|[\\/])_raw(?:[\\/]|$)/u;
 const GIT_DIR_RE = /(?:^|[\\/])\.git(?:[\\/]|$)/u;
 
@@ -67,6 +69,15 @@ const JOBS = [
     label: "Claude 现役 Skills",
     src: CLAUDE_SKILLS_ROOT,
     dest: "Claude现役Skills备份",
+  },
+  // [claude] 2026-08-25：Claude 宿主守卫 handler 是生产件（本机已在 enforce 档运行），
+  // 却既不在 Git 也不在灾备链，丢了无从恢复。只白名单 fashuo-*.mjs——同目录下的
+  // 其他 hook 与任何 settings 都不进档案，后者含权限与代理配置。
+  {
+    label: "Claude 现役 Hooks",
+    src: CLAUDE_HOOKS_ROOT,
+    dest: "Claude现役Hooks备份",
+    include: /^fashuo-.*\.mjs$/u,
   },
   {
     label: "Codex 现役 Skills",
@@ -116,16 +127,21 @@ function git(...gitArgs) {
   return execFileSync("git", gitArgs, { cwd: REPO, encoding: "utf8" }).trim();
 }
 
-function inventory(root, exclude = null) {
+// [claude] 2026-08-25：include 是文件名白名单，只用于 Hook 这类"同目录下混着
+// 无关或含敏感配置的文件、只能挑指定几个走灾备"的源；目录本身不受白名单限制，
+// 否则递归进不去。exclude 仍按整路径匹配，两者可叠加。
+function inventory(root, exclude = null, include = null) {
   const items = [];
   function visit(current, relativePath = "") {
     if (exclude?.test(current)) return;
     const stats = lstatSync(current);
     if (stats.isSymbolicLink()) {
+      if (include && !include.test(basename(current))) return;
       items.push({ path: relativePath || ".", kind: "symlink", size: stats.size });
       return;
     }
     if (!stats.isDirectory()) {
+      if (include && !include.test(basename(current))) return;
       items.push({ path: relativePath || ".", kind: "file", size: stats.size });
       return;
     }
@@ -138,8 +154,11 @@ function inventory(root, exclude = null) {
 }
 
 function assertNonEmptySource(job) {
-  const items = inventory(job.src, job.exclude);
-  if (!items.length) throw new Error(`${job.label}源为空，拒绝把空目录当成可用备份：${job.src}`);
+  const items = inventory(job.src, job.exclude, job.include);
+  if (!items.length) {
+    const scope = job.include ? `，白名单 ${job.include.source} 未匹配到任何文件` : "";
+    throw new Error(`${job.label}源为空，拒绝把空目录当成可用备份：${job.src}${scope}`);
+  }
   return items;
 }
 
@@ -151,9 +170,16 @@ function copyAtomically(job) {
   rmSync(staging, { recursive: true, force: true });
   cpSync(job.src, staging, {
     recursive: statSync(job.src).isDirectory(),
-    filter: job.exclude ? (source) => !job.exclude.test(source) : undefined,
+    filter: job.exclude || job.include
+      ? (source) => {
+        if (job.exclude?.test(source)) return false;
+        if (!job.include) return true;
+        // 目录一律放行，否则递归到不了里面的白名单文件；筛选只作用于叶子。
+        return lstatSync(source).isDirectory() || job.include.test(basename(source));
+      }
+      : undefined,
   });
-  const stagingInventory = inventory(staging);
+  const stagingInventory = inventory(staging, null, job.include);
   if (JSON.stringify(stagingInventory) !== JSON.stringify(sourceInventory)) {
     rmSync(staging, { recursive: true, force: true });
     throw new Error(`${job.label}复制完整性校验失败；保留上一版备份，拒绝替换`);
@@ -201,6 +227,7 @@ console.log(`应用根：${APP_ROOT}`);
 console.log(`档案根：${REPO}`);
 console.log(`Codex 根：${CODEX_HOME}`);
 console.log(`Claude Skills 根：${CLAUDE_SKILLS_ROOT}`);
+console.log(`Claude Hooks 根：${CLAUDE_HOOKS_ROOT}`);
 for (const job of availableJobs) {
   console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）`);
 }
