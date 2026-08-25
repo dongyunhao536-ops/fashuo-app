@@ -1,4 +1,5 @@
 // [gpt] 2026-08-23：统一 Windows/macOS 的应用、档案与 Codex 根目录解析。
+// [gpt] 2026-08-24：Claude 记忆跟随当前项目路径分键，禁止继续默认 Windows 旧键。
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,9 +41,24 @@ export function resolveCodexHome({ env = process.env } = {}) {
   return resolve(firstNonEmpty(env.CODEX_HOME) ?? join(homedir(), ".codex"));
 }
 
-export function resolveLegacyMemoryRoot({ env = process.env } = {}) {
-  const explicit = firstNonEmpty(env.FASHUO_LEGACY_MEMORY_ROOT);
-  if (explicit) return resolve(explicit);
-  return join(homedir(), ".claude", "projects", "D--fashuo-app", "memory");
+export function claudeProjectPathKey(appRoot) {
+  const normalized = String(appRoot ?? "").trim();
+  if (!normalized) throw new Error("Claude 项目路径不能为空");
+  return normalized.replace(/[:\\/]/gu, "-");
 }
 
+export function resolveClaudeMemoryRoot({
+  env = process.env,
+  appRoot = resolveAppRoot({ env }),
+  userHome = homedir(),
+} = {}) {
+  const explicit = firstNonEmpty(
+    env.FASHUO_CLAUDE_MEMORY_ROOT,
+    env.FASHUO_LEGACY_MEMORY_ROOT,
+  );
+  if (explicit) return resolve(explicit);
+  return join(userHome, ".claude", "projects", claudeProjectPathKey(appRoot), "memory");
+}
+
+// 兼容既有调用名；语义已变为“当前项目对应的 Claude 记忆”。
+export const resolveLegacyMemoryRoot = resolveClaudeMemoryRoot;

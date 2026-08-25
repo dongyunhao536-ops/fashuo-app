@@ -145,7 +145,7 @@ if (command === "evidence") {
   if (options.json) console.log(JSON.stringify(flow, null, 2));
   else {
     console.log(`带背迁移流水 ${flow.start ?? "最早"} ~ ${flow.end ?? "最新"}：共 ${flow.total} 条`);
-    console.log(`新挂 ${flow.byEvent.new} / 撤池 ${flow.byEvent.withdraw} / 重挂 ${flow.byEvent.rehang} / 移交 ${flow.byEvent.transfer} / 转 Anki ${flow.byEvent["route-anki"]}`);
+    console.log(`新挂 ${flow.byEvent.new} / 撤池 ${flow.byEvent.withdraw} / 重挂 ${flow.byEvent.rehang} / 移交 ${flow.byEvent.transfer} / 转挑错轻滚 ${flow.byEvent["route-recognition"]} / 历史旧轨 ${flow.byEvent["route-anki"]}`);
     for (const item of flow.transitions) console.log(`- ${item.date} ${item.entryId} ${item.event}：${item.fromStatus ?? "none"}:${item.fromRoute ?? "none"} → ${item.toStatus}:${item.toRoute}｜${item.evidence}`);
   }
 } else if (options.json) {
@@ -158,7 +158,7 @@ if (command === "evidence") {
 } else {
   console.error("用法：node scripts/daibei-ledger.mjs <summary|audit|check|flow|transition|evidence> [--json] [--today YYYY-MM-DD] [--file 路径]");
   console.error("  flow --from YYYY-MM-DD --to YYYY-MM-DD");
-  console.error("  transition <ID> --event new|withdraw|rehang|transfer|route-anki --evidence \"教材/复检锚点\" [--note \"接收轨/说明\"]");
+  console.error("  transition <ID> --event new|withdraw|rehang|transfer|route-recognition --evidence \"教材/复检锚点\" [--note \"接收轨/说明\"]");
   console.error("  evidence <ID> --result pass|partial|fail|void --anchor \"教材/题目锚点\" [--dimension understanding|recall] [--cold true|false] [--prompt clean|cued|invalid] [--pattern code --diagnosis pending|confirmed|rejected] [--note \"诊断\"] [--run SR-... --schedule 排期ID] [--backfill] [--outbox 路径]");
   process.exitCode = 2;
 }

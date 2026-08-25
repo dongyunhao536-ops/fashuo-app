@@ -4,13 +4,13 @@ import { applyEvidenceEvent, applyTransition, formatReciteLedgerSummary, parseRe
 const header = `# 带背挂账\n\n## 挂账中（法理 1 · 刑法 1）`;
 
 describe("recite ledger", () => {
-  it("区分带背挂账、Anki 轨、撤账池和移交条目", () => {
+  it("区分带背挂账、挑错轻滚轨、撤账池和移交条目", () => {
     const parsed = parseReciteLedger(`${header}
 ### L1｜法理｜普通挂账
 - 挂 07-01 ｜ 最后碰 **07-20** ｜ 状态：挂
 
-### L2｜法理｜专名逐字卡｜转 Anki 轨
-- 挂 07-02 ｜ 最后碰 07-21 ｜ 状态：挂（主轨移交 Anki）
+### L2｜法理｜专名辨析｜转挑错式再认轨
+- 挂 07-02 ｜ 最后碰 07-21 ｜ 状态：挂（转挑错式再认轨·周中轻滚）
 
 ### X1｜刑法｜幅度词｜撤 07-22
 - 挂 07-03 ｜ 最后碰 07-22 ｜ 状态：撤 07-22
@@ -20,9 +20,46 @@ describe("recite ledger", () => {
 `, { referenceDate: "2026-08-05" });
     const summary = summarizeReciteLedger(parsed);
 
-    expect(summary.counts).toMatchObject({ records: 4, active: 2, actionable: 1, anki: 1, withdrawn: 1, transferred: 1 });
+    expect(summary.counts).toMatchObject({ records: 4, active: 2, actionable: 1, recognition: 1, legacyRoutes: 0, withdrawn: 1, transferred: 1 });
     expect(summary.oldestActive.map((entry) => entry.id)).toEqual(["L1"]);
     expect(summary.withdrawnReviewCandidates.map((entry) => entry.id)).toEqual(["X1"]);
+  });
+
+  it("旧 Anki 标记只读兼容，并能以新事件留痕迁到挑错轻滚轨", () => {
+    const original = `${header}
+### L2｜法理｜旧卡｜转 Anki 轨
+- 挂 07-02 ｜ 最后碰 07-21 ｜ 状态：挂（主轨移交 Anki）
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-24" });
+    expect(parsed.records[0].route).toBe("legacy_anki");
+    expect(summarizeReciteLedger(parsed).counts).toMatchObject({ recognition: 0, legacyRoutes: 1 });
+
+    const migrated = applyTransition(original, parsed, {
+      id: "L2",
+      event: "route-recognition",
+      date: "2026-08-24",
+      evidence: "2026-08-24 云停用 Anki",
+      note: "挑错式再认·周中轻滚",
+    });
+    const checked = parseReciteLedger(migrated.markdown, { referenceDate: "2026-08-24" });
+    expect(checked.records[0].route).toBe("recognition_light_roll");
+    expect(checked.issues.filter((issue) => issue.severity === "error")).toEqual([]);
+    expect(migrated.transition).toMatchObject({ fromRoute: "legacy_anki", toRoute: "recognition_light_roll" });
+  });
+
+  it("拒绝继续生产 route-anki", () => {
+    const original = `${header}
+### L1｜法理｜普通挂账
+- 挂 07-01 ｜ 最后碰 07-20 ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-24" });
+    expect(() => applyTransition(original, parsed, {
+      id: "L1",
+      event: "route-anki",
+      date: "2026-08-24",
+      evidence: "旧调用",
+      note: "",
+    })).toThrow(/route-anki 已于 2026-08-24 停用/);
   });
 
   it("标题迁移标记优先于未同步字段，并报告冲突", () => {

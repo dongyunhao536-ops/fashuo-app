@@ -16,7 +16,7 @@ import { buildReciteMemoryModel } from "./lib/learning-coach.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { readOutbox } from "./lib/study-outbox.mjs";
 import { readSkillRunEvents, summarizeSkillRuns } from "./lib/skill-run.mjs";
-import { readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
+import { findGuardNotInvokedRuns, readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
 
 const LOCAL_DIR = ".local/system-observability";
 const LOCAL_SNAPSHOT_LOG = `${LOCAL_DIR}/learning-flow.jsonl`;
@@ -137,12 +137,15 @@ function readLocalFacts(referenceDate, windowStart, windowEnd, nowIso = new Date
     windowEnd,
     staleMinutes: Number(thresholds().skillRunStaleMinutes ?? 24 * 60),
   });
-  const skillTurnCoverage = summarizeSkillTurns(readSkillTurnEvents(), {
+  const skillTurnLog = readSkillTurnEvents();
+  const skillTurnCoverage = summarizeSkillTurns(skillTurnLog, {
     nowIso,
     windowStart,
     windowEnd,
     uncheckedStaleMinutes: Number(thresholds().skillTurnUncheckedMinutes ?? 60),
   });
+  skillTurnCoverage.guardNotInvokedRuns = findGuardNotInvokedRuns(skillRunLog, skillTurnLog, { windowStart, windowEnd });
+  skillTurnCoverage.counts.guardNotInvoked = skillTurnCoverage.guardNotInvokedRuns.length;
 
   return { localOutbox, scheduleParsed, scheduleExecution, reciteParsed, reciteSummary, skillExecution, skillTurnCoverage };
 }

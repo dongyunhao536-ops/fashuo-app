@@ -13,7 +13,7 @@ import {
   startSkillRun,
   summarizeSkillRuns,
 } from "./lib/skill-run.mjs";
-import { readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
+import { findGuardNotInvokedRuns, readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
 
 function flags(args) {
   const output = {};
@@ -55,6 +55,7 @@ export function main(argv = process.argv.slice(2)) {
       source: "skill-run-cli",
       entryMode: options.skill === "daibei-pc" ? "direct" : null,
       targetRef: options.target,
+      runPurpose: options.purpose ?? "learning",
     });
     printRun(run, options.json);
     return 0;
@@ -101,6 +102,8 @@ export function main(argv = process.argv.slice(2)) {
       runId: options.run,
       outcome: "aborted",
       evidenceRef: options.ref,
+      abortReason: options.reason,
+      abortSource: options.source,
     });
     if (options.json) console.log(JSON.stringify(run, null, 2));
     else console.log(`SKILL_RUN_ENDED｜${run.runId}｜aborted`);
@@ -121,8 +124,12 @@ export function main(argv = process.argv.slice(2)) {
     const end = options.end ?? new Date(now.getTime() + 8 * 3600000).toISOString().slice(0, 10);
     if (!/^20\d{2}-\d{2}-\d{2}$/u.test(end)) throw new Error("--end 必须是 YYYY-MM-DD 北京日");
     const start = new Date(new Date(`${end}T00:00:00Z`).getTime() - (days - 1) * 86400000).toISOString().slice(0, 10);
-    const summary = summarizeSkillRuns(readSkillRunEvents(), { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
-    const host = summarizeSkillTurns(readSkillTurnEvents(), { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
+    const runLog = readSkillRunEvents();
+    const turnLog = readSkillTurnEvents();
+    const summary = summarizeSkillRuns(runLog, { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
+    const host = summarizeSkillTurns(turnLog, { nowIso: now.toISOString(), windowStart: start, windowEnd: end });
+    host.guardNotInvokedRuns = findGuardNotInvokedRuns(runLog, turnLog, { windowStart: start, windowEnd: end });
+    host.counts.guardNotInvoked = host.guardNotInvokedRuns.length;
     // [gpt] 保留既有 Run 摘要字段，追加 host，避免即时诊断再次看不见“整个 Skill 都没启动”。
     console.log(JSON.stringify({ ...summary, host }, null, 2));
     const needsAttention = summary.issues.length
@@ -133,17 +140,19 @@ export function main(argv = process.argv.slice(2)) {
       || summary.counts.unresolvedHandoffs
       || host.coverage.state !== "observed"
       || host.counts.failed
-      || host.counts.unchecked;
+      || host.counts.unchecked
+      || host.counts.guardErrors
+      || host.counts.guardNotInvoked;
     return needsAttention ? 1 : 0;
   }
   console.log("用法：node scripts/skill-run.mjs <start|step|checkpoint|end|abort|status|check> ...");
-  console.log("  start --skill <ask-pc|coach-pc|cuoti-fupan|daibei-pc|lunshu-pc|yingyu-pc> [--subject 科目 --kind 类型 --date 北京日 --json]");
+  console.log("  start --skill <ask-pc|coach-pc|cuoti-fupan|daibei-pc|lunshu-pc|yingyu-pc> [--subject 科目 --kind 类型 --date 北京日 --purpose learning|diagnostic|simulation --json]");
   console.log("        daibei-pc 轻入口必须额外给 --target <稳定章节/设问/条目>；只给科目请改用 skill-context.mjs daibei <科目>");
   console.log("        daibei 自背进度用 --kind progress；用户明确只记录不抽查时才用 --kind progress-only，均以 --phase progress 收口");
   console.log("  step --run <SR-...> --step <手工步骤> [--ref 证据引用]");
   console.log("  checkpoint --run <SR-...> --phase <阶段> [--done 手工步骤,... --hash Gate题面sha256 --ref 证据引用]");
   console.log("  end --run <SR-...> --phase <阶段> [--done 手工步骤,... --hash Gate产物sha256 --ref 证据引用] / --outcome handoff --to <Skill> --reason <原因>");
-  console.log("  abort --run <SR-...> [--ref 中止原因]（仿真/用户取消；不带 phase、done 或 reason）");
+  console.log("  abort --run <SR-...> [--reason 中止原因] [--source user|model|guard|system|reconstruction|unattributed]（无人能归因时显式记 unattributed）");
   console.log("  status --run <SR-...> / check [--days 2 --end YYYY-MM-DD]");
   return 0;
 }

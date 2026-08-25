@@ -412,6 +412,12 @@ describe("Skill Run 硬闸", () => {
     recordManualSkillStep({ runId: run.runId, step: "rubric_applied", evidenceRef: "scorecard:7/10", file });
     recordAutomaticSkillStep({ runId: run.runId, step: "ledger_validated", source: "test", evidenceRef: "english-ledger:EN-20260812-W-2024-REPLY:line=1", file });
     expect(() => validateBusinessWriteback({ runId: run.runId, sourceKind: "subjective_answer", subject: "英语", file })).toThrow(/target_frozen/);
+    recordManualSkillStep({ runId: run.runId, step: "target_frozen", evidenceRef: "2024-reply", file });
+    recordManualSkillStep({ runId: run.runId, step: "source_checked", evidenceRef: "作文十年题库:2024", file });
+    recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "question-integrity", artifactHash: "d".repeat(64), artifactLength: 20, file });
+    const validated = validateBusinessWriteback({ runId: run.runId, sourceKind: "subjective_answer", subject: "英语", file });
+    expect(validated.expectedSkill).toBe("yingyu-pc");
+    expect(validated.requiredSteps).not.toContain("grading_bound");
   });
 
   it("英语作文题阶段同样进入 waiting_user，并校验 Gate 草稿 hash", () => {

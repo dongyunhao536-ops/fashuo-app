@@ -187,10 +187,10 @@ function formatData(r) {
   if (r.studied.length) for (const s of r.studied) L.push(`  - ${s.subject}：${s.chapters.join("、") || "（未记章节）"}${s.activities.length ? "　[" + s.activities.join("/") + "]" : ""}`);
   else L.push(`  - （本周无学习流水记录）`);
   if (r.effects?.length) { L.push(`· 背诵/学习效果（掌握轨迹，据此定下周精度重点）：`); for (const e of r.effects) L.push(`  - ${e.subject}${e.chapter ? "·" + e.chapter : ""}【${e.activity}】：${e.feeling}`); }
-  L.push(`· 带背挂账当前快照（${r.reciteLedger.snapshotDate}，是当前存量、不是本周新增量）：active ${r.reciteLedger.counts.active} / 可复检 ${r.reciteLedger.counts.actionable} / Anki轨 ${r.reciteLedger.counts.anki} / 已撤池 ${r.reciteLedger.counts.withdrawn} / 移交 ${r.reciteLedger.counts.transferred}`);
+  L.push(`· 带背挂账当前快照（${r.reciteLedger.snapshotDate}，是当前存量、不是本周新增量）：active ${r.reciteLedger.counts.active} / 可复检 ${r.reciteLedger.counts.actionable} / 挑错轻滚 ${r.reciteLedger.counts.recognition} / 待迁旧轨 ${r.reciteLedger.counts.legacyRoutes} / 已撤池 ${r.reciteLedger.counts.withdrawn} / 移交 ${r.reciteLedger.counts.transferred}`);
   L.push(`  - 分科可复检：${Object.entries(r.reciteLedger.bySubject).filter(([, n]) => n).map(([subject, n]) => `${subject}${n}`).join("/") || "无"}；最久未碰：${r.reciteLedger.oldestActive.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}`);
   L.push(`  - 已撤池轮抽候选：${r.reciteLedger.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}·${entry.title}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}${r.reciteLedger.counts.warnings ? `；格式警告 ${r.reciteLedger.counts.warnings}` : ""}`);
-  L.push(`  - 本周迁移流水：新挂 ${r.reciteLedger.flow.byEvent.new} / 撤池 ${r.reciteLedger.flow.byEvent.withdraw} / 重挂 ${r.reciteLedger.flow.byEvent.rehang} / 移交 ${r.reciteLedger.flow.byEvent.transfer} / 转 Anki ${r.reciteLedger.flow.byEvent["route-anki"]}（只认 append-only 流水；未留流水不倒推）`);
+  L.push(`  - 本周迁移流水：新挂 ${r.reciteLedger.flow.byEvent.new} / 撤池 ${r.reciteLedger.flow.byEvent.withdraw} / 重挂 ${r.reciteLedger.flow.byEvent.rehang} / 移交 ${r.reciteLedger.flow.byEvent.transfer} / 转挑错轻滚 ${r.reciteLedger.flow.byEvent["route-recognition"]} / 历史旧轨 ${r.reciteLedger.flow.byEvent["route-anki"]}（只认 append-only 流水；未留流水不倒推）`);
   const mapping = r.reciteLedger.mapping.counts;
   L.push(`  - 带背接线：唯一主链接 ${mapping.linked}/${mapping.items} / 零链接 ${mapping.unlinked} / 主链接歧义 ${mapping.ambiguousLinks}（未接入且有证据 ${mapping.evidenceUnlinked}、在挂 ${mapping.actionableUnlinked}）/ 多链接记录 ${mapping.multiLinked}；无唯一 primary 的证据仍留本地，补映射后再接入知识层`);
   const se = r.scheduleExecution;

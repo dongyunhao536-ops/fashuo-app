@@ -67,6 +67,25 @@ describe("阻断补救指令", () => {
     expect(hint).toContain("T#/事件号");
   });
 
+  // [gpt] 2026-08-24：复现 8-01 从犯事故；lunshu 缺参考答案时必须回到
+  // 真实加载＋hash 绑定，不能再提示模型手工声称“已检查”。
+  it("lunshu 参考答案缺口只指向加载绑定命令，不给手工补签", () => {
+    for (const step of ["reference_answer_checked", "grading_bound"]) {
+      const hint = recoveryHint("lunshu-pc", step, { runId: "SR-REF" });
+      expect(hint).toContain("reference-answer.mjs --run SR-REF");
+      expect(hint).toContain("--type <case|essay>");
+      expect(hint).toContain("--year <YYYY>");
+      expect(hint).toContain("--file <参考答案文件>");
+      expect(hint).toContain("同时自动签 reference_answer_checked 与 grading_bound");
+      expect(hint).not.toContain("--done");
+    }
+  });
+
+  it("英语写作仍保留人工指定参考答案的证据入口", () => {
+    const hint = recoveryHint("yingyu-pc", "reference_answer_checked", { runId: "SR-EN" });
+    expect(hint).toContain("--done reference_answer_checked");
+  });
+
   it("intake_question 缺口说明题数必须与批次错题数一致", () => {
     const hint = recoveryHint("cuoti-fupan", "intake_question×2", { runId: "SR-H" });
     expect(hint).toContain("--phase intake_question");

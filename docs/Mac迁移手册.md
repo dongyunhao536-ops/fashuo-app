@@ -166,5 +166,5 @@ npm run skill:check
 - 推送 `fashuo-archive` 的本地领先提交；
 - 决定未跟踪 PDF 是否进入 Git LFS；
 - 新建 GitHub/ECS SSH 密钥、修改服务器授权；
-- 在 Mac 建立 `launchd` 22:30 连续性备份任务；
+- 在 Mac 先运行 `npm run backup:install-macos` 审查计划，再经人工确认运行 `npm run backup:install-macos -- --install` 建立北京时间每日 22:30 连续性备份任务；LaunchAgent 每小时半点只做轻量到期判断，跨本机时区/夏令时仍按北京日结算，成功后当天不再重复；<!-- [gpt] 2026-08-24 -->
 - 正式切换唯一写端并停用 Windows 计划任务。

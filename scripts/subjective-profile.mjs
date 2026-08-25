@@ -84,7 +84,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     assertSkillRunPrerequisites({
       runId: String(options.run),
       expectedSkill: "lunshu-pc",
-      steps: ["reference_answer_checked", "rubric_applied"],
+      steps: ["reference_answer_checked", "grading_bound", "rubric_applied"],
     });
     const practice = verifySubjectiveLedgerEntry(snapshot, {
       date: options.date && options.date !== true ? String(options.date) : referenceDate,

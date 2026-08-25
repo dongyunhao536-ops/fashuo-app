@@ -218,7 +218,7 @@ function render(r) {
     .map((entry) => `${entry.id} ${entry.subject}·${cut(entry.title, 28)}(${entry.lastTouchedOn ?? "日期缺失"})`).join("、") || "（无）";
   const reciteClosed = r.reciteSummary.withdrawnReviewCandidates.slice(0, 3)
     .map((entry) => `${entry.id} ${entry.subject}(${entry.lastTouchedOn ?? "日期缺失"})`).join("、") || "（无）";
-  L.push(`  带背挂账：active ${r.reciteSummary.counts.active} / 可复检 ${r.reciteSummary.counts.actionable} / Anki轨 ${r.reciteSummary.counts.anki} / 已撤池 ${r.reciteSummary.counts.withdrawn} / 移交 ${r.reciteSummary.counts.transferred}`);
+  L.push(`  带背挂账：active ${r.reciteSummary.counts.active} / 可复检 ${r.reciteSummary.counts.actionable} / 挑错轻滚 ${r.reciteSummary.counts.recognition} / 待迁旧轨 ${r.reciteSummary.counts.legacyRoutes} / 已撤池 ${r.reciteSummary.counts.withdrawn} / 移交 ${r.reciteSummary.counts.transferred}`);
   L.push(`  最久未碰的带背候选：${reciteOldest}`);
   L.push(`  已撤池轮抽候选：${reciteClosed}${r.reciteSummary.counts.warnings ? `（账本格式警告 ${r.reciteSummary.counts.warnings}，详见 daibei-ledger audit）` : ""}`);
   L.push(`  答疑卡点：有效 open ${r.askSummary.activePoints.length}；${r.askSummary.activePoints.slice(0, 5).map((point) => `A#${point.id} ${point.subject ?? "未分类"}·${cut(point.confusion, 35)}(${String(point.createdAt ?? "").slice(0, 10) || "?"})`).join("、") || "（无）"}`);

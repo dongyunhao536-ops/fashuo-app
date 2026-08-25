@@ -12,6 +12,7 @@ import {
   recordBusinessWriteback,
   recordEnglishReadingWriteback,
   recordManualSkillStep,
+  recordReferenceAnswerBinding,
   startSkillRun,
   summarizeSkillRuns,
   readSkillRunEvents,
@@ -75,12 +76,19 @@ describe("六个主 Skill 端到端仿真", () => {
     auto(file, lunshu.runId, "context_loaded");
     manual(file, lunshu.runId, "target_frozen", "论述58型");
     manual(file, lunshu.runId, "source_checked", "真题2019-58");
-    manual(file, lunshu.runId, "reference_answer_checked", "官方答案采分点");
+    // [gpt] 2026-08-24：端到端仿真也必须走同 hash 的加载绑定接口，
+    // 不再用手工步骤伪造“已经看过参考答案”。
+    recordReferenceAnswerBinding({
+      runId: lunshu.runId,
+      referenceHash: "f".repeat(64),
+      evidenceRef: "reference:2019/essay:Q58:fixture",
+      file,
+    });
     const lunshuHash = gate(file, lunshu.runId, "请论述法治原则，并结合材料展开。");
     checkpointSkillRun({ runId: lunshu.runId, phase: "question", artifactHash: lunshuHash, file });
     manual(file, lunshu.runId, "rubric_applied", "15分采分表:9分");
     auto(file, lunshu.runId, "ledger_validated", { evidenceRef: "subjective-ledger:2026-08-12:line=10:9/15" });
-    recordBusinessWriteback({ runId: lunshu.runId, source: "coach-log", evidenceRef: "study-log:lunshu:applied", expectedSkill: "lunshu-pc", requiredSteps: ["context_loaded", "target_frozen", "source_checked", "reference_answer_checked", "question_integrity_pass", "rubric_applied", "ledger_validated"], file });
+    recordBusinessWriteback({ runId: lunshu.runId, source: "coach-log", evidenceRef: "study-log:lunshu:applied", expectedSkill: "lunshu-pc", requiredSteps: ["context_loaded", "target_frozen", "source_checked", "reference_answer_checked", "grading_bound", "question_integrity_pass", "rubric_applied", "ledger_validated"], file });
     expect(endSkillRun({ runId: lunshu.runId, phase: "grading", done: ["response_verified"], evidenceRef: "逐句批改+替换句", file }).status).toBe("completed");
 
     const englishReading = startSkillRun({ skill: "yingyu-pc", subject: "英语", runId: "SR-E2E-EN-R", file });

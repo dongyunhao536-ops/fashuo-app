@@ -17,7 +17,7 @@ description: PC 端法硕备考全面评估（阶段体检报告·火力全开�
    - 📌 **报指数必带三条已知失真**（清单原文在 `src/lib/dashboard.ts` 头注「已知失真清单」）：①**章级粒度双向偏**——触到一章即记满，章内再深耕对广度＝0（法制史的百分比是偏高不是偏低）；②**综合指数两侧不同尺**——英语 1 篇 ≈ 综合 +4，一整晚啃已覆盖章 ≈ +0.06，**指数对英语过敏、对已覆盖章加深近乎失明**，英语破零那几天的指数跳升别读成整体水平上台阶；③**诚实税 ≈ 综合 3 分**——登记未销账错题在 absorbed>0 时确实掉分，公式故意不改。**别让他拿指数当唯一方向盘。**
 3. **投入与吸收趋势**：`node --env-file=.env.local scripts/weekly.mjs data --week <周一>` 逐周跑近 3~4 周（每跑一次读走 `.local/weekly-data.json` 再跑下一周）——看学习动作数、复盘数、吸收数是升是降。
 4. **错题本全量**：先 `node --env-file=.env.local scripts/cuoti.mjs topics`（活跃主题、待冷检主题、monitoring/stable、同主题累计事件），再 `cuoti.mjs list` 还原 open 事件和原始栽点。报告分别给事件轴与主题轴，不能只报一组“错题数”。
-5. **带背挂账台账（量化 v3 闭环维不含它，评估必须单独盯）**：运行 `node scripts/daibei-ledger.mjs summary` → 报当前 active/可复检/Anki/移交、科目分布、最老未碰与已撤池候选；按需读对应 ID 正文。当前状态不能倒推出本期流量；只有本期日期迁移证据足够时才报本期新挂/撤账数。
+5. **带背挂账台账（量化 v3 闭环维不含它，评估必须单独盯）**：运行 `node scripts/daibei-ledger.mjs summary` → 报当前 active/可复检/挑错轻滚/待迁旧轨/移交、科目分布、最老未碰与已撤池候选；按需读对应 ID 正文。当前状态不能倒推出本期流量；只有本期日期迁移证据足够时才报本期新挂/撤账数。<!-- [gpt] 2026-08-24：Anki 停用后更新活跃报告口径。 -->
    **答疑卡点轴**：`coach.mjs ledger` 已读 `ask_point_v2` 有效 open；另用 `node --env-file=.env.local scripts/ask.mjs list --all --json` 审计 clarified/dismissed/superseded/expired。只报新增卡点与打通数，不把卡点行数写成答疑次数，也不把 expired 当掌握。
 6. **日报执行与控制器**：读快照 `dailyExecution` 和 `coachEngine.controller`。严格完成率只认 ✅，⚠️ 单列；据 `gaps` 与最新日块审计断链，不手数 Markdown。constrained/rescue 只说明系统已降负载，不可用来粉饰 P0 未兑现。<!-- [gpt] 2026-08-10 -->
 7. **主观题**：读快照 `subjective` 的练笔量、首稿/重写水位、挂病灶与最近练笔。案例或论述任一类型少于 3 道时，只报样本风险，禁止把小样本硬乘成 180 分卷面。

@@ -6,6 +6,30 @@ import { validateErrorEntry } from "./error-entry.mjs";
 
 // [gpt] 2026-08-16：批次入口接受背诵方式别名，最终由 study outbox 归一为“背诵”并保留方式标记。
 const ACTIVITIES = new Set(["听课", "看书", "做题", "背诵", "带背", "自背", "复盘", "其他"]);
+const RECITATION_ACTIVITIES = new Set(["背诵", "带背", "自背"]);
+export const ERROR_EVIDENCE_KINDS = Object.freeze([
+  "objective_question",
+  "application_probe",
+  "recall_lapse",
+  "wording_lapse",
+]);
+const ERROR_EVIDENCE_KIND_SET = new Set(ERROR_EVIDENCE_KINDS);
+
+// [gpt] 2026-08-24：背诵掉点不能伪装成 study_error；把拒绝原因和接收轨一并结构化返回。
+export class ErrorIntakeRoutingError extends Error {
+  constructor(issues, routes = []) {
+    const payload = Object.freeze({
+      code: "ERROR_INTAKE_ROUTING_REQUIRED",
+      issues: Object.freeze(issues.map((item) => Object.freeze({ ...item }))),
+      routes: Object.freeze(routes.map((item) => Object.freeze({ ...item }))),
+    });
+    super(`ERROR_INTAKE_ROUTING_REQUIRED｜${JSON.stringify(payload)}`);
+    this.name = "ErrorIntakeRoutingError";
+    this.code = payload.code;
+    this.issues = payload.issues;
+    this.routes = payload.routes;
+  }
+}
 
 function text(value) {
   return String(value ?? "").trim();
@@ -24,12 +48,14 @@ function batchKey(manifest) {
     subject: manifest.subject,
     chapter: manifest.chapter,
     totalQuestions: manifest.totalQuestions,
+    // evidenceKind 只决定能否进入 study_error，不改变同一真实事件的幂等身份；
+    // 历史清单补字段后必须仍命中原 operation_id，避免安全迁移反而制造重复事件。
     errors: manifest.errors.map((item) => item.knowledge),
   });
   return createHash("sha256").update(stable).digest("hex").slice(0, 24);
 }
 
-export function buildErrorIntakeBatchOperations(input, { today } = {}) {
+export function buildErrorIntakeBatchOperations(input, { today, allowLegacyEvidenceKind = false } = {}) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("批次清单必须是 JSON 对象");
   const subject = normalizeSubject(input.subject);
   if (!SUBJECTS.includes(subject)) throw new Error(`subject 必须是：${SUBJECTS.join("/")}`);
@@ -54,12 +80,67 @@ export function buildErrorIntakeBatchOperations(input, { today } = {}) {
   // 与 operation_id 一起固定，避免同一批次重试时被 ingest 审计判成 payload 漂移。
   const ts = `${date}T00:00:00.000+08:00`;
   const accuracy = Number((((totalQuestions - input.errors.length) / totalQuestions) * 100).toFixed(2));
-  const normalizedErrors = input.errors.map((item, index) => {
+  const evidenceIssues = [];
+  const routes = [];
+  const classifiedErrors = input.errors.map((item, index) => {
+    const field = `errors[${index}].evidenceKind`;
+    const rawKind = text(item?.evidenceKind);
+    const evidenceKind = rawKind || (allowLegacyEvidenceKind ? "objective_question" : null);
+    if (!evidenceKind) {
+      evidenceIssues.push({
+        code: "evidence_kind_required",
+        field,
+        message: `第 ${index + 1} 道必须声明 evidenceKind；${RECITATION_ACTIVITIES.has(activity) ? "背诵场景不得默认猜成做题错" : "不得从 activity 猜证据类型"}`,
+      });
+      return null;
+    }
+    if (!ERROR_EVIDENCE_KIND_SET.has(evidenceKind)) {
+      evidenceIssues.push({
+        code: "evidence_kind_invalid",
+        field,
+        message: `第 ${index + 1} 道 evidenceKind 必须是：${ERROR_EVIDENCE_KINDS.join("/")}`,
+      });
+      return null;
+    }
+    const questionAnchor = text(item?.questionAnchor) || null;
+    if (evidenceKind === "application_probe" && !questionAnchor) {
+      evidenceIssues.push({
+        code: "question_anchor_required",
+        field: `errors[${index}].questionAnchor`,
+        message: `第 ${index + 1} 道 application_probe 必须给出独立题面锚点`,
+      });
+      return null;
+    }
+    if (evidenceKind === "recall_lapse" || evidenceKind === "wording_lapse") {
+      routes.push({
+        index,
+        evidenceKind,
+        destination: evidenceKind === "wording_lapse" ? "recognition_light_roll" : "recite_ledger",
+        routingState: "pending_confirmation",
+        preserveReciteEntry: true,
+        instruction: evidenceKind === "wording_lapse"
+          ? "转挑错式再认轨并挂周中轻滚；错句不得携带被考概念的错误标签"
+          : "转带背挂账；不得写入 study_error",
+      });
+      evidenceIssues.push({
+        code: "recitation_lapse_not_study_error",
+        field,
+        message: `第 ${index + 1} 道 ${evidenceKind} 不得进入错题本`,
+      });
+      return null;
+    }
+    return { ...item, evidenceKind, questionAnchor };
+  });
+  if (evidenceIssues.length) throw new ErrorIntakeRoutingError(evidenceIssues, routes);
+
+  const normalizedErrors = classifiedErrors.map((item, index) => {
     try {
       return validateErrorEntry({
         op: "new_error",
         subject,
         knowledge: item?.knowledge,
+        evidenceKind: item?.evidenceKind,
+        questionAnchor: item?.questionAnchor,
         recurOf: item?.recurOf == null ? null : positiveInteger(item.recurOf, `第 ${index + 1} 道错题 recurOf`),
         topic: item?.topic ?? null,
       }, { entrySource: item?.recurOf == null ? "batch" : "recurrence", chapter });
@@ -88,12 +169,24 @@ export function buildErrorIntakeBatchOperations(input, { today } = {}) {
       ts,
     })),
   ];
-  return { key, subject, chapter, date, totalQuestions, errorCount: normalizedErrors.length, accuracy, summary, operations };
+  return {
+    key,
+    subject,
+    chapter,
+    date,
+    totalQuestions,
+    errorCount: normalizedErrors.length,
+    accuracy,
+    summary,
+    legacyEvidenceKindAssumed: allowLegacyEvidenceKind && input.errors.some((item) => !text(item?.evidenceKind)),
+    operations,
+  };
 }
 
 // [gpt] 2026-08-13：历史批次回放只验收既有事实，不为性能测试制造重复学习数据。
 export function verifyExistingErrorIntakeBatch(input, snapshot, { today } = {}) {
-  const batch = buildErrorIntakeBatchOperations(input, { today });
+  // 历史清单只做只读回放；允许缺字段但显式返回 legacyEvidenceKindAssumed，绝不用于新写入。
+  const batch = buildErrorIntakeBatchOperations(input, { today, allowLegacyEvidenceKind: true });
   const studyLogs = Array.isArray(snapshot?.studyLogs) ? snapshot.studyLogs : [];
   const errors = Array.isArray(snapshot?.errors) ? snapshot.errors : [];
   const matchingLogs = studyLogs.filter((row) => row.subject === batch.subject

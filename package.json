@@ -26,6 +26,7 @@
     "knowledge": "node --env-file=.env.local scripts/knowledge.mjs",
     "forecast": "node scripts/forecast.mjs",
     "backup:continuity": "node scripts/backup-memory.mjs",
+    "backup:install-macos": "node scripts/install-continuity-backup-launchd.mjs",
     "migration:plan": "node scripts/migration-audit.mjs plan",
     "migration:snapshot": "node scripts/migration-audit.mjs snapshot",
     "migration:verify": "node scripts/migration-audit.mjs verify",

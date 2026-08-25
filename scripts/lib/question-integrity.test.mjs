@@ -55,6 +55,37 @@ describe("复检题命题完整性 Gate", () => {
     ]));
   });
 
+  it("回放 2026-08-03 监护题：决定答案的事实被加粗时必须失败", () => {
+    const polluted = auditReviewQuestion({
+      questionType: "single-choice",
+      stem: [
+        "【单选题】甲的父母均已死亡，下列亲属中谁应优先担任监护人？",
+        "A. 姐姐，**患严重精神障碍**",
+        "B. 哥哥，**无业**",
+        "C. 弟弟，**在读研究生**",
+        "D. 祖父，能够履行监护职责",
+      ].join("\n"),
+      requirements: "请选择，并简述判断依据。",
+      answerKey: "D",
+    });
+
+    expect(polluted).toMatchObject({ ok: false, displayAllowed: false });
+    expect(polluted.violations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: "answer-salience-markup", field: "stem", responsibility: "teacher" }),
+    ]));
+  });
+
+  it("同样拦截 HTML 粗体与下划线，不把格式换皮当成干净题面", () => {
+    for (const marked of ["<b>无业</b>", "<u>在读研究生</u>", "<span style=\"font-weight:700\">严重精神障碍</span>"]) {
+      const audit = auditReviewQuestion({
+        questionType: "single-choice",
+        stem: `【单选题】下列事实中应优先审查的是：\nA. ${marked}\nB. 能履职`,
+        answerKey: "B",
+      });
+      expect(audit.violations).toEqual(expect.arrayContaining([expect.objectContaining({ code: "answer-salience-markup" })]));
+    }
+  });
+
   it("拦截在附加追问中只点名正确项或复现原错答案", () => {
     expect(auditReviewQuestion({
       questionType: "multiple-choice",

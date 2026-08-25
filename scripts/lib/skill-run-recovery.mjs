@@ -83,6 +83,15 @@ function contextHint(skill, subject, runId) {
   return `${withRun(`${ENV}/skill-context.mjs ${kind} ${subjectSlot(subject)}`, runId)}`;
 }
 
+// [gpt] 2026-08-24：lunshu 的参考答案步骤只能由加载器读取并绑定 hash，
+// 不再向模型提供手工 --done 的伪补签路径。
+function referenceAnswerHint(runId) {
+  return `${withRun(`${ENV}/reference-answer.mjs`, runId)}`
+    + ` --type <case|essay> --year <YYYY> --question <题号>`
+    + `；用户当次指定参考答案时改用 --file <参考答案文件>`
+    + `；命令会同时自动签 reference_answer_checked 与 grading_bound，找不到或未完整扫描时不会签字`;
+}
+
 /**
  * 单个缺失步骤 → 补救指令。返回 null 表示没有已知补救路径。
  */
@@ -117,6 +126,10 @@ export function recoveryHint(skill, step, { runId = null, subject = null, phase 
       return `${writebackHint(skill, phase, runId)}；本步只认真实写回回执，skill-run --done 不接受手工补签`;
     case "answer_key_checked":
       return `${withRun(`${ENV}/english-growth.mjs grade-reading <篇目>`, runId)}（必须真实读本地答案键，不能凭记忆判分）`;
+    case "reference_answer_checked":
+    case "grading_bound":
+      if (skill === "lunshu-pc") return referenceAnswerHint(runId);
+      break;
     case "ledger_validated":
       return ledgerHint(skill, runId);
     case "reading_artifacts_verified":

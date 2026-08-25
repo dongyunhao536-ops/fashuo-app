@@ -183,7 +183,7 @@ export function auditReviewQuestion(input = {}) {
   violations.push(...regexEvidence(
     rows.filter(([field]) => field === "stem"),
     "answer-salience-markup",
-    /(?:\*\*|__|<mark\b|<strong\b|==)[^\n]{0,160}/iu,
+    /(?:\*\*|__|<mark\b|<strong\b|<b\b|<u\b|font-weight\s*:|text-decoration\s*:\s*underline|==)[^\n]{0,160}/iu,
     "题干使用显著标记突出事实，可能把决定答案的线索预先加粗",
   ));
 

@@ -138,9 +138,11 @@ function actionableIssue(code) {
     daibei_post_progress_probe_missing: "自背进度已落账但未进入首道抽查；不要重复写流水，直接按当轮标准启动 question Run。",
     skill_startup_slow: "下钻各 Skill 的 context_loaded 耗时，优先合并重复读取或缩短非必要上下文。",
     skill_turn_guard_unreadable: "修复 Codex Skill 宿主守卫 JSONL；不要删除坏行来制造合规。",
+    skill_turn_guard_error: "按 guardErrors 的 producerHost/hookEventName/failureCode 修复载荷或脚本；守卫 fail-open 期间不把覆盖记为正常。",
     skill_turn_unchecked: "检查 hook 是否已信任且正常触发；未经过 Stop 审计的命中请求不能算已覆盖。",
     skill_turn_noncompliant: "按 session/turn 打开对应 Run；缺 Run 就补完整 Skill，未收口就完成硬闸，不得只改监控记录。",
-    skill_turn_guard_unobserved: "在新 Codex 任务中打开 /hooks，信任仓库守卫并重启任务；守卫未观测前不得声称宿主覆盖已启用。",
+    skill_turn_guard_unobserved: "按 producerHost 检查对应宿主观察器：Codex 核对 /hooks 信任，Claude 核对项目 Hook 与身份注入；未观测前不得声称覆盖已启用。",
+    skill_guard_not_invoked: "按 producerHost/sessionId/turnId 核对为何已有学习 Run 却没有 prompt_routed；先恢复宿主观察器，再继续该路径。",
     english_long_sentence_delay: "核对英语阅读 Run 中 answer_key_checked 到 long_sentence_reviewed 的时间间隔；同场讲解应紧跟判分，超过阈值说明教学尾段可能被事后补做，需回到原篇完成长难句互动后再收口。",
   };
   return actions[code] ?? `核对 ${code} 的事实源与消费者状态，修复后用同口径复跑监控。`;
@@ -378,7 +380,23 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
     code: "skill_turn_guard_unobserved",
     severity: "warning",
     domain: "skill_execution",
-    message: "当前窗口未观察到 Codex SessionStart hook；宿主级 Skill 覆盖尚不能确认已生效。",
+    message: "当前窗口未观察到任何宿主 Hook 事件；Skill 覆盖尚不能确认已生效。",
+  });
+  if (number(skillTurnCoverage.counts?.guardNotInvoked)) mergeIssue(issues, {
+    code: "skill_guard_not_invoked",
+    severity: "error",
+    domain: "skill_execution",
+    count: number(skillTurnCoverage.counts.guardNotInvoked),
+    message: `有 ${skillTurnCoverage.counts.guardNotInvoked} 个学习 Run 已启动但同一宿主/session/turn 没有 prompt_routed，观察器可能整段未调用。`,
+    examples: (skillTurnCoverage.guardNotInvokedRuns ?? []).slice(0, 5).map((item) => `${item.producerHost}:${item.runId}/${item.skill}`),
+  });
+  if (number(skillTurnCoverage.counts?.guardErrors)) mergeIssue(issues, {
+    code: "skill_turn_guard_error",
+    severity: "error",
+    domain: "skill_execution",
+    count: number(skillTurnCoverage.counts.guardErrors),
+    message: `宿主守卫进程已启动但内部失败 ${skillTurnCoverage.counts.guardErrors} 次；会话已 fail-open，不能把它算作已审计。`,
+    examples: (skillTurnCoverage.guardErrors ?? []).slice(0, 5).map((item) => `${item.producerHost}:${item.hookEventName}/${item.failureCode}`),
   });
   if (number(skillTurnCoverage.counts?.unchecked)) mergeIssue(issues, {
     code: "skill_turn_unchecked",

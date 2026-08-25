@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 // [gpt] 2026-08-23：跨平台连续性备份；支持 Windows/macOS、dry-run 与不推送模式。
+// [gpt] 2026-08-24：Claude 当前项目记忆改为必需源，并对空源与复制完整性 fail-closed。
 //
 // 默认仍保持既有定时任务语义：复制 → 精确暂存 → commit → push 当前分支。
 // 迁移预检：node scripts/backup-memory.mjs --dry-run
@@ -10,7 +11,9 @@ import { execFileSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readdirSync,
   renameSync,
   rmSync,
   statSync,
@@ -53,10 +56,9 @@ const GIT_DIR_RE = /(?:^|[\\/])\.git(?:[\\/]|$)/u;
 
 const JOBS = [
   {
-    label: "Claude 历史记忆",
+    label: "Claude 项目记忆",
     src: LEGACY_MEMORY_ROOT,
     dest: "Claude记忆备份",
-    optional: true,
   },
   {
     label: "Codex 现役 Skills",
@@ -106,15 +108,48 @@ function git(...gitArgs) {
   return execFileSync("git", gitArgs, { cwd: REPO, encoding: "utf8" }).trim();
 }
 
+function inventory(root, exclude = null) {
+  const items = [];
+  function visit(current, relativePath = "") {
+    if (exclude?.test(current)) return;
+    const stats = lstatSync(current);
+    if (stats.isSymbolicLink()) {
+      items.push({ path: relativePath || ".", kind: "symlink", size: stats.size });
+      return;
+    }
+    if (!stats.isDirectory()) {
+      items.push({ path: relativePath || ".", kind: "file", size: stats.size });
+      return;
+    }
+    for (const name of readdirSync(current).sort()) {
+      visit(join(current, name), relativePath ? join(relativePath, name) : name);
+    }
+  }
+  visit(root);
+  return items;
+}
+
+function assertNonEmptySource(job) {
+  const items = inventory(job.src, job.exclude);
+  if (!items.length) throw new Error(`${job.label}源为空，拒绝把空目录当成可用备份：${job.src}`);
+  return items;
+}
+
 function copyAtomically(job) {
   const destination = assertInsideArchive(join(REPO, job.dest));
   const staging = assertInsideArchive(`${destination}.next-${process.pid}`);
+  const sourceInventory = assertNonEmptySource(job);
   mkdirSync(dirname(staging), { recursive: true });
   rmSync(staging, { recursive: true, force: true });
   cpSync(job.src, staging, {
     recursive: statSync(job.src).isDirectory(),
     filter: job.exclude ? (source) => !job.exclude.test(source) : undefined,
   });
+  const stagingInventory = inventory(staging);
+  if (JSON.stringify(stagingInventory) !== JSON.stringify(sourceInventory)) {
+    rmSync(staging, { recursive: true, force: true });
+    throw new Error(`${job.label}复制完整性校验失败；保留上一版备份，拒绝替换`);
+  }
   rmSync(destination, { recursive: true, force: true });
   renameSync(staging, destination);
 }
@@ -135,14 +170,19 @@ if (missingRequiredAssets.length) {
 }
 
 const availableJobs = [];
+const sourceCounts = new Map();
 for (const job of JOBS) {
   if (!existsSync(job.src)) {
     const message = `${job.label}源不存在：${job.src}`;
-    if (job.optional) console.warn(`跳过可选项：${message}`);
-    else {
-      console.error(message);
-      process.exitCode = 1;
-    }
+    console.error(message);
+    process.exitCode = 1;
+    continue;
+  }
+  try {
+    sourceCounts.set(job.label, assertNonEmptySource(job).length);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
     continue;
   }
   availableJobs.push(job);
@@ -152,10 +192,12 @@ if (process.exitCode) process.exit(process.exitCode);
 console.log(`应用根：${APP_ROOT}`);
 console.log(`档案根：${REPO}`);
 console.log(`Codex 根：${CODEX_HOME}`);
-for (const job of availableJobs) console.log(`- ${job.label}: ${job.src} → ${job.dest}`);
+for (const job of availableJobs) {
+  console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）`);
+}
 
 if (dryRun) {
-  console.log(`✓ dry-run 通过：${availableJobs.length} 个备份源与 ${REQUIRED_ARCHIVE_ASSETS.length} 个必需档案均可用；未写文件、未执行 Git。`);
+  console.log(`✓ dry-run 通过：全部 ${JOBS.length} 个必需备份源均存在且非空，${REQUIRED_ARCHIVE_ASSETS.length} 个必需档案均可用；未写文件、未执行 Git。`);
   process.exit(0);
 }
 

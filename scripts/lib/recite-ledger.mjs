@@ -6,7 +6,10 @@ const SUBJECTS = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
 const ENTRY_HEADING = /^###\s+([A-Z]\d+)[｜|]([^｜|]+)[｜|](.+)$/;
 const DATE_TOKEN = /(?<!\d)(?:(20\d{2})-)?(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])(?!\d)/g;
 const TRANSITION = /<!--\s*recite-transition-v1\s+({[^\r\n]*})\s*-->/g;
-const TRANSITION_EVENTS = new Set(["new", "withdraw", "rehang", "transfer", "route-anki"]);
+const TRANSITION_EVENTS = new Set(["new", "withdraw", "rehang", "transfer", "route-recognition"]);
+// [gpt] 2026-08-24：Anki 已停用；旧流水只读兼容，禁止继续生产新的 route-anki。
+const LEGACY_TRANSITION_EVENTS = new Set(["route-anki"]);
+const PARSEABLE_TRANSITION_EVENTS = new Set([...TRANSITION_EVENTS, ...LEGACY_TRANSITION_EVENTS]);
 // [gpt] 2026-08-10：复检证据与迁移状态分离；两者都留在同一本 Markdown 事实账中。
 const EVIDENCE_EVENT = /<!--\s*recite-evidence-v2\s+({[^\r\n]*})\s*-->/g;
 const EVIDENCE_DIMENSIONS = new Set(["understanding", "recall"]);
@@ -86,7 +89,8 @@ function statusFromField(field) {
 
 function routeFor(entry) {
   if (entry.status === "transferred") return "transferred";
-  if (/主轨移交\s*Anki|已转\s*Anki\s*轨|转\s*Anki\s*轨/i.test(`${entry.title}\n${entry.fieldLine}`)) return "anki";
+  if (/挑错式再认轨|挑错轻滚轨|recognition[_ -]?light[_ -]?roll/i.test(`${entry.title}\n${entry.fieldLine}`)) return "recognition_light_roll";
+  if (/主轨移交\s*Anki|已转\s*Anki\s*轨|转\s*Anki\s*轨/i.test(`${entry.title}\n${entry.fieldLine}`)) return "legacy_anki";
   return "daibei";
 }
 
@@ -134,7 +138,7 @@ function parseTransitions(markdown, issues) {
     else if (operationIds.has(transition.operationId)) issues.push({ severity: "error", code: "duplicate_transition_operation", id: transition.entryId || null, line, message: `迁移 operationId 重复：${transition.operationId}` });
     operationIds.add(transition.operationId);
     if (!validDate(transition.date)) issues.push({ severity: "error", code: "invalid_transition_date", id: transition.entryId || null, line, message: `迁移日期无效：${transition.date}` });
-    if (!TRANSITION_EVENTS.has(transition.event)) issues.push({ severity: "error", code: "invalid_transition_event", id: transition.entryId || null, line, message: `未知迁移事件：${transition.event}` });
+    if (!PARSEABLE_TRANSITION_EVENTS.has(transition.event)) issues.push({ severity: "error", code: "invalid_transition_event", id: transition.entryId || null, line, message: `未知迁移事件：${transition.event}` });
     if (!/^[A-Z]\d+$/.test(transition.entryId)) issues.push({ severity: "error", code: "invalid_transition_entry", id: transition.entryId || null, line, message: `迁移条目 ID 无效：${transition.entryId}` });
     transitions.push(transition);
   }
@@ -294,7 +298,7 @@ export function parseReciteLedger(markdown, { referenceDate = beijingDate() } = 
 
 export function summarizeReciteTransitions(parsed, { start = null, end = null } = {}) {
   const transitions = (parsed.transitions ?? []).filter((transition) => (!start || transition.date >= start) && (!end || transition.date <= end));
-  const byEvent = Object.fromEntries([...TRANSITION_EVENTS].map((event) => [event, transitions.filter((transition) => transition.event === event).length]));
+  const byEvent = Object.fromEntries([...PARSEABLE_TRANSITION_EVENTS].map((event) => [event, transitions.filter((transition) => transition.event === event).length]));
   return {
     start,
     end,
@@ -308,6 +312,8 @@ export function summarizeReciteLedger(parsed, { oldestLimit = 5, withdrawnLimit 
   const records = parsed.records ?? [];
   const active = records.filter((entry) => entry.status === "active");
   const actionable = active.filter((entry) => entry.route === "daibei");
+  const recognition = active.filter((entry) => entry.route === "recognition_light_roll");
+  const legacyRoutes = active.filter((entry) => entry.route === "legacy_anki");
   const withdrawn = records.filter((entry) => entry.status === "withdrawn");
   const transferred = records.filter((entry) => entry.status === "transferred");
   const sortOldest = (rows) => [...rows].sort((a, b) => {
@@ -323,7 +329,8 @@ export function summarizeReciteLedger(parsed, { oldestLimit = 5, withdrawnLimit 
       records: records.length,
       active: active.length,
       actionable: actionable.length,
-      anki: active.filter((entry) => entry.route === "anki").length,
+      recognition: recognition.length,
+      legacyRoutes: legacyRoutes.length,
       withdrawn: withdrawn.length,
       transferred: transferred.length,
       transitions: (parsed.transitions ?? []).length,
@@ -354,7 +361,7 @@ export function formatReciteLedgerSummary(summary) {
   const withdrawn = summary.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}(${entry.lastTouchedOn ?? "日期缺失"})`).join("、") || "无";
   return [
     `带背账本快照（北京 ${summary.referenceDate}）`,
-    `挂账 ${counts.active}：带背可复检 ${counts.actionable}（${subjectText}） / Anki 轨 ${counts.anki}；已撤池 ${counts.withdrawn}；移交其他轨 ${counts.transferred}`,
+    `挂账 ${counts.active}：带背可复检 ${counts.actionable}（${subjectText}） / 挑错轻滚 ${counts.recognition}${counts.legacyRoutes ? ` / 待迁旧轨 ${counts.legacyRoutes}` : ""}；已撤池 ${counts.withdrawn}；移交其他轨 ${counts.transferred}`,
     `最久未碰候选：${oldest}`,
     `已撤池轮抽候选：${withdrawn}`,
     `迁移流水：${counts.transitions} 条（只作流量审计，当前状态仍以上述 Markdown 条目为准）`,
@@ -400,11 +407,15 @@ export function applyTransition(markdown, parsed, { id, event, date, evidence, n
     toRoute = "transferred";
     statusText = `带背侧结案·移交${note}`;
     headingMarker = " → 带背侧结案";
+  } else if (event === "route-recognition") {
+    if (entry.status !== "active" || !["daibei", "legacy_anki"].includes(entry.route)) {
+      throw new Error(`route-recognition 要求 active:daibei 或 active:legacy_anki，${id} 当前为 ${entry.status}:${entry.route}`);
+    }
+    toRoute = "recognition_light_roll";
+    statusText = `挂（转挑错式再认轨·周中轻滚${note ? `：${note}` : ""}）`;
+    headingMarker = " → 转挑错式再认轨";
   } else if (event === "route-anki") {
-    if (entry.status !== "active" || entry.route !== "daibei") throw new Error(`route-anki 要求 active:daibei，${id} 当前为 ${entry.status}:${entry.route}`);
-    toRoute = "anki";
-    statusText = `挂（转 Anki 轨${note ? `：${note}` : ""}）`;
-    headingMarker = " → 转 Anki 轨";
+    throw new Error("route-anki 已于 2026-08-24 停用；改用 route-recognition");
   } else {
     throw new Error(`未知 event：${event}`);
   }

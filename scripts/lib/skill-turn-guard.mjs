@@ -1,11 +1,21 @@
 // [gpt] 2026-08-12：Codex 宿主级 Skill 路由与 Stop 审计；只保存 prompt hash，不保存用户原文。
+// [gpt] 2026-08-24：v2 统一 Codex turn_id 与 Claude prompt_id，并允许 host_only 观察降级。
 
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { canonicalObservabilityFile, discoverObservabilityFiles } from "./observability-paths.mjs";
+import {
+  IDENTITY_STATES,
+  TURN_ID_SOURCES,
+  legacyIdentity,
+  normalizeProducerHost,
+  resolveHookIdentity,
+  resolveRuntimeIdentity,
+  runtimeSessionId,
+} from "./host-identity.mjs";
 
-export const SKILL_TURN_SCHEMA_VERSION = 1;
+export const SKILL_TURN_SCHEMA_VERSION = 2;
 export const DEFAULT_SKILL_TURN_FILE = process.env.FASHUO_SKILL_TURN_FILE
   ?? canonicalObservabilityFile("skill-turns.jsonl", { moduleUrl: import.meta.url });
 
@@ -85,15 +95,34 @@ export function containsHashedArtifact(message, artifactHash, artifactLength) {
   return false;
 }
 
-function eventBase({ event, sessionId, turnId, now = new Date() }) {
+function eventBase({
+  event,
+  sessionId,
+  turnId,
+  producerHost = "unknown",
+  turnIdSource = "none",
+  identityState = sessionId && turnId ? "full" : "host_only",
+  now = new Date(),
+}) {
+  const normalizedIdentityState = safeToken(identityState, "identityState", { required: true, max: 20 });
+  const normalizedTurnIdSource = safeToken(turnIdSource, "turnIdSource", { required: true, max: 20 });
+  if (!IDENTITY_STATES.includes(normalizedIdentityState) || normalizedIdentityState === "legacy") {
+    throw new Error("新 Skill Turn 事件 identityState 只接受 full|host_only");
+  }
+  if (!TURN_ID_SOURCES.includes(normalizedTurnIdSource) || normalizedTurnIdSource === "legacy") {
+    throw new Error("新 Skill Turn 事件 turnIdSource 只接受 turn_id|prompt_id|explicit|none");
+  }
   return {
     schemaVersion: SKILL_TURN_SCHEMA_VERSION,
     eventId: `ST-${randomUUID()}`,
     event,
     observedAt: timestamp(now),
     beijingDate: beijingDate(now),
-    sessionId: safeToken(sessionId, "sessionId", { required: true, max: 100 }),
-    turnId: safeToken(turnId, "turnId", { required: true, max: 100 }),
+    producerHost: normalizeProducerHost(producerHost) ?? "unknown",
+    sessionId: safeToken(sessionId, "sessionId", { max: 100 }),
+    turnId: safeToken(turnId, "turnId", { max: 100 }),
+    turnIdSource: normalizedTurnIdSource,
+    identityState: normalizedIdentityState,
   };
 }
 
@@ -112,10 +141,10 @@ function readSkillTurnEventFile(file) {
     if (!raw) continue;
     try {
       const event = JSON.parse(raw);
-      if (event?.schemaVersion !== SKILL_TURN_SCHEMA_VERSION || !event?.event || !event?.sessionId || !event?.turnId || !event?.observedAt) {
-        throw new Error("缺少 schemaVersion/event/sessionId/turnId/observedAt");
+      if (![1, SKILL_TURN_SCHEMA_VERSION].includes(event?.schemaVersion) || !event?.event || !event?.observedAt) {
+        throw new Error("缺少可兼容 schemaVersion/event/observedAt");
       }
-      events.push(event);
+      events.push(event.schemaVersion === 1 ? { ...event, ...legacyIdentity(event) } : event);
     } catch (error) {
       issues.push({
         code: "skill_turn_telemetry_unreadable",
@@ -150,6 +179,32 @@ export function readSkillTurnEvents(file) {
   }
   events.sort((left, right) => String(left.observedAt).localeCompare(String(right.observedAt)));
   return { events, issues, files };
+}
+
+export function findGuardNotInvokedRuns(runInput = [], turnInput = [], {
+  windowStart = null,
+  windowEnd = null,
+} = {}) {
+  const runEvents = Array.isArray(runInput) ? runInput : runInput.events ?? [];
+  const turnEvents = Array.isArray(turnInput) ? turnInput : turnInput.events ?? [];
+  const observedTurns = new Set(turnEvents.filter((event) => event.event === "prompt_routed")
+    .map((event) => `${event.producerHost ?? "unknown"}:${event.sessionId ?? ""}:${event.turnId ?? ""}`));
+  return runEvents.filter((event) => (
+    event.event === "started"
+      && event.schemaVersion === SKILL_TURN_SCHEMA_VERSION
+      && event.runPurpose === "learning"
+      && ["codex", "claude"].includes(event.producerHost)
+      && event.identityState === "full"
+      && inWindow(event.observedAt, windowStart, windowEnd)
+      && !observedTurns.has(`${event.producerHost}:${event.sessionId ?? ""}:${event.turnId ?? ""}`)
+  )).map((event) => ({
+    runId: event.runId,
+    skill: event.skill,
+    producerHost: event.producerHost,
+    sessionId: event.sessionId,
+    turnId: event.turnId,
+    observedAt: event.observedAt,
+  }));
 }
 
 export function routeSkillPrompt(prompt) {
@@ -200,11 +255,12 @@ function recentPromptSkill(events, sessionId, now, maxAgeMinutes = 30) {
 }
 
 export function createPromptRoutedEvent(payload = {}, runs = new Map(), now = new Date(), { previousPromptEvents = [] } = {}) {
-  const sessionId = safeToken(payload.session_id, "session_id", { required: true, max: 100 });
-  const turnId = safeToken(payload.turn_id, "turn_id", { required: true, max: 100 });
+  const identity = resolveHookIdentity(payload);
+  const { sessionId, turnId } = identity;
+  if (!turnId) throw new Error(`${identity.producerHost} UserPromptSubmit 缺少可用 turn_id/prompt_id`);
   const prompt = String(payload.prompt ?? "");
   const route = routeSkillPrompt(prompt);
-  const active = latestActiveRun(runs, sessionId);
+  const active = sessionId ? latestActiveRun(runs, sessionId) : null;
   // [gpt] 2026-08-12：普通交卷、同 Skill 强触发和法律追问均续用活动 Run；只有明确指向不同 Skill 的强触发才切换。
   const normalizedPrompt = prompt.normalize("NFC").trim();
   const activeReply = active && (
@@ -213,15 +269,15 @@ export function createPromptRoutedEvent(payload = {}, runs = new Map(), now = ne
       || route.skill === active.skill
       || SUBMISSION_CONTINUATION_INTENT.test(` ${normalizedPrompt} `)
   ) ? active : null;
-  const closed = !active && CONTINUATION_INTENT.test(normalizedPrompt) ? latestClosedRun(runs, sessionId) : null;
+  const closed = sessionId && !active && CONTINUATION_INTENT.test(normalizedPrompt) ? latestClosedRun(runs, sessionId) : null;
   const continuationSkill = closed?.end?.outcome === "handoff" ? closed.end.handoffSkill : closed?.skill;
   // [gpt] 2026-08-21：前一轮被用户中断且尚未来得及建 Run 时，短“继续”仍继承最近一次已路由 Skill。
-  const promptContinuationSkill = !active && !closed && CONTINUATION_INTENT.test(normalizedPrompt)
+  const promptContinuationSkill = sessionId && !active && !closed && CONTINUATION_INTENT.test(normalizedPrompt)
     ? recentPromptSkill(previousPromptEvents, sessionId, now)
     : null;
   const expectedSkill = activeReply?.skill ?? route?.skill ?? continuationSkill ?? promptContinuationSkill ?? null;
   return {
-    ...eventBase({ event: "prompt_routed", sessionId, turnId, now }),
+    ...eventBase({ event: "prompt_routed", ...identity, now }),
     expectedSkill,
     expectedRunId: activeReply?.runId ?? null,
     routeSource: activeReply
@@ -236,13 +292,14 @@ export function createPromptRoutedEvent(payload = {}, runs = new Map(), now = ne
 }
 
 export function currentCodexTurnReference({
-  sessionId = process.env.CODEX_THREAD_ID,
+  sessionId = runtimeSessionId(),
   file = process.env.FASHUO_SKILL_TURN_FILE ?? DEFAULT_SKILL_TURN_FILE,
 } = {}) {
-  const normalizedSession = safeToken(sessionId, "sessionId", { max: 100 });
-  if (!normalizedSession) return { sessionId: null, turnId: null, expectedSkill: null, expectedRunId: null };
+  const runtimeIdentity = resolveRuntimeIdentity({ sessionId });
+  const normalizedSession = runtimeIdentity.sessionId;
+  if (!normalizedSession) return { ...runtimeIdentity, expectedSkill: null, expectedRunId: null };
   const parsed = readSkillTurnEvents(file);
-  if (parsed.issues.length) return { sessionId: normalizedSession, turnId: null, expectedSkill: null, expectedRunId: null };
+  if (parsed.issues.length) return { ...runtimeIdentity, expectedSkill: null, expectedRunId: null };
   const prompt = [...parsed.events].reverse().find((event) => (
     event.event === "prompt_routed"
       && event.sessionId === normalizedSession
@@ -251,14 +308,18 @@ export function currentCodexTurnReference({
   return {
     sessionId: normalizedSession,
     turnId: prompt?.turnId ?? null,
+    producerHost: prompt?.producerHost ?? runtimeIdentity.producerHost,
+    turnIdSource: prompt?.turnIdSource ?? "none",
+    identityState: prompt?.identityState ?? runtimeIdentity.identityState,
     expectedSkill: prompt?.expectedSkill ?? null,
     expectedRunId: prompt?.expectedRunId ?? null,
   };
 }
 
 export function createSessionSeenEvent(payload = {}, now = new Date()) {
+  const identity = resolveHookIdentity(payload, { sessionEvent: true });
   return {
-    ...eventBase({ event: "session_seen", sessionId: payload.session_id, turnId: "__session__", now }),
+    ...eventBase({ event: "session_seen", ...identity, now }),
     source: safeToken(payload.source, "source", { max: 40 }),
     model: safeToken(payload.model, "model", { max: 80 }),
   };
@@ -287,7 +348,7 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
     ));
     const step = checkpoint?.phase === "diagnosis_question" ? "judgment_output_verified" : "question_integrity_pass";
     const artifact = run.steps?.[step];
-    if (checkpoint && artifact?.artifactHash
+    if (lastAssistantMessage != null && checkpoint && artifact?.artifactHash
       && !containsHashedArtifact(lastAssistantMessage, artifact.artifactHash, artifact.artifactLength)) {
       return { applicable: true, compliant: false, failureCode: step === "judgment_output_verified" ? "judgment_display_drift" : "display_drift", run };
     }
@@ -304,7 +365,7 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
     const judgment = run.skill === "cuoti-fupan" && run.end?.outcome === "completed" && run.end?.phase === "result"
       ? run.steps?.judgment_output_verified
       : null;
-    if (judgment?.artifactHash
+    if (lastAssistantMessage != null && judgment?.artifactHash
       && !containsHashedArtifact(lastAssistantMessage, judgment.artifactHash, judgment.artifactLength)) {
       return { applicable: true, compliant: false, failureCode: "judgment_display_drift", run };
     }
@@ -319,8 +380,9 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
 }
 
 export function createStopCheckedEvent(payload = {}, promptEvent, result, { continued = false, now = new Date() } = {}) {
+  const identity = resolveHookIdentity(payload);
   return {
-    ...eventBase({ event: "stop_checked", sessionId: payload.session_id, turnId: payload.turn_id, now }),
+    ...eventBase({ event: "stop_checked", ...identity, now }),
     expectedSkill: promptEvent?.expectedSkill ?? null,
     runId: result?.run?.runId ?? null,
     runStatus: result?.run?.status ?? null,
@@ -328,6 +390,29 @@ export function createStopCheckedEvent(payload = {}, promptEvent, result, { cont
     failureCode: result?.failureCode ?? null,
     continued: Boolean(continued),
     stopHookActive: Boolean(payload.stop_hook_active),
+  };
+}
+
+export function createGuardErrorEvent(payload = {}, error, now = new Date()) {
+  let identity;
+  try {
+    identity = resolveHookIdentity(payload, { sessionEvent: payload.hook_event_name === "SessionStart" });
+  } catch {
+    identity = {
+      producerHost: "unknown",
+      sessionId: null,
+      turnId: null,
+      turnIdSource: "none",
+      identityState: "host_only",
+    };
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  const payloadInvalid = /(?:payload|session_id|turn_id|prompt_id|JSON|producerHost|身份字段)/iu.test(message);
+  return {
+    ...eventBase({ event: "guard_error", ...identity, now }),
+    hookEventName: safeToken(payload.hook_event_name, "hookEventName", { max: 40 }),
+    failureCode: payloadInvalid ? "hook_payload_invalid" : "guard_internal_error",
+    errorMessage: safeToken(message, "errorMessage", { max: 300 }) ?? "unknown guard error",
   };
 }
 
@@ -353,6 +438,8 @@ export function summarizeSkillTurns(input = {}, {
   const telemetrySources = Array.isArray(input) ? [] : input.files ?? [];
   const prompts = events.filter((event) => event.event === "prompt_routed" && event.expectedSkill && inWindow(event.observedAt, windowStart, windowEnd));
   const sessions = events.filter((event) => event.event === "session_seen" && inWindow(event.observedAt, windowStart, windowEnd));
+  const observedEvents = events.filter((event) => inWindow(event.observedAt, windowStart, windowEnd));
+  const guardErrors = observedEvents.filter((event) => event.event === "guard_error");
   const checksByTurn = new Map();
   for (const event of events.filter((item) => item.event === "stop_checked")) {
     checksByTurn.set(`${event.sessionId}:${event.turnId}`, event);
@@ -387,6 +474,7 @@ export function summarizeSkillTurns(input = {}, {
       protected: protectedRuns.length,
       failed: finalFailures.length,
       unchecked: unchecked.length,
+      guardErrors: guardErrors.length,
     },
     compliance: {
       eligible: passed.length + finalFailures.length,
@@ -395,9 +483,13 @@ export function summarizeSkillTurns(input = {}, {
         : null,
     },
     coverage: {
-      state: sessions.length ? "observed" : "unobserved",
+      state: observedEvents.length ? "observed" : "unobserved",
       lastSessionAt: sessions.at(-1)?.observedAt ?? null,
+      lastEventAt: observedEvents.at(-1)?.observedAt ?? null,
     },
+    byProducerHost: Object.fromEntries([...new Set(observedEvents.map((event) => event.producerHost ?? "unknown"))]
+      .sort()
+      .map((host) => [host, observedEvents.filter((event) => (event.producerHost ?? "unknown") === host).length])),
     turnLatencyMs: {
       ...summarizeLatency(turnLatencies.map((item) => item.durationMs)),
       bySkill: Object.fromEntries([...new Set(turnLatencies.map((item) => item.skill))].sort().map((skill) => [
@@ -410,6 +502,12 @@ export function summarizeSkillTurns(input = {}, {
       .filter(Boolean)
       .sort()
       .map((code) => [code, finalFailures.filter(({ check }) => check.failureCode === code).length])),
+    guardErrors: guardErrors.slice(-10).map((event) => ({
+      producerHost: event.producerHost,
+      hookEventName: event.hookEventName,
+      failureCode: event.failureCode,
+      observedAt: event.observedAt,
+    })),
     examples: [...finalFailures, ...unchecked].slice(0, 10).map(({ prompt, check }) => ({
       sessionId: prompt.sessionId,
       turnId: prompt.turnId,

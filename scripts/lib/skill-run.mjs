@@ -1,4 +1,5 @@
 // [gpt] 2026-08-12：高频 Skill 执行控制面；只记录步骤与校验结果，不保存题干、答案或密钥。
+// [gpt] 2026-08-24：v2 记录 producerHost/turnIdSource/identityState，并支持 Claude 会话身份。
 
 import { createHash, randomUUID } from "node:crypto";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -7,10 +8,11 @@ import { currentCodexTurnReference } from "./skill-turn-guard.mjs";
 import { assertStudySubject, normalizeStudySubject } from "./study-subject.mjs";
 import { extractDaibeiReciteIds } from "./daibei-target.mjs";
 import { canonicalObservabilityFile, discoverObservabilityFiles } from "./observability-paths.mjs";
+import { legacyIdentity, resolveRuntimeIdentity, runtimeSessionId } from "./host-identity.mjs";
 // [claude] 2026-08-24：阻断必须同时说明怎么补，否则模型要么再花一次往返查规则、要么瞎猜再阻断。
 import { formatRecovery, recoveryHint } from "./skill-run-recovery.mjs";
 
-export const SKILL_RUN_SCHEMA_VERSION = 1;
+export const SKILL_RUN_SCHEMA_VERSION = 2;
 export const DEFAULT_SKILL_RUN_FILE = process.env.FASHUO_SKILL_RUN_FILE
   ?? canonicalObservabilityFile("skill-runs.jsonl", { moduleUrl: import.meta.url });
 
@@ -27,10 +29,14 @@ const AUTO_STEPS = new Set([
   "result_recorded",
   "writeback_verified",
   "answer_key_checked",
+  "grading_bound",
   // [gpt] 2026-08-16：英语阅读不能只凭判分/流水收口；语料、干扰项实证与生命周期由专用校验器自动落证。
   "reading_artifacts_verified",
   "lifecycle_checked",
 ]);
+
+const RUN_PURPOSES = new Set(["learning", "diagnostic", "simulation"]);
+const ABORT_SOURCES = new Set(["user", "model", "guard", "system", "reconstruction", "unattributed"]);
 
 const MANUAL_STEPS = new Set([
   "target_frozen",
@@ -81,8 +87,8 @@ export const SKILL_WORKFLOWS = Object.freeze({
     result: ["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded", "writeback_verified", "response_verified"],
   }),
   "lunshu-pc": Object.freeze({
-    question: ["target_frozen", "source_checked", "reference_answer_checked", "question_integrity_pass"],
-    grading: ["target_frozen", "source_checked", "reference_answer_checked", "question_integrity_pass", "rubric_applied", "ledger_validated", "result_recorded", "writeback_verified", "response_verified"],
+    question: ["target_frozen", "source_checked", "reference_answer_checked", "grading_bound", "question_integrity_pass"],
+    grading: ["target_frozen", "source_checked", "reference_answer_checked", "grading_bound", "question_integrity_pass", "rubric_applied", "ledger_validated", "result_recorded", "writeback_verified", "response_verified"],
   }),
   "yingyu-pc": Object.freeze({
     plan: ["context_loaded", "priority_checked", "response_verified"],
@@ -243,7 +249,18 @@ export function hashSkillArtifact(value) {
 
 function eventBase({ runId, event, now = new Date(), sessionId = null, turnId = null }) {
   const observedAt = timestamp(now);
-  const turnReference = currentCodexTurnReference({ sessionId: sessionId ?? process.env.CODEX_THREAD_ID });
+  const turnReference = currentCodexTurnReference({ sessionId: sessionId ?? runtimeSessionId() });
+  const resolvedTurnId = turnId ?? turnReference.turnId;
+  const identity = resolveRuntimeIdentity({
+    producerHost: turnReference.producerHost,
+    sessionId: sessionId ?? turnReference.sessionId,
+    turnId: resolvedTurnId,
+    turnIdSource: resolvedTurnId && resolvedTurnId === turnReference.turnId
+      ? turnReference.turnIdSource
+      : resolvedTurnId
+        ? "explicit"
+        : "none",
+  });
   return {
     schemaVersion: SKILL_RUN_SCHEMA_VERSION,
     eventId: `SE-${randomUUID()}`,
@@ -251,8 +268,11 @@ function eventBase({ runId, event, now = new Date(), sessionId = null, turnId = 
     event,
     observedAt,
     beijingDate: beijingDate(now),
-    sessionId: safeToken(sessionId ?? turnReference.sessionId, "sessionId", { max: 100 }),
-    turnId: safeToken(turnId ?? turnReference.turnId, "turnId", { max: 100 }),
+    producerHost: identity.producerHost,
+    sessionId: safeToken(identity.sessionId, "sessionId", { max: 100 }),
+    turnId: safeToken(identity.turnId, "turnId", { max: 100 }),
+    turnIdSource: identity.turnIdSource,
+    identityState: identity.identityState,
   };
 }
 
@@ -266,10 +286,10 @@ function readSkillRunEventFile(file) {
     if (!raw) continue;
     try {
       const event = JSON.parse(raw);
-      if (event?.schemaVersion !== SKILL_RUN_SCHEMA_VERSION || !event?.runId || !event?.event || !event?.observedAt) {
-        throw new Error("缺少 schemaVersion/runId/event/observedAt");
+      if (![1, SKILL_RUN_SCHEMA_VERSION].includes(event?.schemaVersion) || !event?.runId || !event?.event || !event?.observedAt) {
+        throw new Error("缺少可兼容 schemaVersion/runId/event/observedAt");
       }
-      events.push(event);
+      events.push(event.schemaVersion === 1 ? { ...event, ...legacyIdentity(event) } : event);
     } catch (error) {
       issues.push({
         code: "skill_run_telemetry_unreadable",
@@ -329,6 +349,10 @@ export function reconstructSkillRuns(events = []) {
       kind: null,
       referenceDate: null,
       entryMode: null,
+      runPurpose: null,
+      producerHost: null,
+      turnIdSource: null,
+      identityState: null,
       sessionId: null,
       turnId: null,
       startedAt: null,
@@ -343,6 +367,9 @@ export function reconstructSkillRuns(events = []) {
     };
     current.events.push(event);
     current.lastEventAt = event.observedAt;
+    if (event.producerHost) current.producerHost = event.producerHost;
+    if (event.turnIdSource) current.turnIdSource = event.turnIdSource;
+    if (event.identityState) current.identityState = event.identityState;
     if (event.sessionId) current.sessionId = event.sessionId;
     if (event.turnId) current.turnId = event.turnId;
     if (event.event === "started") {
@@ -351,6 +378,7 @@ export function reconstructSkillRuns(events = []) {
       current.kind = event.kind ?? null;
       current.referenceDate = event.referenceDate ?? event.beijingDate;
       current.entryMode = event.entryMode ?? null;
+      current.runPurpose = event.runPurpose ?? "unknown";
       current.startedAt = event.observedAt;
       current.status = "active";
     } else if (event.event === "step") {
@@ -362,6 +390,7 @@ export function reconstructSkillRuns(events = []) {
         evidenceRef: event.evidenceRef ?? null,
         artifactHash: event.artifactHash ?? null,
         artifactLength: event.artifactLength ?? null,
+        referenceHash: event.referenceHash ?? null,
       };
       // [claude] 2026-08-24：写回真成功后，之前的延迟标记不再成立。
       if (event.step === "writeback_verified" && event.status === "pass") current.deferredWriteback = null;
@@ -389,6 +418,8 @@ export function reconstructSkillRuns(events = []) {
         phase: event.phase ?? null,
         handoffSkill: event.handoffSkill ?? null,
         handoffReason: event.handoffReason ?? null,
+        abortReason: event.outcome === "aborted" ? event.abortReason ?? "unattributed" : null,
+        abortSource: event.outcome === "aborted" ? event.abortSource ?? "unattributed" : null,
         // 事件自带的标记优先；老事件没有这个字段时回落到运行期状态。
         deferredWriteback: event.deferredWriteback ?? current.deferredWriteback ?? null,
         observedAt: event.observedAt,
@@ -414,7 +445,7 @@ function loadRun(runId, file) {
 }
 
 function assertEventTurn(run) {
-  const reference = currentCodexTurnReference({ sessionId: process.env.CODEX_THREAD_ID });
+  const reference = currentCodexTurnReference({ sessionId: runtimeSessionId() });
   if (run.sessionId && reference.sessionId && run.sessionId !== reference.sessionId) {
     throw new Error(`Skill Run 会话不一致：${run.sessionId} != ${reference.sessionId}`);
   }
@@ -441,11 +472,14 @@ export function startSkillRun({
   turnId = null,
   entryMode = null,
   targetRef = null,
+  runPurpose = "learning",
 } = {}) {
   const normalizedSkill = assertSkill(skill);
   const normalizedSubject = normalizeStudySubject(subject);
   const normalizedTargetRef = safeToken(targetRef, "targetRef", { max: 160 });
   let normalizedEntryMode = safeToken(entryMode, "entryMode", { max: 20 });
+  const normalizedRunPurpose = safeToken(runPurpose, "runPurpose", { required: true, max: 20 });
+  if (!RUN_PURPOSES.has(normalizedRunPurpose)) throw new Error("runPurpose 只接受 learning|diagnostic|simulation");
   if (normalizedSkill === "daibei-pc") {
     assertStudySubject(normalizedSubject);
     normalizedEntryMode ??= normalizedTargetRef ? "direct" : null;
@@ -459,9 +493,12 @@ export function startSkillRun({
   }
   const observedAt = timestamp(now);
   // [gpt] 2026-08-12：先解析宿主会话再查冲突；不能因调用方省略 --session 就绕过“一会话一条活跃 Run”。
-  const turnReference = currentCodexTurnReference({ sessionId: sessionId ?? process.env.CODEX_THREAD_ID });
+  const turnReference = currentCodexTurnReference({ sessionId: sessionId ?? runtimeSessionId() });
   const resolvedSessionId = sessionId ?? turnReference.sessionId;
   const resolvedTurnId = turnId ?? turnReference.turnId;
+  if (turnReference.producerHost === "claude" && !resolvedSessionId) {
+    throw new Error("SKILL_IDENTITY_REQUIRED｜Claude 宿主缺少 FASHUO_SESSION_ID/session_id；禁止新建可能串写学习事实的 Run");
+  }
   const resolvedRunId = runId ?? `SR-${beijingDate(now).replaceAll("-", "")}-${observedAt.slice(11, 19).replaceAll(":", "")}-${randomUUID().slice(0, 8)}`;
   const existing = readSkillRunEvents(file);
   if (existing.issues.length) throw new Error(`Skill Run 遥测文件有 ${existing.issues.length} 个结构错误，拒绝新建运行`);
@@ -479,6 +516,7 @@ export function startSkillRun({
     referenceDate: safeToken(referenceDate, "referenceDate", { max: 20 }) ?? beijingDate(now),
     source: safeToken(source, "source", { max: 60 }) ?? "skill-run",
     entryMode: normalizedEntryMode,
+    runPurpose: normalizedRunPurpose,
   }, file);
   if (normalizedTargetRef) {
     appendEvent({
@@ -564,7 +602,7 @@ export function resumeDaibeiSkillRun({
   if (run.status !== "waiting_user" || !target.stable || run.steps.result_recorded?.status === "pass") {
     throw new Error(`DAIBEI_RECOVERY_BLOCK｜${runId} 不是无既有结果且带稳定条目 ID 的 waiting_user Run`);
   }
-  const reference = currentCodexTurnReference({ sessionId: sessionId ?? process.env.CODEX_THREAD_ID });
+  const reference = currentCodexTurnReference({ sessionId: sessionId ?? runtimeSessionId() });
   const resolvedSessionId = sessionId ?? reference.sessionId ?? run.sessionId;
   const resolvedTurnId = turnId ?? reference.turnId ?? run.turnId;
   if (run.sessionId === resolvedSessionId && latestRunTurn(run) === resolvedTurnId) return run;
@@ -592,6 +630,7 @@ function recordSkillStep({
   evidenceRef = null,
   artifactHash = null,
   artifactLength = null,
+  referenceHash = null,
   durationMs = null,
   automatic = false,
   expectedSkill = null,
@@ -621,6 +660,9 @@ function recordSkillStep({
   if (AUTO_STEPS.has(normalizedStep) && !automatic) {
     throw new Error(`${normalizedStep} 只能由对应脚本自动落证，不能手工声明完成`);
   }
+  if (run.skill === "lunshu-pc" && normalizedStep === "reference_answer_checked" && !automatic) {
+    throw new Error("lunshu-pc/reference_answer_checked 只能由 reference-answer 加载器绑定，不能手工声明完成");
+  }
   if (MANUAL_STEPS.has(normalizedStep) && !automatic && !normalizedEvidenceRef) {
     throw new Error(`${normalizedStep} 是手工核验步骤，必须用 --ref 提供可核对的短证据引用`);
   }
@@ -636,6 +678,20 @@ function recordSkillStep({
   if (["question_integrity_pass", "judgment_output_verified"].includes(normalizedStep) && status === "pass" && (!hash || !normalizedArtifactLength)) {
     throw new Error(`${normalizedStep} 必须带同一展示草稿的 sha256 与长度，禁止无草稿回执`);
   }
+  const normalizedReferenceHash = safeToken(referenceHash, "referenceHash", { max: 64 });
+  if (normalizedReferenceHash && !/^[a-f0-9]{64}$/u.test(normalizedReferenceHash)) {
+    throw new Error("referenceHash 必须是 64 位小写 sha256");
+  }
+  if (normalizedStep === "grading_bound" && status === "pass" && !normalizedReferenceHash) {
+    throw new Error("grading_bound 必须绑定 referenceHash");
+  }
+  if (["reference_answer_checked", "grading_bound"].includes(normalizedStep)
+    && run.steps[normalizedStep]?.referenceHash
+    && run.steps[normalizedStep].referenceHash !== normalizedReferenceHash) {
+    throw new Error(`REFERENCE_BINDING_IMMUTABLE｜${normalizedStep} 已绑定另一 referenceHash，禁止换标答继续同一 Run`);
+  }
+  if (["reference_answer_checked", "grading_bound"].includes(normalizedStep)
+    && run.steps[normalizedStep]?.referenceHash === normalizedReferenceHash) return run;
   if (run.skill === "daibei-pc" && normalizedStep === "result_recorded" && status === "pass") {
     assertDaibeiResultConsistency(run, normalizedEvidenceRef);
   }
@@ -648,6 +704,7 @@ function recordSkillStep({
     evidenceRef: normalizedEvidenceRef,
     artifactHash: hash,
     artifactLength: normalizedArtifactLength,
+    referenceHash: normalizedReferenceHash,
     durationMs: milliseconds == null ? null : Math.round(milliseconds),
   }, file);
   return loadRun(runId, file);
@@ -681,6 +738,7 @@ export function recordAutomaticSkillStep({
   evidenceRef = null,
   artifactHash = null,
   artifactLength = null,
+  referenceHash = null,
   durationMs = null,
   expectedSkill = null,
   file = DEFAULT_SKILL_RUN_FILE,
@@ -696,12 +754,40 @@ export function recordAutomaticSkillStep({
     evidenceRef,
     artifactHash,
     artifactLength,
+    referenceHash,
     durationMs,
     automatic: true,
     expectedSkill,
     file,
     now,
   });
+}
+
+export function recordReferenceAnswerBinding({
+  runId,
+  referenceHash,
+  evidenceRef,
+  source = "reference-answer-loader",
+  file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
+} = {}) {
+  let run = loadRun(runId, file);
+  if (run.skill !== "lunshu-pc") throw new Error(`参考答案绑定只支持 lunshu-pc：${runId}/${run.skill}`);
+  for (const step of ["reference_answer_checked", "grading_bound"]) {
+    run = recordSkillStep({
+      runId,
+      step,
+      status: "pass",
+      source,
+      evidenceRef,
+      referenceHash,
+      automatic: true,
+      expectedSkill: "lunshu-pc",
+      file,
+      now,
+    });
+  }
+  return run;
 }
 
 /**
@@ -1106,6 +1192,9 @@ export function validateBusinessWriteback({
       "target_frozen",
       "source_checked",
       "reference_answer_checked",
+      // [gpt] 2026-08-24：referenceHash 绑定只属于 lunshu；英语作文仍使用
+      // 用户指定评分档的既有手工证据，不能被法硕主观题加载器误伤。
+      ...(expectedSkill === "lunshu-pc" ? ["grading_bound"] : []),
       "question_integrity_pass",
       "rubric_applied",
       "ledger_validated",
@@ -1136,7 +1225,7 @@ export function checkpointSkillRun({
   let run = loadRun(runId, file);
   if (run.end) throw new Error(`Skill Run 已结束：${runId}`);
   assertEventTurn(run);
-  const reference = currentCodexTurnReference({ sessionId: process.env.CODEX_THREAD_ID });
+  const reference = currentCodexTurnReference({ sessionId: runtimeSessionId() });
   if (run.status === "waiting_user" && reference.turnId && latestRunTurn(run) !== reference.turnId) {
     appendEvent({
       ...eventBase({ runId, event: "resumed", now }),
@@ -1189,6 +1278,8 @@ export function endSkillRun({
   artifactHash = null,
   handoffSkill = null,
   handoffReason = null,
+  abortReason = null,
+  abortSource = null,
   file = DEFAULT_SKILL_RUN_FILE,
   now = new Date(),
 } = {}) {
@@ -1201,6 +1292,15 @@ export function endSkillRun({
   if (!["completed", "aborted", "handoff"].includes(outcome)) throw new Error("outcome 只接受 completed|aborted|handoff");
   const normalizedHandoffSkill = safeToken(handoffSkill, "handoffSkill", { max: 40 });
   const normalizedHandoffReason = safeToken(handoffReason, "handoffReason", { max: 160 });
+  const normalizedAbortReason = outcome === "aborted"
+    ? safeToken(abortReason ?? evidenceRef ?? run.deferredWriteback?.reason, "abortReason", { max: 200 }) ?? "unattributed"
+    : safeToken(abortReason, "abortReason", { max: 200 });
+  const normalizedAbortSource = outcome === "aborted"
+    ? safeToken(abortSource, "abortSource", { max: 30 }) ?? (run.deferredWriteback ? "system" : "unattributed")
+    : safeToken(abortSource, "abortSource", { max: 30 });
+  if (normalizedAbortSource && !ABORT_SOURCES.has(normalizedAbortSource)) {
+    throw new Error(`abortSource 只接受 ${[...ABORT_SOURCES].join("|")}`);
+  }
   if (outcome === "handoff") {
     if (!normalizedHandoffSkill || normalizedHandoffSkill === run.skill) {
       throw new Error("handoff 必须指定不同的 --to <受控 Skill>");
@@ -1209,6 +1309,9 @@ export function endSkillRun({
     if (!normalizedHandoffReason) throw new Error("handoff 必须用 --reason 提供可核对的转手原因");
   } else if (normalizedHandoffSkill || normalizedHandoffReason) {
     throw new Error("只有 handoff 可以使用 --to/--reason");
+  }
+  if (outcome !== "aborted" && (normalizedAbortReason || normalizedAbortSource)) {
+    throw new Error("只有 aborted 可以使用 abortReason/abortSource");
   }
   let normalizedPhase = null;
   if (outcome === "completed") {
@@ -1300,6 +1403,8 @@ export function endSkillRun({
     outcome,
     handoffSkill: normalizedHandoffSkill,
     handoffReason: normalizedHandoffReason,
+    abortReason: normalizedAbortReason,
+    abortSource: normalizedAbortSource,
     // [claude] 2026-08-24：因同步失败而中止的 Run，证据其实在 outbox 里等着补同步。
     // 打上标记，监控才能把"基础设施抖动"和"真放弃"分开，不再一律记成不合规。
     deferredWriteback: run.deferredWriteback ? {

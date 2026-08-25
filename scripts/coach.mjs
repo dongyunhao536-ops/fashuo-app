@@ -303,7 +303,7 @@ async function ledger() {
   if (!(recent.data ?? []).length) line("（暂无）");
 
   line("\n──── 带背挂账（结构化回读；背诵栽点不混入错题本）────");
-  line(`状态：active ${reciteSummary.counts.active} / 可复检 ${reciteSummary.counts.actionable} / Anki轨 ${reciteSummary.counts.anki} / 已撤池 ${reciteSummary.counts.withdrawn} / 移交 ${reciteSummary.counts.transferred}`);
+  line(`状态：active ${reciteSummary.counts.active} / 可复检 ${reciteSummary.counts.actionable} / 挑错轻滚 ${reciteSummary.counts.recognition} / 待迁旧轨 ${reciteSummary.counts.legacyRoutes} / 已撤池 ${reciteSummary.counts.withdrawn} / 移交 ${reciteSummary.counts.transferred}`);
   line(`分科可复检：${Object.entries(reciteSummary.bySubject).filter(([, count]) => count).map(([subject, count]) => `${subject}${count}`).join(" / ") || "无"}`);
   line(`最久未碰：${reciteSummary.oldestActive.map((entry) => `${entry.id} ${entry.subject}·${String(entry.title).slice(0, 44)}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}`);
   line(`已撤池轮抽：${reciteSummary.withdrawnReviewCandidates.map((entry) => `${entry.id} ${entry.subject}·${String(entry.title).slice(0, 44)}(${entry.lastTouchedOn ?? "?"})`).join("、") || "无"}${reciteSummary.counts.warnings ? `｜格式警告 ${reciteSummary.counts.warnings}` : ""}`);

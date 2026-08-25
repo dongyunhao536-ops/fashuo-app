@@ -22,7 +22,7 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 
 1. 直接启动 `node scripts/skill-run.mjs start --skill cuoti-fupan --subject <科目> --kind intake --json`，不加载跨科候选或完整个人账本。
 2. 从图片/原话形成一个批次清单；题图数必须等于错题数。有总题数时实算 accuracy。清单只提交模型确实知道的主题/错因；未知项省略，由校验器落为 pending/unclassified。
-3. 一次运行 `node --env-file=.env.local scripts/cuoti.mjs record-batch <清单> --run <SR-ID>`，写一条进度和 N 条错题并同步；历史回放只用 `verify-batch`，不得重复入账。
+3. 清单中每道 `errors[]` 必须给 `evidenceKind`；只有 `objective_question` 或带 `questionAnchor` 的 `application_probe` 能入错题本。`recall_lapse` 转带背挂账，`wording_lapse` 转挑错式再认的周中轻滚，二者都不得生成 `study_error`。再一次运行 `node --env-file=.env.local scripts/cuoti.mjs record-batch <清单> --run <SR-ID>`，写一条进度和 N 条真实错题并同步；历史回放只用 `verify-batch`，不得重复入账。<!-- [gpt] 2026-08-24 -->
 4. 对本批独立核心考点一次运行 `material-batch --run <SR-ID>`。按原顺序一次讲一题：结论、规则、原错因、一个最小纠偏动作。错因未确认就写 pending，不能替用户编病根。
 5. 等待用户认领时，以 `checkpoint --phase intake_question --done target_frozen --ref <批次/事件>` 等待；全部讲完后以 `end --phase intake --done target_frozen,response_verified --ref <批次/事件列表>` 收口。
 

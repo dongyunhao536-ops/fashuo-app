@@ -180,6 +180,70 @@ async function lunshuContext(db, referenceDate, kind) {
   return buildLunshuContext({ referenceDate, kind, studyLogs: logs, subjective, schedule });
 }
 
+export function trackSkillContextExecution({
+  parsed,
+  recovery,
+  context,
+  referenceDate,
+  mode,
+  startedAt,
+  nowMs = () => Date.now(),
+  dependencies = {},
+}) {
+  const startRun = dependencies.startSkillRun ?? startSkillRun;
+  const recordStep = dependencies.recordAutomaticSkillStep ?? recordAutomaticSkillStep;
+  const resumeRun = dependencies.resumeDaibeiSkillRun ?? resumeDaibeiSkillRun;
+  const durationMs = nowMs() - startedAt;
+  if (parsed.runId) {
+    return recordStep({
+      runId: parsed.runId,
+      step: parsed.signal === "startup" ? "context_loaded" : "replanned",
+      status: "pass",
+      source: "skill-context",
+      durationMs,
+      expectedSkill: context.skill,
+    });
+  }
+  if (recovery?.preferred) {
+    return resumeRun({ runId: recovery.preferred.runId, subject: parsed.subject });
+  }
+  if (recovery?.targetFallback) {
+    const created = startRun({
+      skill: context.skill,
+      subject: parsed.subject,
+      kind: parsed.kind,
+      referenceDate,
+      source: "skill-context-target-recovery",
+      entryMode: "snapshot",
+      targetRef: recovery.targetFallback.targetRef,
+    });
+    return recordStep({
+      runId: created.runId,
+      step: "context_loaded",
+      status: "pass",
+      source: "skill-context",
+      durationMs,
+      expectedSkill: context.skill,
+    });
+  }
+  const created = startRun({
+    skill: context.skill,
+    subject: parsed.subject,
+    kind: parsed.kind,
+    referenceDate,
+    source: "skill-context",
+    entryMode: mode === "daibei" ? "snapshot" : null,
+  });
+  return recordStep({
+    runId: created.runId,
+    step: "context_loaded",
+    status: "pass",
+    source: "skill-context",
+    durationMs,
+    expectedSkill: context.skill,
+  });
+}
+
 export async function main(argv) {
   const [mode, ...rest] = argv;
   if (!MODES.includes(mode)) {
@@ -219,48 +283,7 @@ export async function main(argv) {
   // [gpt] 读快照不隐式写库；若可靠 outbox 仍有待同步项，显式暴露而不是把数据库旧值当最新事实。
   context.dataFreshness = pendingOutbox();
   if (parsed.track) {
-    const run = parsed.runId
-      ? recordAutomaticSkillStep({
-        runId: parsed.runId,
-        step: parsed.signal === "startup" ? "context_loaded" : "replanned",
-        status: "pass",
-        source: "skill-context",
-        durationMs: Date.now() - startedAt,
-        expectedSkill: context.skill,
-      })
-      : recovery?.preferred
-        ? resumeDaibeiSkillRun({
-            runId: recovery.preferred.runId,
-            subject: parsed.subject,
-          })
-        : recovery?.targetFallback
-          ? startSkillRun({
-            skill: context.skill,
-            subject: parsed.subject,
-            kind: parsed.kind,
-            referenceDate,
-            source: "skill-context-target-recovery",
-            entryMode: "direct",
-            targetRef: recovery.targetFallback.targetRef,
-          })
-        : (() => {
-        const created = startSkillRun({
-          skill: context.skill,
-          subject: parsed.subject,
-          kind: parsed.kind,
-          referenceDate,
-          source: "skill-context",
-          entryMode: mode === "daibei" ? "snapshot" : null,
-        });
-        return recordAutomaticSkillStep({
-          runId: created.runId,
-          step: "context_loaded",
-          status: "pass",
-          source: "skill-context",
-          durationMs: Date.now() - startedAt,
-          expectedSkill: context.skill,
-        });
-      })();
+    const run = trackSkillContextExecution({ parsed, recovery, context, referenceDate, mode, startedAt });
     context.execution = buildSkillExecutionContext(run);
     if (context.selection?.source === "waiting_target_recovered") context.selection.runId = run.runId;
     if (context.questionIntegrity?.command) context.questionIntegrity.command += ` --run ${run.runId}`;

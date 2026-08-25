@@ -4,6 +4,7 @@ description: PC 端法硕主观题训练与批改，覆盖法综论述题和专�
 ---
 
 <!-- [gpt] 2026-08-13：Codex 原生轻入口；用户已有题目/答案时跳过全盘选题快照。 -->
+<!-- [gpt] 2026-08-24：参考答案改为加载器读取并以 hash 绑定同一 Run，堵住 8-01 从犯错绑事故。 -->
 
 # 法硕主观题教练
 
@@ -29,15 +30,15 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 
 ## 出题
 
-1. 冻结题号/范围，并真实找到对应参考答案或采分点。无参考答案时按本地真题答案检索与证据降级，不能先出题后再猜标答。
-2. 用 `skill-run step` 分别留 `source_checked`、`reference_answer_checked` 的短锚点。
-3. 生成不泄答案的完整草稿并运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen,source_checked,reference_answer_checked --hash <SHA256> --ref <题号/来源>` 展示。
+1. 冻结题号/范围。真题运行 `node --env-file=.env.local scripts/reference-answer.mjs --run <SR-ID> --type case|essay --year <YYYY> --question <题号>`；用户当次指定参考答案或采分表时改用 `--file <文件>`。只有 `state=found` 才会把同一 `referenceHash` 自动绑定为 `reference_answer_checked + grading_bound`；`not_found_after_complete_scan/source_unavailable` 均不得出题或批改，也不得手工补签。
+2. 用 `skill-run step` 留 `source_checked` 的题源短锚点；参考答案正文和 hash 以加载器回执为准，不复制进 Run 日志。
+3. 生成不泄答案的完整草稿并运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen,source_checked --hash <SHA256> --ref <题号/来源>` 展示。
 4. 一次只给一题和必要的限时/字数要求，不预塞答题框架或采分点。
 5. 仅做仿真且 checkpoint 后不等待用户时，固定运行 `node scripts/skill-run.mjs abort --run <SR-ID> --ref <仿真原因>`；不要给 aborted 附 `--phase`、`--done` 或 `--reason`。<!-- [gpt] 2026-08-13 -->
 
 ## 批改
 
-1. 先固定基准：用户指定标准优先；否则用题目对应真题参考答案。若本地材料与用户标准冲突，指出差异，但仍按用户标准评分。
+1. 只使用当前 Run 已由加载器绑定的 `referenceHash` 对应内容；用户指定标准优先，否则用题目对应真题参考答案。若用户改换标准，必须先让加载器绑定新 Run，禁止在同一 Run 中悄悄换标答。若本地材料与用户标准冲突，指出差异，但仍按用户标准评分。
 2. 建立 15 分采分表，逐句标记“命中/不充分/缺失/错误”，给可复算分数。不要先看总印象再倒推分项。
 3. 输出顺序：总分与档位 → 命中点 → 最伤分的 2–3 个问题 → 逐句修改示范 → 一份合格重写骨架。案例重点查定性、规则、涵摄、结论；论述重点查概念、分论点、论证结合与结尾。
 4. 真实更新 `.local/主观题台账.md` 后，运行 `subjective-profile.mjs verify --run <SR-ID> ...`；再用带同一 Run 的 `coach.mjs log --attempt-source subjective_answer ...` 写统一尝试。只有校验与同步回执都成功，才以 `end --phase grading --done response_verified --ref <题号/得分/回执>` 收口。

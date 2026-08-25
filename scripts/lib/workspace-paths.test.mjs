@@ -2,9 +2,11 @@
 import { describe, expect, it } from "vitest";
 import { join, resolve } from "node:path";
 import {
+  claudeProjectPathKey,
   isUsableLocalPath,
   resolveAppRoot,
   resolveArchiveRoot,
+  resolveClaudeMemoryRoot,
   resolveExamTextRoot,
 } from "./workspace-paths.mjs";
 
@@ -46,5 +48,22 @@ describe("workspace paths", () => {
 
     expect(resolveAppRoot({ env })).toBe(appRoot);
     expect(resolveExamTextRoot({ env })).toBe(join(archiveRoot, "真题", "_文本"));
+  });
+
+  it("按当前 macOS 项目路径推导 Claude 项目记忆键", () => {
+    const appRoot = "/Users/dyh/Projects/fashuo-app";
+    expect(claudeProjectPathKey(appRoot)).toBe("-Users-dyh-Projects-fashuo-app");
+    expect(resolveClaudeMemoryRoot({ env: {}, appRoot, userHome: "/Users/dyh" })).toBe(
+      "/Users/dyh/.claude/projects/-Users-dyh-Projects-fashuo-app/memory",
+    );
+  });
+
+  it("保持 Windows 项目键格式并允许显式覆盖", () => {
+    expect(claudeProjectPathKey("D:\\fashuo-app")).toBe("D--fashuo-app");
+    expect(resolveClaudeMemoryRoot({
+      env: { FASHUO_CLAUDE_MEMORY_ROOT: "/tmp/claude-memory" },
+      appRoot: "/Users/dyh/Projects/fashuo-app",
+      userHome: "/Users/dyh",
+    })).toBe(resolve("/tmp/claude-memory"));
   });
 });

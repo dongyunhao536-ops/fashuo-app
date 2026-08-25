@@ -1,7 +1,7 @@
 // [gpt] 2026-08-13：CLI 科目别名归一回归，避免自然教材名阻断 Skill 启动。
 
 import { describe, expect, it } from "vitest";
-import { parseSkillContextOptions } from "./skill-context.mjs";
+import { parseSkillContextOptions, trackSkillContextExecution } from "./skill-context.mjs";
 
 describe("skill-context CLI 科目参数", () => {
   it.each([
@@ -23,5 +23,31 @@ describe("skill-context CLI 科目参数", () => {
 
   it("新错题 intake 显式进入轻量模式", () => {
     expect(parseSkillContextOptions(["民法", "--intake"])).toMatchObject({ subject: "民法", intake: true });
+  });
+
+  it("targetFallback 新 Run 走 snapshot 且真实补签 context_loaded", () => {
+    const calls = [];
+    const run = trackSkillContextExecution({
+      parsed: { runId: null, signal: "startup", subject: "法理", kind: "recall" },
+      recovery: { targetFallback: { targetRef: "R20260812-RECITE-L31" } },
+      context: { skill: "daibei-pc" },
+      referenceDate: "2026-08-24",
+      mode: "daibei",
+      startedAt: 100,
+      nowMs: () => 140,
+      dependencies: {
+        startSkillRun: (input) => {
+          calls.push(["start", input]);
+          return { runId: "SR-NEW" };
+        },
+        recordAutomaticSkillStep: (input) => {
+          calls.push(["step", input]);
+          return { runId: input.runId, skill: "daibei-pc", steps: { context_loaded: { status: "pass" } } };
+        },
+      },
+    });
+    expect(calls[0][1]).toMatchObject({ entryMode: "snapshot", targetRef: "R20260812-RECITE-L31" });
+    expect(calls[1][1]).toMatchObject({ runId: "SR-NEW", step: "context_loaded", durationMs: 40 });
+    expect(run.steps.context_loaded.status).toBe("pass");
   });
 });

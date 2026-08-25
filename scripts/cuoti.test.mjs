@@ -143,8 +143,8 @@ describe("错题截图批次摄取", () => {
       totalQuestions: 16,
       uploadedCount: 2,
       errors: [
-        { knowledge: "11401038：误选C，正确D" },
-        { knowledge: "11801037：误选C，正确B" },
+        { knowledge: "11401038：误选C，正确D", evidenceKind: "objective_question" },
+        { knowledge: "11801037：误选C，正确B", evidenceKind: "objective_question" },
       ],
     }, { today: "2026-08-13" });
 
@@ -171,7 +171,7 @@ describe("错题截图批次摄取", () => {
       chapter: "所有权",
       totalQuestions: 16,
       uploadedCount: 2,
-      errors: [{ knowledge: "只列了一道" }],
+      errors: [{ knowledge: "只列了一道", evidenceKind: "objective_question" }],
     }, { today: "2026-08-13" })).toThrow(/上传题数 2 与错题明细 1 不一致/);
   });
 
@@ -182,6 +182,7 @@ describe("错题截图批次摄取", () => {
       totalQuestions: 1,
       errors: [{
         knowledge: "处分规则误判",
+        evidenceKind: "objective_question",
         topic: {
           title: "无权处分的效力",
           classificationStatus: "confirmed",
@@ -197,7 +198,7 @@ describe("错题截图批次摄取", () => {
       subject: "民法",
       chapter: "所有权",
       totalQuestions: 5,
-      errors: [{ knowledge: "错题A" }],
+      errors: [{ knowledge: "错题A", evidenceKind: "objective_question" }],
     };
     const first = buildErrorIntakeBatchOperations(manifest, { today: "2026-08-13" });
     const second = buildErrorIntakeBatchOperations(manifest, { today: "2026-08-13" });
@@ -218,5 +219,68 @@ describe("错题截图批次摄取", () => {
       ],
     }, { today: "2026-08-13" });
     expect(verified).toMatchObject({ verified: true, studyLogId: 193, errorIds: [112, 113] });
+    expect(verified.legacyEvidenceKindAssumed).toBe(true);
+  });
+
+  it("背诵掉点整批拒绝且返回结构化接收轨，不生成半条 study_log", () => {
+    let caught;
+    try {
+      buildErrorIntakeBatchOperations({
+        subject: "刑法",
+        chapter: "犯罪停止形态",
+        activity: "背诵",
+        totalQuestions: 2,
+        errors: [
+          { knowledge: "中止时间性想不起来", evidenceKind: "recall_lapse" },
+          { knowledge: "应当与可以互换", evidenceKind: "wording_lapse" },
+        ],
+      }, { today: "2026-08-24" });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({
+      code: "ERROR_INTAKE_ROUTING_REQUIRED",
+      routes: [
+        expect.objectContaining({ evidenceKind: "recall_lapse", destination: "recite_ledger", routingState: "pending_confirmation" }),
+        expect.objectContaining({ evidenceKind: "wording_lapse", destination: "recognition_light_roll", routingState: "pending_confirmation", preserveReciteEntry: true }),
+      ],
+    });
+    expect(caught.message).toContain("recitation_lapse_not_study_error");
+    expect(caught.operations).toBeUndefined();
+  });
+
+  it("背诵场景缺 evidenceKind 时阻断，但有独立题面锚点的应用错可入账", () => {
+    expect(() => buildErrorIntakeBatchOperations({
+      subject: "刑法",
+      chapter: "犯罪停止形态",
+      activity: "背诵",
+      totalQuestions: 1,
+      errors: [{ knowledge: "默错一处" }],
+    }, { today: "2026-08-24" })).toThrow(/evidence_kind_required/);
+
+    const batch = buildErrorIntakeBatchOperations({
+      subject: "刑法",
+      chapter: "犯罪停止形态",
+      activity: "背诵",
+      totalQuestions: 1,
+      errors: [{
+        knowledge: "独立案例题把中止判成未遂",
+        evidenceKind: "application_probe",
+        questionAnchor: "本次题面#犯罪中止案例1",
+      }],
+    }, { today: "2026-08-24" });
+    expect(batch.operations.filter((item) => item.op === "new_error")).toEqual([
+      expect.objectContaining({ evidenceKind: "application_probe", questionAnchor: "本次题面#犯罪中止案例1" }),
+    ]);
+  });
+
+  it("application_probe 没有题面锚点时拒绝写入", () => {
+    expect(() => buildErrorIntakeBatchOperations({
+      subject: "民法",
+      chapter: "监护",
+      totalQuestions: 1,
+      errors: [{ knowledge: "案例判断错误", evidenceKind: "application_probe" }],
+    }, { today: "2026-08-24" })).toThrow(/question_anchor_required/);
   });
 });
