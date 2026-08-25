@@ -111,6 +111,7 @@ describe("Skill Run 硬闸", () => {
       evidenceRef: "T#42/E#81:partial:diagnosis=pending",
       artifactHash: "b".repeat(64),
       artifactLength: 200,
+      candidateHash: "9".repeat(64),
       file,
     });
     expect(() => assertCuotiJudgmentReady({ runId: run.runId, topicId: 42, result: "partial", diagnosisStatus: "confirmed", file })).toThrow(/不一致/);
@@ -141,9 +142,35 @@ describe("Skill Run 硬闸", () => {
       evidenceRef: "T#42/E#81:partial:diagnosis=confirmed",
       artifactHash: "c".repeat(64),
       artifactLength: 220,
+      candidateHash: "9".repeat(64),
       file,
     });
     expect(endSkillRun({ runId: run.runId, phase: "result", artifactHash: "c".repeat(64), file }).status).toBe("completed");
+  });
+
+  it("pending 到终态的候选集合 hash 不可改写", () => {
+    const { file } = harness();
+    const run = startSkillRun({ skill: "cuoti-fupan", file, runId: "SR-CANDIDATE-HASH" });
+    recordAutomaticSkillStep({
+      runId: run.runId,
+      step: "judgment_output_verified",
+      source: "judgment-result",
+      evidenceRef: "T#42:fail:diagnosis=pending",
+      artifactHash: "a".repeat(64),
+      artifactLength: 200,
+      candidateHash: "b".repeat(64),
+      file,
+    });
+    expect(() => recordAutomaticSkillStep({
+      runId: run.runId,
+      step: "judgment_output_verified",
+      source: "judgment-result",
+      evidenceRef: "T#42:fail:diagnosis=confirmed",
+      artifactHash: "c".repeat(64),
+      artifactLength: 220,
+      candidateHash: "d".repeat(64),
+      file,
+    })).toThrow(/DIAGNOSIS_CANDIDATES_IMMUTABLE/);
   });
 
   it("confirmed 判题卡必须与 diagnosis_recorded 状态一致", () => {

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ErrorEntryValidationError, isLegacyErrorEntry, migrateLegacyErrorEntry, validateErrorEntry } from "./error-entry.mjs";
 
 describe("validateErrorEntry", () => {
-  it("把未确认标签和病根规范为显式 pending，而不是要求模型猜测", () => {
+  it("把未确认病根规范为持久 unassessed，而不是把候选写成跨会话 pending", () => {
     const entry = validateErrorEntry({
       op: "new_error",
       subject: "民法学",
@@ -17,7 +17,7 @@ describe("validateErrorEntry", () => {
       topic: null,
       entryState: {
         classificationStatus: "pending",
-        diagnosisStatus: "pending",
+        diagnosisStatus: "unassessed",
         rootCauseCode: "unclassified",
         chapterStatus: "explicit",
       },

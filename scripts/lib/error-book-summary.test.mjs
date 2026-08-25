@@ -79,4 +79,17 @@ describe("error book summary", () => {
     expect(summary.unclassifiedEvents).toEqual([]);
     expect(summary.dismissedUnclassifiedEvents.map((event) => event.id)).toEqual([8]);
   });
+
+  it("untraceable 仍保留 open 错题，但不冒充 pending 或 confirmed 病根", () => {
+    const summary = summarizeErrorBookRows([
+      row({ diagnosis_status: "untraceable", root_cause_code: "unclassified" }),
+    ]);
+    expect(summary.activeTopics[0]).toMatchObject({
+      id: 10,
+      eventCounts: { open: 1, absorbed: 0, dismissed: 0 },
+      untraceableDiagnosisCount: 1,
+      confirmedRootCauses: [],
+      pendingFailurePatterns: [],
+    });
+  });
 });

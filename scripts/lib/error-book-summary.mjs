@@ -53,6 +53,7 @@ export function summarizeErrorBookRows(rows = []) {
       confirmedRootCauses: new Set(),
       confirmedFailurePatterns: new Set(),
       pendingFailurePatterns: new Set(),
+      untraceableEventIds: new Set(),
       primaryEventIds: new Set(),
     };
     topic.events.set(event.id, event);
@@ -63,6 +64,7 @@ export function summarizeErrorBookRows(rows = []) {
     }
     if (row.failure_pattern_code && row.diagnosis_status === "confirmed") topic.confirmedFailurePatterns.add(String(row.failure_pattern_code));
     if (row.failure_pattern_code && row.diagnosis_status === "pending") topic.pendingFailurePatterns.add(String(row.failure_pattern_code));
+    if (row.diagnosis_status === "untraceable") topic.untraceableEventIds.add(event.id);
     topics.set(topicId, topic);
   }
 
@@ -89,6 +91,7 @@ export function summarizeErrorBookRows(rows = []) {
       confirmedRootCauses: [...topic.confirmedRootCauses],
       confirmedFailurePatterns: [...topic.confirmedFailurePatterns],
       pendingFailurePatterns: [...topic.pendingFailurePatterns],
+      untraceableDiagnosisCount: topic.untraceableEventIds.size,
       latestEventDate: latestDate(linkedEvents),
       latestOpenDate: latestDate(linkedEvents.filter((event) => event.status === "open")),
       active,

@@ -390,6 +390,7 @@ export function reconstructSkillRuns(events = []) {
         evidenceRef: event.evidenceRef ?? null,
         artifactHash: event.artifactHash ?? null,
         artifactLength: event.artifactLength ?? null,
+        candidateHash: event.candidateHash ?? null,
         referenceHash: event.referenceHash ?? null,
       };
       // [claude] 2026-08-24：写回真成功后，之前的延迟标记不再成立。
@@ -630,6 +631,7 @@ function recordSkillStep({
   evidenceRef = null,
   artifactHash = null,
   artifactLength = null,
+  candidateHash = null,
   referenceHash = null,
   durationMs = null,
   automatic = false,
@@ -678,6 +680,14 @@ function recordSkillStep({
   if (["question_integrity_pass", "judgment_output_verified"].includes(normalizedStep) && status === "pass" && (!hash || !normalizedArtifactLength)) {
     throw new Error(`${normalizedStep} 必须带同一展示草稿的 sha256 与长度，禁止无草稿回执`);
   }
+  const normalizedCandidateHash = safeToken(candidateHash, "candidateHash", { max: 64 });
+  if (normalizedCandidateHash && !/^[a-f0-9]{64}$/u.test(normalizedCandidateHash)) {
+    throw new Error("candidateHash 必须是 64 位小写 sha256");
+  }
+  if (normalizedStep === "judgment_output_verified" && run.steps.judgment_output_verified?.candidateHash
+    && normalizedCandidateHash !== run.steps.judgment_output_verified.candidateHash) {
+    throw new Error("DIAGNOSIS_CANDIDATES_IMMUTABLE｜终态判题卡必须逐字沿用本 Run 已展示的病根候选，不能认领后改写");
+  }
   const normalizedReferenceHash = safeToken(referenceHash, "referenceHash", { max: 64 });
   if (normalizedReferenceHash && !/^[a-f0-9]{64}$/u.test(normalizedReferenceHash)) {
     throw new Error("referenceHash 必须是 64 位小写 sha256");
@@ -704,6 +714,7 @@ function recordSkillStep({
     evidenceRef: normalizedEvidenceRef,
     artifactHash: hash,
     artifactLength: normalizedArtifactLength,
+    candidateHash: normalizedCandidateHash,
     referenceHash: normalizedReferenceHash,
     durationMs: milliseconds == null ? null : Math.round(milliseconds),
   }, file);
@@ -738,6 +749,7 @@ export function recordAutomaticSkillStep({
   evidenceRef = null,
   artifactHash = null,
   artifactLength = null,
+  candidateHash = null,
   referenceHash = null,
   durationMs = null,
   expectedSkill = null,
@@ -754,6 +766,7 @@ export function recordAutomaticSkillStep({
     evidenceRef,
     artifactHash,
     artifactLength,
+    candidateHash,
     referenceHash,
     durationMs,
     automatic: true,
@@ -919,7 +932,7 @@ export function recordDaibeiKnowledgeAttemptWriteback({
 }
 
 function parsedCuotiEvidenceRef(value) {
-  const match = String(value ?? "").match(/^(T#\d+)(?:\/(E#\d+))?:(pass|partial|fail|void)(?::diagnosis=(pending|confirmed|rejected))?$/u);
+  const match = String(value ?? "").match(/^(T#\d+)(?:\/(E#\d+))?:(pass|partial|fail|void)(?::diagnosis=(pending|confirmed|rejected|untraceable))?$/u);
   return match ? {
     targetRef: match[1],
     eventRef: match[2] ?? null,
@@ -929,7 +942,7 @@ function parsedCuotiEvidenceRef(value) {
 }
 
 function parsedDiagnosisEvidenceRef(value) {
-  const match = String(value ?? "").match(/^(T|E)#(\d+):diagnosis=(confirmed|rejected)$/u);
+  const match = String(value ?? "").match(/^(T|E)#(\d+):diagnosis=(confirmed|rejected|untraceable)$/u);
   return match ? { targetKind: match[1], targetId: Number(match[2]), diagnosisStatus: match[3] } : null;
 }
 
@@ -965,7 +978,7 @@ function assertCuotiJudgmentConsistency(run) {
   const recorded = parsedCuotiEvidenceRef(run.steps.result_recorded?.evidenceRef);
   const judged = parsedCuotiEvidenceRef(run.steps.judgment_output_verified?.evidenceRef);
   if (!recorded?.diagnosisStatus || !judged?.diagnosisStatus) {
-    throw new Error("错题复检缺可解析的 T#:<pass|partial|fail|void>:diagnosis=<pending|confirmed|rejected> 判题或写回引用");
+    throw new Error("错题复检缺可解析的 T#:<pass|partial|fail|void>:diagnosis=<pending|confirmed|rejected|untraceable> 判题或写回引用");
   }
   if (recorded.targetRef !== judged.targetRef || recorded.result !== judged.result) {
     throw new Error(`错题判题卡与业务写回不一致：${judged.targetRef}:${judged.result} != ${recorded.targetRef}:${recorded.result}`);
@@ -976,7 +989,7 @@ function assertCuotiJudgmentConsistency(run) {
     }
     throw new Error("错题病根仍待认领；先 checkpoint --phase diagnosis_question 展示 pending 证据卡并等待用户选择，不能直接 completed/result");
   }
-  if (["confirmed", "rejected"].includes(judged.diagnosisStatus)) {
+  if (["confirmed", "rejected", "untraceable"].includes(judged.diagnosisStatus)) {
     const diagnosis = run.steps.diagnosis_recorded?.status === "pass"
       ? parsedDiagnosisEvidenceRef(run.steps.diagnosis_recorded.evidenceRef)
       : null;

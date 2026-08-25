@@ -280,10 +280,12 @@ describe("study outbox", () => {
     const scripted = scriptedDb([
       { data: { id: 7, subject: "刑法", kp_id: null }, error: null },
       { data: { id: 10, topic_key: "刑法:a", title: "主观方面必备要件口径", classification_status: "confirmed" }, error: null },
+      { data: null, error: null },
       { data: [], error: null },
       { data: null, error: null },
       { data: { id: 7, subject: "刑法", kp_id: null }, error: null },
       { data: { id: 11, topic_key: "刑法:b", title: "审题层级区分", classification_status: "confirmed" }, error: null },
+      { data: null, error: null },
       { data: null, error: null },
     ]);
 
@@ -311,6 +313,71 @@ describe("study outbox", () => {
       .filter(Boolean);
     expect(linkUpserts.map((step) => step.args[0].role)).toEqual(["primary", "related"]);
     expect(linkUpserts.every((step) => step.args[1].onConflict === "study_error_id,topic_id")).toBe(true);
+  });
+
+  it("只有显式用户决定操作会把病根标为 untraceable，且不改错题事件状态", async () => {
+    const path = tempPath();
+    writeOutbox(path, [{
+      op: "mark_diagnosis_untraceable",
+      operation_id: "diagnosis-user-forgot",
+      studyErrorId: 7,
+      topicId: 10,
+      runId: "SR-USER-DECISION",
+      userRef: "user:turn-20 原话：这个我早忘了，不认领",
+      reason: "用户明确表示已忘记当时思路",
+      untraceableAt: "2026-08-25T02:00:00.000Z",
+    }]);
+    const scripted = scriptedDb([
+      { data: { study_error_id: 7, topic_id: 10, diagnosis_status: "unassessed" }, error: null },
+      { data: [{ study_error_id: 7, topic_id: 10 }], error: null },
+    ]);
+
+    const result = await syncStudyOutbox({
+      db: scripted.db,
+      path,
+      today: "2026-08-25",
+      now: new Date("2026-08-25T02:00:00.000Z"),
+    });
+
+    expect(result.failed).toEqual([]);
+    expect(scripted.calls.map((call) => call.table)).toEqual(["study_error_topic", "study_error_topic"]);
+    const update = scripted.calls[1].steps.find((step) => step.method === "update").args[0];
+    expect(update).toMatchObject({
+      diagnosis_status: "untraceable",
+      root_cause_code: "unclassified",
+      failure_pattern_code: null,
+      diagnosis_decided_run_id: "SR-USER-DECISION",
+      untraceable_by: "user",
+      untraceable_reason: "用户明确表示已忘记当时思路",
+    });
+  });
+
+  it("Run 中止或空 user: 引用不能伪装成 untraceable 用户决定", async () => {
+    for (const userRef of ["run_close", "user:"]) {
+      const path = tempPath();
+      writeOutbox(path, [{
+        op: "mark_diagnosis_untraceable",
+        operation_id: `diagnosis-invalid-ref-${userRef}`,
+        studyErrorId: 7,
+        topicId: 10,
+        runId: "SR-ABORTED",
+        userRef,
+        reason: "会话中止",
+        untraceableAt: "2026-08-25T02:00:00.000Z",
+      }]);
+      const scripted = scriptedDb([]);
+
+      const result = await syncStudyOutbox({
+        db: scripted.db,
+        path,
+        today: "2026-08-25",
+        now: new Date("2026-08-25T02:00:00.000Z"),
+      });
+
+      expect(result.succeeded).toEqual([]);
+      expect(result.failed[0].error).toMatch(/UNTRACEABLE_USER_REF_REQUIRED/);
+      expect(scripted.calls).toEqual([]);
+    }
   });
 
   it("结构化迁移证据达到跨时门槛才 stable，后续失败立即回 open", async () => {
@@ -749,7 +816,7 @@ describe("study outbox", () => {
       prompt_integrity: "invalid",
       cold: false,
       failure_pattern_code: null,
-      diagnosis_status: "pending",
+      diagnosis_status: "unassessed",
     });
     expect(row.note).toContain("responsibility=teacher");
     expect(row.note).toContain("user_error=false");

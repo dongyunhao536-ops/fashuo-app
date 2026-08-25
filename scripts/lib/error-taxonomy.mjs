@@ -17,7 +17,7 @@ const SUBJECT_ALIASES = new Map([
 ]);
 
 export const ROOT_CAUSES = Object.freeze({
-  unclassified: "待认领",
+  unclassified: "未作病根诊断",
   knowledge_gap: "规则或结论缺失",
   boundary_miss: "限定语、例外或边界遗漏",
   concept_confusion: "易混概念混淆",
@@ -29,7 +29,9 @@ export const ROOT_CAUSES = Object.freeze({
   memory_decay: "已掌握内容回落",
 });
 
-export const DIAGNOSIS_STATUSES = ["pending", "confirmed", "rejected"];
+// pending 只属于当前 Run 的临时判题 artifact；持久关系用 unassessed 表示“尚未形成诊断事实”。
+export const DIAGNOSIS_STATUSES = ["pending", "confirmed", "rejected", "untraceable"];
+export const PERSISTED_DIAGNOSIS_STATUSES = ["unassessed", "confirmed", "rejected", "untraceable"];
 export const CLASSIFICATION_STATUSES = ["pending", "confirmed"];
 export const REVIEW_RESULTS = ["pass", "partial", "fail", "void"];
 
@@ -126,6 +128,14 @@ export function validateDiagnosisStatus(status) {
   const value = String(status ?? "pending");
   if (!DIAGNOSIS_STATUSES.includes(value)) {
     throw new Error(`未知诊断状态「${value}」；可用：${DIAGNOSIS_STATUSES.join(", ")}`);
+  }
+  return value;
+}
+
+export function validatePersistedDiagnosisStatus(status) {
+  const value = String(status ?? "unassessed");
+  if (!PERSISTED_DIAGNOSIS_STATUSES.includes(value)) {
+    throw new Error(`未知持久诊断状态「${value}」；可用：${PERSISTED_DIAGNOSIS_STATUSES.join(", ")}`);
   }
   return value;
 }
@@ -554,12 +564,19 @@ export function parseTopicOptions(input, { requireTopic = false, allowStandalone
   const rootCauseCode = validateRootCause(takeOption(args, "--cause") ?? "unclassified");
   const failurePatternCode = validateFailurePattern(takeOption(args, "--pattern"));
   const rootCauseNote = takeOption(args, "--cause-note");
-  const diagnosisStatus = validateDiagnosisStatus(takeOption(args, "--diagnosis") ?? "pending");
+  const diagnosisStatus = validatePersistedDiagnosisStatus(takeOption(args, "--diagnosis") ?? "unassessed");
   const classificationStatus = takeOption(args, "--classification") ?? "confirmed";
   if (!CLASSIFICATION_STATUSES.includes(classificationStatus)) {
     throw new Error(`未知分类状态「${classificationStatus}」；可用：${CLASSIFICATION_STATUSES.join(", ")}`);
   }
   const evidenceAnchor = takeOption(args, "--anchor");
+  const untraceableBy = takeOption(args, "--untraceable-by");
+  const untraceableReason = takeOption(args, "--untraceable-reason");
+  if (diagnosisStatus === "untraceable") {
+    throw new Error("untraceable 只能由 mark-untraceable 在用户明确说忘了/不认领后写入；通用主题参数禁止直写");
+  } else if (untraceableBy || untraceableReason) {
+    throw new Error("只有 --diagnosis untraceable 才能填写 untraceable 元数据");
+  }
   const role = takeOption(args, "--role") ?? "primary";
   if (!['primary', 'related'].includes(role)) throw new Error("--role 只能是 primary 或 related");
   if (requireTopic && !title) throw new Error("缺少 --topic <标准弱项主题>");
@@ -583,6 +600,9 @@ export function parseTopicOptions(input, { requireTopic = false, allowStandalone
       rootCauseNote,
       diagnosisStatus,
       evidenceAnchor,
+      untraceableAt: null,
+      untraceableBy,
+      untraceableReason,
       role,
     } : null,
   };

@@ -59,7 +59,7 @@ export function buildStudyLogAttemptConfig(flags, {
     assessmentContext: value(flags, "context") ?? "practice",
     durationSeconds: value(flags, "seconds"),
     failurePatternCode: value(flags, "pattern"),
-    diagnosisStatus: value(flags, "diagnosis") ?? "pending",
+    diagnosisStatus: value(flags, "diagnosis") ?? "unassessed",
     evidenceAnchor: value(flags, "anchor"),
     responseExcerpt: value(flags, "response"),
   };
@@ -116,7 +116,7 @@ export function buildReciteAttemptOperation(event, entry) {
     cold: event.cold,
     promptIntegrity: event.promptIntegrity,
     failurePatternCode: event.failurePatternCode,
-    diagnosisStatus: event.diagnosisStatus ?? "pending",
+    diagnosisStatus: event.diagnosisStatus ?? "unassessed",
     evidenceAnchor: event.evidenceAnchor,
     note: event.note,
     projectEvidence: false,

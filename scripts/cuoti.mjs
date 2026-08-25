@@ -37,6 +37,7 @@ import { loadLocalMaterialCorpus, sortMaterialRows } from "./lib/material-corpus
 import { repeatedMaterialHint } from "./lib/skill-run-recovery.mjs";
 import { assertCuotiJudgmentReady, assertSkillRunPrerequisites, readSkillRun, recordAutomaticSkillStep, recordBusinessWriteback, recordWritebackDeferred, validateDaibeiIngestReceipt } from "./lib/skill-run.mjs";
 import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
+import { normalizeDiagnosisTransition } from "./lib/diagnosis-state.mjs";
 import { validateErrorEntry } from "./lib/error-entry.mjs";
 import {
   CLASSIFICATION_STATUSES,
@@ -52,6 +53,7 @@ import {
   recommendNextReviewProbe,
   summarizeReviewProof,
   validateDiagnosisStatus,
+  validatePersistedDiagnosisStatus,
   validateFailurePattern,
   validateReviewDate,
   validateReviewResult,
@@ -741,8 +743,17 @@ async function reopen(rest) {
 async function add(rest) {
   const stageOnly = rest.includes("--stage");
   rest = rest.filter((arg) => arg !== "--stage");
+  let runId = null;
+  try { runId = takeNamed(rest, "--run"); } catch (error) { return fail(error.message); }
   let parsed;
   try { parsed = parseAddArgs(rest); } catch (error) { return fail(error.message); }
+  if (parsed.topic && !runId) return fail("带主题的新错题必须提供 --run，确保学习事实具有可追溯宿主身份");
+  if (parsed.topic && parsed.topic.diagnosisStatus !== "unassessed") {
+    return fail("add 只能新建 diagnosis=unassessed；用户认领/排除必须经当前 Run 的判题 Gate 后用 classify 写入");
+  }
+  if (parsed.topic) {
+    if (["confirmed", "rejected", "untraceable"].includes(parsed.topic.diagnosisStatus)) parsed.topic.diagnosisDecidedRunId = runId;
+  }
   const entrySource = parsed.recurOf ? "recurrence" : "direct";
   try {
     appendPending({ op: "new_error", ...parsed, entrySource });
@@ -777,6 +788,14 @@ async function recordBatch(rest) {
     }
   } catch (error) {
     return fail(`批次预检失败：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const topicOperations = batch.operations.filter((operation) => operation.op === "new_error" && operation.topic);
+  if (topicOperations.length && !runId) return fail("批次含主题时必须提供 --run，确保学习事实具有可追溯宿主身份");
+  if (topicOperations.some((operation) => operation.topic.diagnosisStatus !== "unassessed")) {
+    return fail("record-batch 的新错题只能写 diagnosis=unassessed；候选与用户决定不得批量预填");
+  }
+  for (const operation of topicOperations) {
+    if (["confirmed", "rejected", "untraceable"].includes(operation.topic.diagnosisStatus)) operation.topic.diagnosisDecidedRunId = runId;
   }
   for (const operation of batch.operations) appendPending(operation);
   console.log(`⏳ 已暂存批次 ${batch.key}：学习日志 1 条 + 错题 ${batch.errorCount} 条｜${batch.summary}`);
@@ -855,13 +874,30 @@ async function classify(rest) {
   let parsed;
   try { parsed = parseTopicOptions(rest, { requireTopic: true }); } catch (error) { return fail(error.message); }
   if (parsed.rest.length) return fail(`无法识别的 classify 参数：${parsed.rest.join(" ")}`);
+  if (!runId) return fail("classify 必须提供产生本轮候选的 --run；禁止跨会话认领病根");
+  if (!["confirmed", "rejected"].includes(parsed.topic.diagnosisStatus)) {
+    return fail("classify 只接受 --diagnosis confirmed|rejected；pending 只在当前 Run artifact，用户明确忘记/不认领请用 mark-untraceable");
+  }
+  if (["confirmed", "rejected", "untraceable"].includes(parsed.topic.diagnosisStatus)) parsed.topic.diagnosisDecidedRunId = runId;
+  try {
+    normalizeDiagnosisTransition({
+      fromStatus: "unassessed",
+      toStatus: parsed.topic.diagnosisStatus,
+      decisionRunId: parsed.topic.diagnosisDecidedRunId,
+      untraceableAt: parsed.topic.untraceableAt,
+      untraceableBy: parsed.topic.untraceableBy,
+      untraceableReason: parsed.topic.untraceableReason,
+    });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
   appendPending({ op: "classify_error", studyErrorId, topic: parsed.topic });
   console.log(`⏳ 已暂存待同步·归类 #${studyErrorId} →「${parsed.topic.title}」｜病根 ${ROOT_CAUSES[parsed.topic.rootCauseCode]}｜诊断 ${parsed.topic.diagnosisStatus}`);
   if (stageOnly) return console.log("（已按 --stage 仅暂存；稍后运行 sync。）");
   const synced = await sync([]);
   if (!synced) return;
   // [gpt] 2026-08-13：用户认领或排除病根后，用真实归类同步回执解锁 result；pending 仍停在诊断问题阶段。
-  if (runId && ["confirmed", "rejected"].includes(parsed.topic.diagnosisStatus)) {
+  if (runId && ["confirmed", "rejected", "untraceable"].includes(parsed.topic.diagnosisStatus)) {
     recordAutomaticSkillStep({
       runId,
       step: "diagnosis_recorded",
@@ -906,17 +942,94 @@ async function classifyBatch(rest) {
           rootCauseCode: validateRootCause(row.topic.rootCauseCode ?? "unclassified"),
           failurePatternCode: validateFailurePattern(row.topic.failurePatternCode),
           rootCauseNote: row.topic.rootCauseNote ?? null,
-          diagnosisStatus: validateDiagnosisStatus(row.topic.diagnosisStatus ?? "pending"),
+          diagnosisStatus: validatePersistedDiagnosisStatus(row.topic.diagnosisStatus ?? "unassessed"),
           evidenceAnchor: row.topic.evidenceAnchor ?? null,
           role,
         },
       });
+      if (operations.at(-1).topic.diagnosisStatus !== "unassessed") {
+        throw new Error(`第 ${index + 1} 项 classify-batch 只能写 unassessed；用户认领/排除必须走当前 Run 的 classify`);
+      }
     }
   } catch (error) { return fail(error.message); }
   for (const op of operations) appendPending(op);
   console.log(`⏳ 已暂存批量归类 ${operations.length} 条（${file}）`);
   if (stageOnly) return console.log("（已按 --stage 仅暂存；可先 sync --dry 预览。）");
   await sync([]);
+}
+
+// [gpt] 2026-08-25：只有用户明确说忘了/不认领才落不可追溯；断网、Stop 与 Run 中止不得调用。
+async function markDiagnosisUntraceable(rest) {
+  const stageOnly = rest.includes("--stage");
+  rest = rest.filter((arg) => arg !== "--stage");
+  let runId;
+  let reason;
+  let userRef;
+  try {
+    runId = takeNamed(rest, "--run");
+    reason = takeNamed(rest, "--reason");
+    userRef = takeNamed(rest, "--user-ref");
+  } catch (error) {
+    return fail(error.message);
+  }
+  const studyErrorId = Number(rest.shift());
+  if (!Number.isInteger(studyErrorId) || studyErrorId <= 0) return fail("mark-untraceable 需要错题事件 id");
+  if (!runId) return fail("mark-untraceable 必须提供当前 --run");
+  if (!String(reason ?? "").trim()) return fail("mark-untraceable 必须提供 --reason，记录用户明确决定的内容");
+  // [gpt] 2026-08-25：写库入口与判题卡统一要求 user: 原话引用，避免 run_close/Stop 冒充用户决定。
+  if (!/^user:\s*\S/iu.test(String(userRef ?? "").trim())) {
+    return fail("mark-untraceable 的 --user-ref 必须以 user: 开头并带用户原话或回合引用；Run 中止不能代替");
+  }
+  if (rest.length) return fail(`无法识别的 mark-untraceable 参数：${rest.join(" ")}`);
+  let activeRun;
+  try {
+    activeRun = assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan", steps: ["target_frozen"] });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+  const frozenRefs = new Set(String(activeRun.steps.target_frozen?.evidenceRef ?? "").match(/(?:T|E)#\d+/gu) ?? []);
+  if (!frozenRefs.has(`E#${studyErrorId}`)) return fail(`E#${studyErrorId} 不在本轮 target_frozen 中`);
+  const response = await db.from("study_error_topic")
+    .select("topic_id, diagnosis_status, role")
+    .eq("study_error_id", studyErrorId)
+    .eq("role", "primary")
+    .maybeSingle();
+  if (response.error) return fail(`读取待终结病根失败：${response.error.message}`);
+  if (!response.data?.topic_id) return fail(`E#${studyErrorId} 没有唯一 primary 主题关系`);
+  const untraceableAt = new Date().toISOString();
+  try {
+    normalizeDiagnosisTransition({
+      fromStatus: response.data.diagnosis_status,
+      toStatus: "untraceable",
+      decisionRunId: runId,
+      untraceableAt,
+      untraceableBy: "user",
+      untraceableReason: String(reason).trim(),
+    });
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+  const staged = appendPending({
+    op: "mark_diagnosis_untraceable",
+    studyErrorId,
+    topicId: Number(response.data.topic_id),
+    runId,
+    reason: String(reason).trim(),
+    userRef: String(userRef).trim(),
+    untraceableAt,
+  });
+  console.log(`⏳ 已暂存用户明确决定：E#${studyErrorId}/T#${response.data.topic_id} → untraceable；错题事件保持原状态`);
+  if (stageOnly) return console.log("（已按 --stage 仅暂存；同步成功前不能收口 Run。）");
+  const synced = await sync([]);
+  if (!synced) return;
+  recordAutomaticSkillStep({
+    runId,
+    step: "diagnosis_recorded",
+    source: "cuoti-mark-untraceable",
+    evidenceRef: `E#${studyErrorId}:diagnosis=untraceable`,
+    expectedSkill: "cuoti-fupan",
+  });
+  console.log(`DIAGNOSIS_UNTRACEABLE｜${runId}｜E#${studyErrorId}/T#${response.data.topic_id}｜operation=${staged.operation_id}`);
 }
 
 function takeNamed(rest, name) {
@@ -1009,10 +1122,16 @@ async function review(rest) {
       } : {}),
     };
   } catch (error) { return fail(error.message); }
+  if (["confirmed", "rejected", "untraceable"].includes(op.diagnosisStatus) && !runId) {
+    return fail("终态病根 review 必须带 --run，且先由 classify/mark-untraceable 产生 diagnosis_recorded 学习事实回执");
+  }
   if (runId) {
     try {
       // [gpt] 2026-08-13：在进入 outbox 前核对题号、结果和病根状态，避免显示卡与真实写回各说一套。
       assertCuotiJudgmentReady({ runId, topicId, result: op.result, diagnosisStatus: op.diagnosisStatus });
+      if (["confirmed", "rejected", "untraceable"].includes(op.diagnosisStatus)) {
+        assertSkillRunPrerequisites({ runId, expectedSkill: "cuoti-fupan", steps: ["diagnosis_recorded"] });
+      }
     } catch (error) {
       return fail(error instanceof Error ? error.message : String(error));
     }
@@ -1105,7 +1224,7 @@ async function review(rest) {
       durationMs: Date.now() - reviewStartedAt,
     });
     // [gpt] 2026-08-13：若本次 review 已带已认领/已排除栽点，业务写回同时留下病根状态回执。
-    if (["confirmed", "rejected"].includes(op.diagnosisStatus)) {
+    if (["confirmed", "rejected", "untraceable"].includes(op.diagnosisStatus)) {
       recordAutomaticSkillStep({
         runId,
         step: "diagnosis_recorded",
@@ -1128,6 +1247,7 @@ function pending(rest) {
     else if (o.op === "reopen_error") console.log(`${i + 1}. 恢复误销账 #${(o.ids ?? []).join(" #")}（${o.reason}）\n   ${(o.items ?? []).join("\n   ")}`);
     else if (o.op === "new_error") console.log(`${i + 1}. 新错题 [${o.subject ?? "未分类"}] ${o.knowledge}${o.topic ? ` → 主题「${o.topic.title}」` : " → 待归类"}`);
     else if (o.op === "classify_error") console.log(`${i + 1}. 归类 #${o.studyErrorId} → 主题「${o.topic?.title ?? "?"}」`);
+    else if (o.op === "mark_diagnosis_untraceable") console.log(`${i + 1}. 用户明确标记病根不可追溯 E#${o.studyErrorId}/T#${o.topicId}（${o.reason}｜${o.userRef}）`);
     else if (o.op === "error_review") console.log(`${i + 1}. 复检 T#${o.topicId} ${o.result} ${o.variantKind ? `${o.variantKind}/L${o.transferLevel}/${o.probeAxis}` : "legacy"} ${o.date ?? ""}`);
     else if (o.op === "study_log") console.log(`${i + 1}. 学习日志 ${o.date ?? ""} [${o.subject}]${o.chapter ? " " + o.chapter : ""} ${o.activity}${o.accuracy != null ? " " + o.accuracy + "%" : ""}${o.feeling ? "（" + o.feeling + "）" : ""}`);
     else if (o.op === "ask_point") console.log(`${i + 1}. 答疑卡点 [${o.subject}] ${o.confusion}`);
@@ -1376,6 +1496,7 @@ async function main(argv) {
     case "record-batch": await recordBatch(args); break;
     case "verify-batch": await verifyBatch(args); break;
     case "classify": await classify(args); break;
+    case "mark-untraceable": await markDiagnosisUntraceable(args); break;
     case "classify-batch": await classifyBatch(args); break;
     case "review": await review(args); break;
     case "pending": pending(args); break;
@@ -1390,12 +1511,13 @@ async function main(argv) {
       console.log("  老题轮换抽查：recheck [n]（全覆盖·永不淘汰）/ pass <id...>（过了）/ recheck-fail <id...>（没过·重新挂账）");
       console.log("  写：absorb <id...>|--like <片段>（自动校验至少两轴、两条带依据通过，其中至少一次冷检）");
       console.log("      reopen <id...> --reason <审计原因>（只纠正误销账，不伪造失败）");
-      console.log("      add <科目> <事件说明> --chapter 章 [--topic 标准主题 --section 节 --kp ID --classification pending|confirmed --cause 病根代码 --pattern 栽点代码 --cause-note 说明 --diagnosis pending|confirmed --anchor 锚点 --recur-of id]");
+      console.log("      add <科目> <事件说明> --chapter 章 [--topic 标准主题 --section 节 --kp ID --classification pending|confirmed --cause unclassified --diagnosis unassessed --anchor 锚点 --recur-of id --run SR-ID]");
       console.log("      record-batch <批次.json> [--run SR-ID] [--stage]（一条进度 + N 条截图错题，一次同步）");
       console.log("      verify-batch <批次.json> --run SR-ID（只读核验既有批次，不重复写入）");
       console.log("      classify <事件id> --topic <标准主题> [同上主题参数] [--run SR-ID]");
+      console.log('      mark-untraceable <事件id> --run SR-ID --user-ref "用户原话/回合引用" --reason "用户明确说忘了或不认领"（断网/Stop/Run 中止禁用）');
       console.log("      classify-batch <归类计划.json> [--stage]");
-      console.log("      review <主题id> <pass|partial|fail|void> --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --axis 验证轴 [--context practice|timed|full_mock --seconds N --event 错题id --dimension application|recall --pattern 栽点代码 --diagnosis pending|confirmed --same-session --cued --invalid-prompt --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键 --schedule 排期id --schedule-file 路径 --run SR-ID]");
+      console.log("      review <主题id> <pass|partial|fail|void> --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --axis 验证轴 [--context practice|timed|full_mock --seconds N --event 错题id --dimension application|recall --pattern 栽点代码 --diagnosis pending|confirmed|rejected|untraceable --same-session --cued --invalid-prompt --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键 --schedule 排期id --schedule-file 路径 --run SR-ID]（终态须先有 classify/mark-untraceable 回执）");
       console.log(`  验证轴：${Object.entries(REVIEW_PROBE_AXES).map(([code, item]) => `${code}=${item.label}`).join(" / ")}`);
       console.log(`  病根代码：${Object.entries(ROOT_CAUSES).map(([code, label]) => `${code}=${label}`).join(" / ")}`);
       console.log(`  栽点代码：${Object.entries(FAILURE_PATTERNS).map(([code, item]) => `${code}=${item.label}`).join(" / ")}`);

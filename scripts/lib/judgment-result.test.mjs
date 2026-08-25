@@ -40,7 +40,48 @@ describe("validateJudgmentResult", () => {
 
   it("confirmed 必须同时有结论和认领引用", () => {
     expect(() => validateJudgmentResult(valid({ diagnosis: { status: "confirmed", claim: "混淆成立与对抗" } }))).toThrow(/认领/);
-    expect(validateJudgmentResult(valid({ diagnosis: { status: "confirmed", claim: "混淆成立与对抗", recognitionRef: "user:turn-18" } })).diagnosis.status).toBe("confirmed");
+    const candidates = valid().diagnosis.candidates;
+    const confirmed = validateJudgmentResult(valid({ diagnosis: {
+      status: "confirmed",
+      claim: candidates[1],
+      candidates,
+      rejectedCandidates: [candidates[0]],
+      recognitionRef: "user:turn-18",
+    } }));
+    expect(confirmed.diagnosis.status).toBe("confirmed");
+    expect(renderJudgmentCard(confirmed)).toContain("【本轮已排除】");
+  });
+
+  it("终态必须原样保留全部候选与排除路径，不能在认领后改写", () => {
+    const candidates = valid().diagnosis.candidates;
+    expect(() => validateJudgmentResult(valid({ diagnosis: {
+      status: "confirmed",
+      claim: candidates[0],
+      candidates,
+      rejectedCandidates: ["事后新编候选"],
+      recognitionRef: "user:turn-18",
+    } }))).toThrow(/逐字来自/);
+    expect(validateJudgmentResult(valid({ diagnosis: {
+      status: "rejected",
+      candidates,
+      rejectedCandidates: candidates,
+      recognitionRef: "user:turn-18",
+    } })).diagnosis.rejectedCandidates).toEqual(candidates);
+  });
+
+  it("untraceable 只接受用户明确决定引用，并在临时卡保留但不确诊候选", () => {
+    const candidates = valid().diagnosis.candidates;
+    const item = validateJudgmentResult(valid({ diagnosis: {
+      status: "untraceable",
+      candidates,
+      recognitionRef: "user:turn-19 原话：早忘了，不认领",
+    } }));
+    expect(renderJudgmentCard(item)).toContain("仅存本 Run artifact·未形成事实");
+    expect(() => validateJudgmentResult(valid({ diagnosis: {
+      status: "untraceable",
+      candidates,
+      recognitionRef: "run_close",
+    } }))).toThrow(/user:/);
   });
 
   it("缺证据锚点或涵摄时直接阻断", () => {

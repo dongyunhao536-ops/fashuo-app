@@ -43,12 +43,12 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 3. 依 [命题判题规范.md](命题判题规范.md) 生成一份不泄答案的完整题面；运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen --hash <SHA256> --ref <T#/E#/排期>` 展示。
 4. 用户作答后保留其原答与依据，逐项判定。把判定、规则、涵摄、证据锚点与病根状态写入临时 JSON，运行 `node scripts/judgment-result.mjs check --file <判题结果.json> --run <SR-ID>`；只展示脚本返回的证据卡。教材、讲义或考试分析证据必须同时带页码（未知须明示）与行号；法条带条号，真题带年份与题号。pending 病根的确定性表述会被自动阻断。<!-- [gpt] 2026-08-13 -->
 5. 用 `cuoti.mjs review ... --run <SR-ID>` 记录真实结果并同步；CLI 会在进入 outbox 前强制核对判题卡与写回的 T#、结果和病根状态。提示后通过、原题复现、规则复述和同日订正不能冒充跨日 clean 迁移。<!-- [gpt] 2026-08-13 -->
-6. 业务与判题 Gate 回执成功后分流：`pass` 或无需认领病根时，证据门槛满足才 `absorb`，并用 `end --phase result --hash <证据卡SHA256>` 收口；`partial/fail + diagnosis=pending` 必须用 `checkpoint --phase diagnosis_question --hash <pending证据卡SHA256>` 原样展示证据卡并等待认领，禁止先 `end`。用户选择后，沿用同一 Run 执行 `cuoti.mjs classify <事件id> ... --diagnosis confirmed|rejected --run <SR-ID>`（或在尚未写 review 时直接带已认领状态写入），重新生成 confirmed/rejected 证据卡，再用新卡 hash 收口。不能手签 `response_verified/diagnosis_recorded`，也不能改写 Gate 卡。<!-- [gpt] 2026-08-13 -->
+6. 业务与判题 Gate 回执成功后分流：`pass` 或无需认领病根时，证据门槛满足才 `absorb`，并用 `end --phase result --hash <证据卡SHA256>` 收口；`partial/fail + diagnosis=pending` 必须用 `checkpoint --phase diagnosis_question --hash <pending证据卡SHA256>` 原样展示证据卡并在**同一 Run**等待认领，禁止先 `end`。用户选择后执行同 Run 的 `cuoti.mjs classify ... --diagnosis confirmed|rejected --run <SR-ID>`。只有用户明确说“忘了/不认领”时，才能执行 `cuoti.mjs mark-untraceable <事件id> --run <SR-ID> --user-ref <用户原话或回合引用> --reason <明确决定>`；“下一题”、断网、Stop 或 Run 中止都不能代替用户决定，只在遥测层记中止。候选只存当前 Run 临时 artifact，学习事实初始写 `unassessed`，不形成跨会话待办。untraceable 错题保持 open，只正面考知识点、不针对猜测误解出题、不与老账并案。不能手签 `response_verified/diagnosis_recorded`，也不能改写 Gate 卡。<!-- [gpt] 2026-08-25 -->
 
 ## 决策与数据底线
 
 - 今日/逾期且带稳定对象的具体 P0 排期先执行；周报宏观 P0 只加权，不锁科。
-- `pending` 病根只用于设计中性探针；用户认领或证据确认后才可写 confirmed。认领前不说“暴露了、证明了、确认了某病根”，只能列 2–4 个互斥候选。<!-- [gpt] 2026-08-13 -->
+- `pending` 病根只在当前 Run 临时 artifact 内有效，绝不写数据库；持久关系没有诊断事实时写 `unassessed`。用户认领或排除后才写 confirmed/rejected；只有用户明确说忘了/不认领才写 untraceable。认领前不说“暴露了、证明了、确认了某病根”，只能列 2–4 个互斥候选；untraceable 不驱动定向探针或并案。<!-- [gpt] 2026-08-25 -->
 - 题面污染写 `void`，只归责教练，不记用户 fail、不推进冷却、不关闭排期。
 - 写入、同步和销账只认脚本回执；不以自然语言声称“已经记录”。
 - 输出只需交代结论、关键依据、证据是否有效、事件能否销账以及下一步；不要朗读内部状态机。

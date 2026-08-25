@@ -35,6 +35,7 @@ export function main(argv = process.argv.slice(2)) {
   const normalized = validateJudgmentResult(parsed);
   const card = renderJudgmentCard(normalized);
   const artifactHash = hashSkillArtifact(card);
+  const candidateHash = hashSkillArtifact(JSON.stringify(normalized.diagnosis.candidates));
   if (options.run) {
     recordAutomaticSkillStep({
       runId: options.run,
@@ -43,12 +44,13 @@ export function main(argv = process.argv.slice(2)) {
       evidenceRef: `${normalized.targetRef}:${normalized.result}:diagnosis=${normalized.diagnosis.status}`,
       artifactHash,
       artifactLength: card.length,
+      candidateHash,
       durationMs: Date.now() - startedAt,
       expectedSkill: "cuoti-fupan",
     });
   }
-  if (options.json) console.log(JSON.stringify({ ok: true, normalized, card, artifactHash, artifactLength: card.length }, null, 2));
-  else console.log(`JUDGMENT_RESULT_PASS｜sha256=${artifactHash}\n${card}`);
+  if (options.json) console.log(JSON.stringify({ ok: true, normalized, card, artifactHash, candidateHash, artifactLength: card.length }, null, 2));
+  else console.log(`JUDGMENT_RESULT_PASS｜sha256=${artifactHash}｜candidates_sha256=${candidateHash}\n${card}`);
   return 0;
 }
 

@@ -12,7 +12,7 @@ import {
   buildReviewEvidence,
   nextMasteryStatus,
   topicInsertPayload,
-  validateDiagnosisStatus,
+  validatePersistedDiagnosisStatus,
   validateFailurePattern,
   validateReviewResult,
   validateRootCause,
@@ -22,6 +22,7 @@ import { normalizeTransferMetadata } from "./evidence-transfer.mjs";
 import { withIngestAudit } from "./ingest-ledger.mjs";
 import { recordLearningAttempt } from "./learning-attempt.mjs";
 import { materializeStudyLogAttempt } from "./attempt-producers.mjs";
+import { normalizeDiagnosisTransition } from "./diagnosis-state.mjs";
 import { errorEntrySourceLabel, isLegacyErrorEntry, migrateLegacyErrorEntry, validateErrorEntry } from "./error-entry.mjs";
 import {
   normalizeStudyActivity,
@@ -181,6 +182,22 @@ async function getTopic(db, subject, topic, nowIso) {
 
 async function linkErrorTopic(db, studyErrorId, topicId, topic, nowIso) {
   const role = topic.role ?? "primary";
+  const diagnosisStatus = validatePersistedDiagnosisStatus(topic.diagnosisStatus ?? "unassessed");
+  const current = await db.from("study_error_topic")
+    .select("diagnosis_status")
+    .eq("study_error_id", studyErrorId)
+    .eq("topic_id", topicId)
+    .maybeSingle();
+  throwOnError(current, "读取病根原状态失败");
+  const transition = normalizeDiagnosisTransition({
+    fromStatus: current.data?.diagnosis_status ?? "unassessed",
+    toStatus: diagnosisStatus,
+    decisionRunId: topic.diagnosisDecidedRunId,
+    untraceableAt: topic.untraceableAt,
+    untraceableBy: topic.untraceableBy,
+    untraceableReason: topic.untraceableReason,
+  });
+  // 先完成病根状态校验，再降级旧主主题；校验失败不得留下半次远端改写。
   if (role === "primary") {
     const demote = await db
       .from("study_error_topic")
@@ -197,7 +214,11 @@ async function linkErrorTopic(db, studyErrorId, topicId, topic, nowIso) {
     root_cause_code: validateRootCause(topic.rootCauseCode),
     failure_pattern_code: validateFailurePattern(topic.failurePatternCode),
     root_cause_note: topic.rootCauseNote ?? null,
-    diagnosis_status: validateDiagnosisStatus(topic.diagnosisStatus),
+    diagnosis_status: diagnosisStatus,
+    diagnosis_decided_run_id: transition.decisionRunId,
+    untraceable_at: transition.untraceableAt,
+    untraceable_by: transition.untraceableBy,
+    untraceable_reason: transition.untraceableReason,
     evidence_anchor: topic.evidenceAnchor ?? null,
     updated_at: nowIso,
   }, { onConflict: "study_error_id,topic_id" });
@@ -226,6 +247,7 @@ async function inheritRecurTopics(db, sourceId, targetId, explicitTopic, nowIso)
   throwOnError(response, "读取复发源主题失败");
   let count = 0;
   for (const link of response.data ?? []) {
+    if (link.diagnosis_status === "untraceable") continue;
     await linkErrorTopic(db, targetId, link.topic_id, {
       role: explicitTopic && link.role === "primary" ? "related" : link.role,
       rootCauseCode: link.root_cause_code,
@@ -271,7 +293,8 @@ async function appendKnowledgeEvidence(db, op, today) {
   const sourceKind = oneOf(op.sourceKind ?? "manual", EVIDENCE_KINDS, "知识证据来源");
   // [gpt] 2026-08-12：void 不能携带用户栽点；教练责任在统一证据入口再次强制覆盖。
   const teacherVoid = result === "void";
-  const diagnosisStatus = validateDiagnosisStatus(teacherVoid ? "pending" : op.diagnosisStatus ?? "pending");
+  const rawDiagnosisStatus = teacherVoid ? "unassessed" : op.diagnosisStatus ?? "unassessed";
+  const diagnosisStatus = validatePersistedDiagnosisStatus(rawDiagnosisStatus === "pending" ? "unassessed" : rawDiagnosisStatus);
   const failurePatternCode = teacherVoid ? null : validateFailurePattern(op.failurePatternCode);
   const note = teacherVoid
     ? ["responsibility=teacher", "valid_attempt=false", "user_error=false", "cooldown_advanced=false", op.note].filter(Boolean).join("；")
@@ -549,7 +572,7 @@ async function appendErrorApplicationEvidence(db, op, event, today) {
     cold: false,
     promptIntegrity: "clean",
     failurePatternCode: op.topic?.failurePatternCode ?? null,
-    diagnosisStatus: op.topic?.diagnosisStatus ?? "pending",
+    diagnosisStatus: op.topic?.diagnosisStatus ?? "unassessed",
     evidenceAnchor: op.topic?.evidenceAnchor ?? `study_error#${event.id}`,
     note: op.topic?.rootCauseNote ?? op.knowledge ?? null,
   }, today);
@@ -606,6 +629,41 @@ async function applyOperation(db, op, today, nowIso) {
     return { kind: "reopen_error", affected: response.data?.length ?? 0 };
   }
 
+  if (op.op === "mark_diagnosis_untraceable") {
+    if (!/^user:\s*\S/iu.test(String(op.userRef ?? "").trim())) {
+      throw new Error("UNTRACEABLE_USER_REF_REQUIRED｜必须以 user: 开头引用用户明确说忘了或不认领；手改 outbox、Run 中止或 Stop 不能绕过");
+    }
+    const current = await db.from("study_error_topic")
+      .select("study_error_id, topic_id, diagnosis_status")
+      .eq("study_error_id", op.studyErrorId)
+      .eq("topic_id", op.topicId)
+      .maybeSingle();
+    throwOnError(current, "读取待终结病根失败");
+    if (!current.data) throw new Error(`错题 E#${op.studyErrorId} 与主题 T#${op.topicId} 的病根关系不存在`);
+    const transition = normalizeDiagnosisTransition({
+      fromStatus: current.data.diagnosis_status,
+      toStatus: "untraceable",
+      decisionRunId: op.runId,
+      untraceableAt: op.untraceableAt,
+      untraceableBy: "user",
+      untraceableReason: op.reason,
+    });
+    const updated = await db.from("study_error_topic").update({
+      root_cause_code: "unclassified",
+      failure_pattern_code: null,
+      root_cause_note: transition.untraceableReason,
+      diagnosis_status: "untraceable",
+      diagnosis_decided_run_id: transition.decisionRunId,
+      untraceable_at: transition.untraceableAt,
+      untraceable_by: transition.untraceableBy,
+      untraceable_reason: transition.untraceableReason,
+      updated_at: nowIso,
+    }).eq("study_error_id", op.studyErrorId).eq("topic_id", op.topicId).select("study_error_id, topic_id");
+    throwOnError(updated, "终结未认领病根失败");
+    if (!updated.data?.length) throw new Error("终结未认领病根未命中任何关系");
+    return { kind: "mark_diagnosis_untraceable", affected: 1, eventId: op.studyErrorId, topicId: op.topicId, userRef: op.userRef };
+  }
+
   if (op.op === "new_error") {
     let recurSource = null;
     if (op.recurOf) {
@@ -617,6 +675,13 @@ async function applyOperation(db, op, today, nowIso) {
       throwOnError(sourceResponse, "读取复发源错题失败");
       if (!sourceResponse.data) throw new Error(`复发源错题 #${op.recurOf} 不存在`);
       recurSource = sourceResponse.data;
+      const sourceDiagnosis = await db.from("study_error_topic")
+        .select("diagnosis_status, role")
+        .eq("study_error_id", op.recurOf);
+      throwOnError(sourceDiagnosis, "读取复发源病根状态失败");
+      if ((sourceDiagnosis.data ?? []).some((link) => link.role === "primary" && link.diagnosis_status === "untraceable")) {
+        throw new Error(`UNTRACEABLE_RECURRENCE_MERGE_FORBIDDEN｜源错题 #${op.recurOf} 病根不可追溯；新题只能独立正面考点，不得并案`);
+      }
     }
     const response = await db.from("study_error").upsert({
       operation_id: op.operation_id,
@@ -730,7 +795,7 @@ async function applyOperation(db, op, today, nowIso) {
         assessmentContext: op.assessmentContext ?? "practice",
         durationSeconds: op.durationSeconds ?? null,
         failurePatternCode: op.failurePatternCode ?? null,
-        diagnosisStatus: op.diagnosisStatus ?? "pending",
+        diagnosisStatus: op.diagnosisStatus ?? "unassessed",
         evidenceAnchor: reviewEvidence.evidenceAnchor ?? `error_topic#${op.topicId}`,
         note: teacherVoid ? responsibilityNote : op.note ?? op.angle ?? null,
       }, today)
@@ -755,7 +820,7 @@ async function applyOperation(db, op, today, nowIso) {
       assessmentContext: op.assessmentContext ?? "practice",
       durationSeconds: op.durationSeconds ?? null,
       failurePatternCode: teacherVoid ? null : op.failurePatternCode ?? null,
-      diagnosisStatus: op.diagnosisStatus ?? "pending",
+      diagnosisStatus: op.diagnosisStatus ?? "unassessed",
       evidenceAnchor: reviewEvidence.evidenceAnchor ?? `error_topic#${op.topicId}`,
       responseExcerpt: op.responseExcerpt ?? null,
       note: teacherVoid ? responsibilityNote : op.note ?? op.angle ?? null,

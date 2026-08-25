@@ -64,12 +64,12 @@ describe("error taxonomy", () => {
     });
   });
 
-  it("主题分类与病根认领分开：主题可确认而病根仍待认领", () => {
+  it("主题分类与病根认领分开：主题可确认而病根事实仍未形成", () => {
     const { topic } = parseTopicOptions(["--topic", "审题层级错位"]);
     expect(topic).toMatchObject({
       classificationStatus: "confirmed",
       rootCauseCode: "unclassified",
-      diagnosisStatus: "pending",
+      diagnosisStatus: "unassessed",
     });
   });
 

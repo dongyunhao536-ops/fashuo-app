@@ -1,11 +1,11 @@
 // [gpt] 2026-08-13：错题事件的单一机器校验入口；确定性字段交给代码，内容判断仍由模型/用户完成。
 import {
   CLASSIFICATION_STATUSES,
-  DIAGNOSIS_STATUSES,
+  PERSISTED_DIAGNOSIS_STATUSES,
   SUBJECTS,
   cleanTopicTitle,
   normalizeSubject,
-  validateDiagnosisStatus,
+  validatePersistedDiagnosisStatus,
   validateFailurePattern,
   validateRootCause,
 } from "./error-taxonomy.mjs";
@@ -63,9 +63,9 @@ function normalizeTopic(topic, chapter, issues) {
     issues.push(issue("failure_pattern_invalid", "topic.failurePatternCode", error.message));
   }
 
-  let diagnosisStatus = "pending";
+  let diagnosisStatus = "unassessed";
   try {
-    diagnosisStatus = validateDiagnosisStatus(topic.diagnosisStatus ?? "pending");
+    diagnosisStatus = validatePersistedDiagnosisStatus(topic.diagnosisStatus ?? "unassessed");
   } catch (error) {
     issues.push(issue("diagnosis_status_invalid", "topic.diagnosisStatus", error.message));
   }
@@ -99,6 +99,10 @@ function normalizeTopic(topic, chapter, issues) {
     failurePatternCode,
     rootCauseNote,
     diagnosisStatus,
+    diagnosisDecidedRunId: text(topic.diagnosisDecidedRunId) || null,
+    untraceableAt: text(topic.untraceableAt) || null,
+    untraceableBy: text(topic.untraceableBy) || null,
+    untraceableReason: text(topic.untraceableReason) || null,
     evidenceAnchor,
     role,
   };
@@ -108,7 +112,7 @@ function normalizeTopic(topic, chapter, issues) {
  * 校验并规范化一条 new_error。
  *
  * - source/chapter 由调用入口传入，不要求模型记忆来源枚举。
- * - 未识别主题或病根是合法状态，但会被显式写成 pending/unclassified。
+ * - 未识别主题或病根是合法状态，但会被显式写成 unassessed/unclassified；pending 候选不入库。
  * - confirmed 表示已有人/证据认领，因此必须带完整锚点与说明。
  */
 export function validateErrorEntry(input, defaults = {}) {
@@ -152,9 +156,9 @@ export function validateErrorEntry(input, defaults = {}) {
 
   const topic = normalizeTopic(input.topic, chapter, issues);
   const classificationStatus = topic?.classificationStatus ?? "pending";
-  const diagnosisStatus = topic?.diagnosisStatus ?? "pending";
+  const diagnosisStatus = topic?.diagnosisStatus ?? "unassessed";
   const rootCauseCode = topic?.rootCauseCode ?? "unclassified";
-  if (!DIAGNOSIS_STATUSES.includes(diagnosisStatus)) {
+  if (!PERSISTED_DIAGNOSIS_STATUSES.includes(diagnosisStatus)) {
     issues.push(issue("diagnosis_status_invalid", "topic.diagnosisStatus", `诊断状态不合法：${diagnosisStatus}`));
   }
 
@@ -169,7 +173,7 @@ export function validateErrorEntry(input, defaults = {}) {
     entrySource,
     chapter,
     topic,
-    // 机器派生审计状态：没有主题/病根不是“忘填”，而是明确待确认。
+    // 机器派生审计状态：没有病根不是跨会话待认领，而是明确“未作诊断”。
     entryState: {
       classificationStatus,
       diagnosisStatus,

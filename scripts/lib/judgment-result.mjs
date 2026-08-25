@@ -56,10 +56,19 @@ function normalizeDiagnosis(value, result, issues) {
   const candidates = Array.isArray(diagnosis.candidates)
     ? diagnosis.candidates.map(text).filter(Boolean)
     : [];
+  const rejectedCandidates = Array.isArray(diagnosis.rejectedCandidates)
+    ? diagnosis.rejectedCandidates.map(text).filter(Boolean)
+    : [];
   const recognitionRef = text(diagnosis.recognitionRef) || null;
 
   if (new Set(candidates).size !== candidates.length) {
     issues.push(issue("diagnosis_candidates_duplicate", "diagnosis.candidates", "病根候选必须互斥且不得重复"));
+  }
+  if (new Set(rejectedCandidates).size !== rejectedCandidates.length) {
+    issues.push(issue("diagnosis_rejected_candidates_duplicate", "diagnosis.rejectedCandidates", "被排除候选不得重复"));
+  }
+  if (rejectedCandidates.some((candidate) => !candidates.includes(candidate))) {
+    issues.push(issue("diagnosis_rejected_candidate_unknown", "diagnosis.rejectedCandidates", "被排除项必须逐字来自本 Run 原始 candidates，不得事后改写"));
   }
   if (candidates.some((item) => item.length > 240)) {
     issues.push(issue("diagnosis_candidate_too_long", "diagnosis.candidates", "单个病根候选不能超过 240 字"));
@@ -73,15 +82,33 @@ function normalizeDiagnosis(value, result, issues) {
     const unsafe = [claim, ...candidates].filter(Boolean).find((item) => DEFINITIVE_PENDING_PATTERNS.some((pattern) => pattern.test(item)));
     if (unsafe) issues.push(issue("pending_definitive_language", "diagnosis", "pending 病根含确定性表述；改为候选或待认领措辞"));
     if (recognitionRef) issues.push(issue("pending_recognition_ref", "diagnosis.recognitionRef", "pending 状态不能同时声称已有用户认领引用"));
+    if (rejectedCandidates.length) issues.push(issue("pending_rejected_candidates_forbidden", "diagnosis.rejectedCandidates", "用户决定前不能预填排除项"));
   }
   if (status === "confirmed") {
     if (!claim) issues.push(issue("confirmed_claim_missing", "diagnosis.claim", "confirmed 病根必须给出已认领结论"));
     if (!recognitionRef) issues.push(issue("confirmed_recognition_missing", "diagnosis.recognitionRef", "confirmed 病根必须带用户认领或可核验证据引用"));
+    if (candidates.length < 2 || candidates.length > 4) issues.push(issue("confirmed_candidates_missing", "diagnosis.candidates", "confirmed 终态必须原样保留本 Run 的 2–4 条候选"));
+    if (claim && !candidates.includes(claim)) issues.push(issue("confirmed_claim_not_candidate", "diagnosis.claim", "认领结论必须逐字来自本 Run 原始 candidates"));
+    if (candidates.length && (rejectedCandidates.length !== candidates.length - 1 || rejectedCandidates.includes(claim))) {
+      issues.push(issue("confirmed_exclusions_incomplete", "diagnosis.rejectedCandidates", "confirmed 终态必须列出除认领项外的全部排除候选"));
+    }
   }
-  if (status === "rejected" && !recognitionRef) {
-    issues.push(issue("rejected_recognition_missing", "diagnosis.recognitionRef", "rejected 病根必须带排除依据或用户反馈引用"));
+  if (status === "rejected") {
+    if (!recognitionRef) issues.push(issue("rejected_recognition_missing", "diagnosis.recognitionRef", "rejected 病根必须带排除依据或用户反馈引用"));
+    if (candidates.length < 2 || candidates.length > 4) issues.push(issue("rejected_candidates_missing", "diagnosis.candidates", "rejected 终态必须原样保留本 Run 的 2–4 条候选"));
+    if (claim) issues.push(issue("rejected_claim_forbidden", "diagnosis.claim", "全部候选被排除时不得另造一个病根结论"));
+    if (candidates.length && rejectedCandidates.length !== candidates.length) {
+      issues.push(issue("rejected_exclusions_incomplete", "diagnosis.rejectedCandidates", "rejected 终态必须逐项列全本 Run 被排除的候选"));
+    }
   }
-  return { status, claim, candidates, recognitionRef };
+  if (status === "untraceable") {
+    if (claim) issues.push(issue("untraceable_claim_forbidden", "diagnosis.claim", "不可追溯病根禁止补写确定性结论"));
+    if (candidates.length < 2 || candidates.length > 4) issues.push(issue("untraceable_candidates_missing", "diagnosis.candidates", "不可追溯终态仍须在临时 artifact 原样保留本 Run 候选；它们不进入数据库"));
+    if (rejectedCandidates.length) issues.push(issue("untraceable_rejections_forbidden", "diagnosis.rejectedCandidates", "用户说忘了/不认领不等于逐项排除，不能伪造 rejectedCandidates"));
+    if (!recognitionRef) issues.push(issue("untraceable_ref_missing", "diagnosis.recognitionRef", "不可追溯终态必须带用户明确说忘了/不认领的引用；Run 收口或中止不能代替"));
+    else if (!/^user:/iu.test(recognitionRef)) issues.push(issue("untraceable_user_ref_invalid", "diagnosis.recognitionRef", "不可追溯引用必须以 user: 开头并指向用户原话；run_close/Stop/abort 不是学习事实依据"));
+  }
+  return { status, claim, candidates, rejectedCandidates, recognitionRef };
 }
 
 export function primaryJudgmentTargetRef(value) {
@@ -146,8 +173,12 @@ export function renderJudgmentCard(value) {
   ];
   if (item.diagnosis.status === "confirmed") {
     lines.push(`【病根·已认领】${item.diagnosis.claim}｜认领依据：${item.diagnosis.recognitionRef}`);
+    lines.push(`【本轮已排除】${item.diagnosis.rejectedCandidates.join("；")}`);
   } else if (item.diagnosis.status === "rejected") {
-    lines.push(`【病根·已排除】${item.diagnosis.claim ?? "本轮候选不成立"}｜依据：${item.diagnosis.recognitionRef}`);
+    lines.push(`【病根·已排除】${item.diagnosis.rejectedCandidates.join("；")}｜依据：${item.diagnosis.recognitionRef}`);
+  } else if (item.diagnosis.status === "untraceable") {
+    lines.push(`【病根·不可追溯】当时思路不再可核；只正面复检知识点，不针对猜测误解出题、不与老账并案｜依据：${item.diagnosis.recognitionRef}`);
+    lines.push(`【仅存本 Run artifact·未形成事实】${item.diagnosis.candidates.join("；")}`);
   } else if (item.diagnosis.candidates.length) {
     lines.push(`【病根·待认领】以下仅为候选：${item.diagnosis.candidates.map((candidate, index) => `${index + 1}) ${candidate}`).join("；")}`);
   } else {

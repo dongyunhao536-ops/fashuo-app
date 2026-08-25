@@ -411,7 +411,8 @@ async function ledger() {
   line("【活跃主题：仍有 open 错题事件；按复发/累计事件优先】");
   for (const topic of errorSummary.activeTopics) {
     const causes = topic.confirmedRootCauses.map((code) => ROOT_CAUSES[code] ?? code).join("、");
-    line(`· ${topicLabel(topic)}${topic.eventTotal > 1 ? ` ×${topic.eventTotal}` : ""}${topic.eventCounts.absorbed > 0 ? " 🔁曾销账后再错" : ""}${topic.eventTotal >= redline ? " 🔺转专题" : ""}｜事件 open ${topic.eventCounts.open}/absorbed ${topic.eventCounts.absorbed}｜病根 ${causes || "待认领"}｜最近 ${topic.latestOpenDate || "?"}`);
+    const diagnosisLabel = causes || (topic.untraceableDiagnosisCount > 0 ? "不可追溯（只正面考·不并案）" : "本 Run 待认领");
+    line(`· ${topicLabel(topic)}${topic.eventTotal > 1 ? ` ×${topic.eventTotal}` : ""}${topic.eventCounts.absorbed > 0 ? " 🔁曾销账后再错" : ""}${topic.eventTotal >= redline ? " 🔺转专题" : ""}｜事件 open ${topic.eventCounts.open}/absorbed ${topic.eventCounts.absorbed}｜病根 ${diagnosisLabel}｜最近 ${topic.latestOpenDate || "?"}`);
   }
   if (!errorSummary.activeTopics.length) line("（没有仍挂 open 事件的法硕主题；可从待冷检池抽查老题）");
   if (errorSummary.awaitingColdReviewTopics.length) {

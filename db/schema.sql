@@ -281,8 +281,21 @@ create table if not exists study_error_topic (
     check (root_cause_code in ('unclassified', 'knowledge_gap', 'boundary_miss', 'concept_confusion', 'reasoning_order', 'question_layer', 'fact_misread', 'terminology_drift', 'expression_gap', 'memory_decay')),
   failure_pattern_code text,
   root_cause_note   text,
-  diagnosis_status text not null default 'pending'
-    check (diagnosis_status in ('pending', 'confirmed', 'rejected')),
+  diagnosis_status text not null default 'unassessed'
+    check (diagnosis_status in ('unassessed', 'confirmed', 'rejected', 'untraceable')),
+  diagnosis_decided_run_id text,
+  untraceable_at timestamptz,
+  untraceable_by text,
+  untraceable_reason text,
+  constraint chk_study_error_topic_untraceable_metadata check (
+    (diagnosis_status = 'untraceable' and root_cause_code = 'unclassified' and failure_pattern_code is null
+      and untraceable_at is not null and untraceable_by = 'user' and nullif(btrim(untraceable_reason), '') is not null)
+    or
+    (diagnosis_status <> 'untraceable' and untraceable_at is null and untraceable_by is null and untraceable_reason is null)
+  ),
+  constraint chk_study_error_topic_unassessed_decision check (
+    diagnosis_status <> 'unassessed' or diagnosis_decided_run_id is null
+  ),
   evidence_anchor   text,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
@@ -305,6 +318,43 @@ begin
 end $$;
 create index if not exists idx_study_error_topic_topic on study_error_topic (topic_id);
 create unique index if not exists uq_study_error_primary_topic on study_error_topic (study_error_id) where role = 'primary';
+
+-- [gpt] 2026-08-25：病根状态迁移逐条留痕；untraceable 保留错题但禁止再伪造旧病根。
+create table if not exists diagnosis_transition_log (
+  id bigserial primary key,
+  study_error_id bigint not null references study_error(id) on delete cascade,
+  topic_id bigint not null references error_topic(id) on delete cascade,
+  from_status text,
+  to_status text not null,
+  diagnosis_decided_run_id text,
+  actor text not null,
+  reason text,
+  occurred_at timestamptz not null default now()
+);
+create index if not exists idx_diagnosis_transition_target on diagnosis_transition_log (study_error_id, topic_id, occurred_at desc);
+
+create or replace function audit_diagnosis_transition() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if tg_op = 'UPDATE' and old.diagnosis_status = 'untraceable' and new.diagnosis_status <> 'untraceable' then
+    raise exception 'UNTRACEABLE_DIAGNOSIS_TERMINAL';
+  end if;
+  if tg_op = 'INSERT' or old.diagnosis_status is distinct from new.diagnosis_status then
+    insert into diagnosis_transition_log (
+      study_error_id, topic_id, from_status, to_status, diagnosis_decided_run_id, actor, reason, occurred_at
+    ) values (
+      new.study_error_id, new.topic_id, case when tg_op = 'INSERT' then null else old.diagnosis_status end,
+      new.diagnosis_status, new.diagnosis_decided_run_id,
+      coalesce(nullif(new.untraceable_by, ''), 'business_cli'), coalesce(new.untraceable_reason, new.root_cause_note),
+      coalesce(new.untraceable_at, now())
+    );
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists trg_audit_diagnosis_transition on study_error_topic;
+create trigger trg_audit_diagnosis_transition after insert or update of diagnosis_status on study_error_topic
+for each row execute function audit_diagnosis_transition();
 
 create table if not exists error_review (
   id              bigserial primary key,
@@ -430,7 +480,11 @@ select
   et.chapter, et.section, et.kp_id as topic_kp_id, et.title as topic_title,
   coalesce(et.classification_status, 'unclassified') as classification_status,
   et.mastery_status,
-  setop.failure_pattern_code
+  setop.failure_pattern_code,
+  setop.diagnosis_decided_run_id,
+  setop.untraceable_at,
+  setop.untraceable_by,
+  setop.untraceable_reason
 from study_error se
 left join study_error_topic setop on setop.study_error_id = se.id
 left join error_topic et on et.id = setop.topic_id;
@@ -482,7 +536,7 @@ create table if not exists knowledge_evidence (
     'fact_misread', 'terminology_drift', 'recall_application_gap',
     'expression_gap', 'memory_decay', 'other'
   )),
-  diagnosis_status     text not null default 'pending' check (diagnosis_status in ('pending', 'confirmed', 'rejected')),
+  diagnosis_status     text not null default 'unassessed' check (diagnosis_status in ('pending', 'unassessed', 'confirmed', 'rejected', 'untraceable')),
   evidence_anchor      text,
   note                 text,
   created_at           timestamptz not null default now(),
@@ -983,7 +1037,7 @@ create table if not exists learning_attempt (
   assessment_context text not null default 'practice' check (assessment_context in ('practice', 'timed', 'full_mock')),
   duration_seconds integer check (duration_seconds between 1 and 43200),
   failure_pattern_code text,
-  diagnosis_status text not null default 'pending' check (diagnosis_status in ('pending', 'confirmed', 'rejected')),
+  diagnosis_status text not null default 'unassessed' check (diagnosis_status in ('pending', 'unassessed', 'confirmed', 'rejected', 'untraceable')),
   protocol text,
   protocol_version integer,
   intervention_episode_id text,

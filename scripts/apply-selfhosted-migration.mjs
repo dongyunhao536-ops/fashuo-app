@@ -51,9 +51,10 @@ const wrappedSql = wrapMigrationSql({
   appliedBy: "selfhosted-migration[gpt]",
 });
 console.log(`Applying ${relative} (${checksum.slice(0, 12)}) to ${sshTarget} / ${database} in one transaction ...`);
+// [gpt] 2026-08-25：生产迁移必须命中本机已验证 known_hosts；首次未知指纹直接失败，禁止 accept-new 静默扩张信任。
 const child = spawn("ssh", [
   "-o", "BatchMode=yes",
-  "-o", "StrictHostKeyChecking=accept-new",
+  "-o", "StrictHostKeyChecking=yes",
   "-o", "ConnectTimeout=12",
   sshTarget,
   `sudo -u postgres psql -X -v ON_ERROR_STOP=1 -1 -d ${database}`,

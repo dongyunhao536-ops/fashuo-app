@@ -98,7 +98,7 @@ export function normalizeLearningAttempt(operation, today) {
     assessment_context: transfer.assessmentContext,
     duration_seconds: transfer.durationSeconds,
     failure_pattern_code: operation.failurePatternCode ?? null,
-    diagnosis_status: operation.diagnosisStatus ?? "pending",
+    diagnosis_status: operation.diagnosisStatus === "pending" ? "unassessed" : operation.diagnosisStatus ?? "unassessed",
     protocol: protocolCount ? String(operation.protocol) : null,
     protocol_version: protocolVersion,
     intervention_episode_id: protocolCount ? String(operation.interventionEpisodeId) : null,
