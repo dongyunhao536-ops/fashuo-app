@@ -51,3 +51,70 @@ describe("skill-context CLI 科目参数", () => {
     expect(run.steps.context_loaded.status).toBe("pass");
   });
 });
+
+// [claude] 2026-08-25：干跑测试若建成 learning Run 会计进 7 日验收统计；本组锁住
+// purpose 的解析、透传与"不得复用既有 Run"三件事。Codex 审查指出原 9 条断言没有
+// 一条覆盖新参数，只证明没改坏旧行为。
+describe("skill-context --purpose 运行目的", () => {
+  it("默认 learning，合法值原样解析", () => {
+    expect(parseSkillContextOptions([]).purpose).toBe("learning");
+    for (const value of ["learning", "diagnostic", "simulation"]) {
+      expect(parseSkillContextOptions(["--purpose", value]).purpose).toBe(value);
+    }
+  });
+
+  it("拒绝非法 purpose，也拒绝与 --run 续写组合", () => {
+    expect(() => parseSkillContextOptions(["--purpose", "bogus"])).toThrow(/只接受 learning\|diagnostic\|simulation/);
+    expect(() => parseSkillContextOptions(["--run", "SR-1", "--purpose", "diagnostic"])).toThrow(/只在新建 Run 时生效/);
+    expect(parseSkillContextOptions(["--run", "SR-1", "--purpose", "learning"]).purpose).toBe("learning");
+  });
+
+  it("purpose 透传到常规建 Run 与 targetFallback 两条分支", () => {
+    for (const recovery of [null, { targetFallback: { targetRef: "R20260812-RECITE-L31" } }]) {
+      const calls = [];
+      trackSkillContextExecution({
+        parsed: { runId: null, signal: "startup", subject: "法理", kind: null, purpose: "diagnostic" },
+        recovery,
+        context: { skill: "cuoti-fupan" },
+        referenceDate: "2026-08-25",
+        mode: "cuoti",
+        startedAt: 0,
+        nowMs: () => 10,
+        dependencies: {
+          startSkillRun: (input) => { calls.push(input); return { runId: "SR-NEW" }; },
+          recordAutomaticSkillStep: () => ({ runId: "SR-NEW", steps: {} }),
+        },
+      });
+      expect(calls[0].runPurpose).toBe("diagnostic");
+    }
+  });
+
+  it("非 learning 不得隐式复用既有 Run——干跑不能接进真实学习 Run", () => {
+    const resume = () => { throw new Error("不该走到 resume"); };
+    expect(() => trackSkillContextExecution({
+      parsed: { runId: null, signal: "startup", subject: "法理", kind: null, purpose: "diagnostic" },
+      recovery: { preferred: { runId: "SR-LEARNING" } },
+      context: { skill: "daibei-pc" },
+      referenceDate: "2026-08-25",
+      mode: "daibei",
+      startedAt: 0,
+      nowMs: () => 10,
+      dependencies: { resumeDaibeiSkillRun: resume },
+    })).toThrow(/不能复用既有 Run SR-LEARNING/);
+  });
+
+  it("learning 仍可正常隐式复用，不误伤真实续跑", () => {
+    const seen = [];
+    trackSkillContextExecution({
+      parsed: { runId: null, signal: "startup", subject: "法理", kind: null, purpose: "learning" },
+      recovery: { preferred: { runId: "SR-LEARNING" } },
+      context: { skill: "daibei-pc" },
+      referenceDate: "2026-08-25",
+      mode: "daibei",
+      startedAt: 0,
+      nowMs: () => 10,
+      dependencies: { resumeDaibeiSkillRun: (input) => { seen.push(input); return { runId: input.runId }; } },
+    });
+    expect(seen[0]).toMatchObject({ runId: "SR-LEARNING", subject: "法理" });
+  });
+});

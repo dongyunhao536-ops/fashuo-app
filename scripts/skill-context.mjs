@@ -44,6 +44,7 @@ export function parseSkillContextOptions(args) {
     runId: null,
     track: true,
     intake: false,
+    purpose: "learning",
   };
   for (let index = 0; index < args.length; index++) {
     const arg = args[index];
@@ -57,6 +58,7 @@ export function parseSkillContextOptions(args) {
     else if (arg === "--signal") output.signal = args[++index];
     else if (arg === "--run") output.runId = args[++index];
     else if (arg === "--no-track") output.track = false;
+    else if (arg === "--purpose") output.purpose = args[++index];
     else if (arg === "--intake") output.intake = true;
     else if ((STUDY_SUBJECTS.includes(arg) || STUDY_SUBJECT_ALIASES.has(arg)) && !output.subject) output.subject = arg;
     else throw new Error(`无法识别的参数：${arg}`);
@@ -70,6 +72,16 @@ export function parseSkillContextOptions(args) {
     throw new Error(`未知重规划信号：${output.signal}`);
   }
   if (output.kind && !["case", "essay"].includes(output.kind)) throw new Error("--type 只接受 case 或 essay");
+  // [claude] 2026-08-25：干跑测试走系统选题入口时，原来只能建 learning Run，
+  // 会被 skill-turn-guard 计进合规率、也进学习统计。补 --purpose 透传。
+  if (!["learning", "diagnostic", "simulation"].includes(output.purpose)) {
+    throw new Error("--purpose 只接受 learning|diagnostic|simulation");
+  }
+  // --run 是往既有 Run 补步骤，purpose 由原 Run 决定；静默忽略会让人误以为
+  // 测试 Run 已降级，正是本次要堵的那类无声失败。
+  if (output.runId && output.purpose !== "learning") {
+    throw new Error("--purpose 只在新建 Run 时生效；--run 续写请沿用原 Run 的 purpose");
+  }
   return output;
 }
 
@@ -205,6 +217,15 @@ export function trackSkillContextExecution({
     });
   }
   if (recovery?.preferred) {
+    // [claude] 2026-08-25：隐式恢复既有 Run 时 purpose 由原 Run 决定，静默沿用会让干跑
+    // 接进真实 learning Run——正是本参数要防的事。显式 --run 已在参数解析处拦，这里补上
+    // 自动恢复这条路；非 learning 一律拒绝复用，要测就另建新 Run。
+    if ((parsed.purpose ?? "learning") !== "learning") {
+      throw new Error(
+        `--purpose ${parsed.purpose} 不能复用既有 Run ${recovery.preferred.runId}；`
+        + "先收口该 Run，或去掉 --purpose 按原 Run 的 purpose 续跑",
+      );
+    }
     return resumeRun({ runId: recovery.preferred.runId, subject: parsed.subject });
   }
   if (recovery?.targetFallback) {
@@ -216,6 +237,7 @@ export function trackSkillContextExecution({
       source: "skill-context-target-recovery",
       entryMode: "snapshot",
       targetRef: recovery.targetFallback.targetRef,
+      runPurpose: parsed.purpose ?? "learning",
     });
     return recordStep({
       runId: created.runId,
@@ -233,6 +255,7 @@ export function trackSkillContextExecution({
     referenceDate,
     source: "skill-context",
     entryMode: mode === "daibei" ? "snapshot" : null,
+    runPurpose: parsed.purpose ?? "learning",
   });
   return recordStep({
     runId: created.runId,
@@ -247,7 +270,7 @@ export function trackSkillContextExecution({
 export async function main(argv) {
   const [mode, ...rest] = argv;
   if (!MODES.includes(mode)) {
-    console.log("用法：node --env-file=.env.local scripts/skill-context.mjs <coach|cuoti|daibei|ask|lunshu> [科目] [--intake] [--type case|essay] [--date 北京日] [--signal ...] [--current-subject 科目] [--subject-streak N] [--focus-minimum-met] [--run SR-...] [--no-track] [--json]");
+    console.log("用法：node --env-file=.env.local scripts/skill-context.mjs <coach|cuoti|daibei|ask|lunshu> [科目] [--intake] [--type case|essay] [--date 北京日] [--signal ...] [--current-subject 科目] [--subject-streak N] [--focus-minimum-met] [--run SR-...] [--no-track] [--purpose learning|diagnostic|simulation] [--json]");
     return;
   }
   const parsed = parseSkillContextOptions(rest);
