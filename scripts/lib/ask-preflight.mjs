@@ -35,20 +35,31 @@ function normalizeText(value, field, { max = 120 } = {}) {
 }
 
 /**
- * 判权：第 2/4/5 项（心得/教材/真题）≥2 项实锤才算正常作答。
- * 第 3 项易混检索只做记录，不参与判权——易混库本来就只收录成对易混概念，
- * 零命中是常态，把它计入判权会把正常情况误判成证据不足。
+ * 判权只认**互相独立**的三条轴：《考试分析》/ 讲义（含讲义心得）/ 真题，≥2 条实锤
+ * 才算正常作答。
+ *
+ * [claude] 2026-08-25 修订：原实现把"心得"与"教材"当两项独立实锤，实测证伪——
+ * 抽查 200 条带【讲义P__】标记的心得，100% 能在讲义原文里逐字找到，心得就是讲义的
+ * 摘抄。旧判权因此可以被同一个源满足两次。
+ *
+ * 做题心得与易混库只记录、不判权：前者按本仓既有规矩"只提示争点、不得越过裁判顺序"，
+ * 后者本就只收录成对易混概念，零命中是常态，计入会把正常情形误判成证据不足。
  */
 export function evaluatePreflight(hits) {
-  const xinde = Number(hits?.xinde ?? 0);
   const yixiao = Number(hits?.yixiao ?? 0);
-  const textbook = Number(hits?.textbook ?? 0);
-  const zhenti = Number(hits?.exam ?? 0) + Number(hits?.zhenti ?? 0);
-  const solid = [xinde > 0, textbook > 0, zhenti > 0].filter(Boolean).length;
+  const xinde = Number(hits?.xinde ?? 0);
+  const zhenti = Number(hits?.zhenti ?? 0) + Number(hits?.exam ?? 0);
+  const legacyDoctrine = hits?.legacyDoctrine ?? null;
+  const kaoshi = legacyDoctrine == null ? Number(hits?.kaoshi ?? 0) : 0;
+  const jiangyi = legacyDoctrine == null ? Number(hits?.jiangyi ?? 0) : 0;
+  const axes = legacyDoctrine == null
+    ? [kaoshi > 0, jiangyi > 0, zhenti > 0]
+    : [legacyDoctrine > 0, zhenti > 0];
+  const solid = axes.filter(Boolean).length;
   const verdict = solid >= 2
     ? PREFLIGHT_VERDICTS.normal
     : solid === 1 ? PREFLIGHT_VERDICTS.singleSource : PREFLIGHT_VERDICTS.discussionOnly;
-  return { xinde, yixiao, textbook, zhenti, solid, verdict };
+  return { kaoshi, jiangyi, zhenti, xinde, yixiao, legacyDoctrine, solid, verdict };
 }
 
 export function buildPreflightChecklist({ category, hits, queries = 0, updated = null }) {
@@ -60,17 +71,25 @@ export function buildPreflightChecklist({ category, hits, queries = 0, updated =
   }
   const scored = evaluatePreflight(hits);
   const mark = (count, label) => (count > 0 ? `命中 ${count} 行（${label}）` : "无");
+  const doctrineLines = scored.legacyDoctrine == null
+    ? [
+      `2 考试分析锚定★：${mark(scored.kaoshi, "教材正文/带背文本")}`,
+      `3 讲义锚定★：${mark(scored.jiangyi, "讲义原文＋讲义心得·与考试分析非同源")}`,
+    ]
+    : [`2-3 教义锚定★：${mark(scored.legacyDoctrine, "旧格式回执，考试分析与讲义无法拆分，整体计一轴")}`];
   const lines = [
     "━━ 答疑预检清单 ━━",
     `1 问题归类：${normalizedCategory}`,
-    `2 心得检索：${mark(scored.xinde, "做题心得/讲义心得")}`,
-    `3 易混检索：${mark(scored.yixiao, "易混概念库")}`,
-    `4 教材锚定：${mark(scored.textbook, "《考试分析》/讲义原文")}`,
-    `5 真题锚定：${mark(scored.zhenti, "真题原卷/参考答案解析")}`,
+    ...doctrineLines,
+    `4 真题锚定★：${mark(scored.zhenti, "真题原卷/参考答案解析/高频总结")}`,
+    `5 辅助检索：做题心得 ${scored.xinde} 行｜易混库 ${scored.yixiao} 行（只提示争点，不进判权）`,
     `6 法律更新：${updated ? normalizeText(updated, "法律更新说明", { max: 200 }) : "与教材一致"}`,
     "━━━━━━━━━━",
-    `判权：第 2/4/5 项 ${scored.solid} 项实锤（共 ${queries} 组检索）→ ${describeVerdict(scored.verdict)}`,
+    `判权：★三轴（考试分析／讲义／真题）中 ${scored.solid} 轴实锤（共 ${queries} 组检索）→ ${describeVerdict(scored.verdict)}`,
   ];
+  if (scored.legacyDoctrine == null && scored.kaoshi === 0 && scored.jiangyi > 0) {
+    lines.push("⚠ 只有讲义有、《考试分析》没有：按口径顺序这类内容只能当加问，不得作为过关或销账条件。");
+  }
   return { checklist: lines.join("\n"), ...scored, category: normalizedCategory, queries };
 }
 
@@ -88,7 +107,7 @@ export function assertPreflightSignable(scored, { discussionOnly = false } = {})
   if (scored.verdict !== PREFLIGHT_VERDICTS.discussionOnly) return;
   if (discussionOnly) return;
   throw new AskPreflightError(
-    "第 2/4/5 项全部零命中：本地心得、教材与真题都没有证据支撑。\n"
+    "★三轴全部零命中：《考试分析》、讲义与真题都没有证据支撑（做题心得与易混库不算数）。\n"
     + "补救：\n"
     + "  - 换 2-3 组争点特征词重新 material-batch（章节大词会把深页那条挤出返回窗口）\n"
     + "  - 确实无据时加 --discussion-only 显式签成讨论性回答，答案必须写明「暂无直接依据」",

@@ -598,12 +598,31 @@ export function buildMaterialBatchOutput(corpus, queries) {
 // 检索回执推导，而不是靠执行者自己填。原先 evidenceRef 只有 queries:N，预检的
 // 「心得/易混/教材/真题各命中没有」四项无从校验，只能自签——这正是 8-25 答疑
 // 实测里我签了 preflight_checked 却没做预检的口子。
+// [claude] 2026-08-25 修订：原先按 KINDS 直接分桶，把《考试分析》和讲义都算进
+// textbook 一项，又让 xinde 单独成项。实测 200 条带【讲义P__】标记的心得条目
+// 100% 能在讲义原文里逐字找到——心得就是讲义的摘抄，两者不是独立信源。
+// 于是"心得＋教材＝两项实锤"实际只有一个源被数了两遍，判权是虚的。
+// 改按路径分独立轴，正好对上本仓既有的口径顺序：《考试分析》> 讲义 > 真题。
+const JIANGYI_PATH = /讲义/u;
+
+export const MATERIAL_AXES = Object.freeze(["kaoshi", "jiangyi", "xinde", "yixiao", "zhenti"]);
+
+function materialAxisOf(kind, path) {
+  if (kind === "textbook") return JIANGYI_PATH.test(path) ? "jiangyi" : "kaoshi";
+  // 讲义心得归讲义轴；做题心得是云自己的笔记，按既有规矩只提示争点、不作裁判源。
+  if (kind === "xinde") return JIANGYI_PATH.test(path) ? "jiangyi" : "xinde";
+  if (kind === "yixiao") return "yixiao";
+  return "zhenti"; // exam 原卷与 zhenti 二次总结同源，合并成真题轴
+}
+
 export function summarizeMaterialHits(corpus, queries) {
-  const totals = Object.fromEntries(KINDS.map(([kind]) => [kind, 0]));
+  const totals = Object.fromEntries(MATERIAL_AXES.map((axis) => [axis, 0]));
   for (const { keyword, refine } of queries ?? []) {
     for (const [kind] of KINDS) {
-      const { totalHits } = grep(corpus.get(kind) ?? [], keyword, refine);
-      totals[kind] += totalHits;
+      for (const row of corpus.get(kind) ?? []) {
+        const { totalHits } = grep([row], keyword, refine);
+        if (totalHits) totals[materialAxisOf(kind, row.path)] += totalHits;
+      }
     }
   }
   return totals;
@@ -611,19 +630,33 @@ export function summarizeMaterialHits(corpus, queries) {
 
 export function formatMaterialEvidenceRef(queries, hits) {
   const parts = [`q:${(queries ?? []).length}`];
-  for (const [kind] of KINDS) parts.push(`${kind}:${hits?.[kind] ?? 0}`);
+  for (const axis of MATERIAL_AXES) parts.push(`${axis}:${hits?.[axis] ?? 0}`);
   return parts.join("|");
 }
 
+// 兼容旧格式 `q:N|xinde:N|textbook:N|yixiao:N|exam:N|zhenti:N`：旧回执拆不出
+// 考试分析与讲义，legacyDoctrine 标记让判权层把它整体当**一条**教义轴，不再重复计数。
 export function parseMaterialEvidenceRef(evidenceRef) {
-  const out = { queries: 0 };
-  for (const [kind] of KINDS) out[kind] = 0;
+  const out = { queries: 0, legacyDoctrine: null };
+  for (const axis of MATERIAL_AXES) out[axis] = 0;
+  let legacyTextbook = null;
+  let legacyXinde = null;
+  let legacyExam = 0;
   for (const part of String(evidenceRef ?? "").split("|")) {
     const [key, rawValue] = part.split(":");
     const value = Number(rawValue);
     if (!Number.isInteger(value) || value < 0) continue;
     if (key === "q" || key === "queries") out.queries = value;
-    else if (key in out) out[key] = value;
+    else if (key === "textbook") legacyTextbook = value;
+    else if (key === "exam") legacyExam = value;
+    else if (key === "xinde" && legacyTextbook !== null) legacyXinde = value;
+    else if (MATERIAL_AXES.includes(key)) out[key] = value;
+    else if (key === "xinde") legacyXinde = value;
+  }
+  if (legacyTextbook !== null) {
+    out.legacyDoctrine = legacyTextbook + (legacyXinde ?? 0);
+    out.zhenti += legacyExam;
+    out.xinde = 0;
   }
   return out;
 }

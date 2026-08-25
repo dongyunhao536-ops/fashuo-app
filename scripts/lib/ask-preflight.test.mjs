@@ -28,41 +28,70 @@ const FULL_CARD = {
 };
 
 describe("六步预检判权从检索回执推导", () => {
-  it("心得/教材/真题三选二实锤才算正常作答", () => {
-    expect(evaluatePreflight({ xinde: 2, textbook: 17, exam: 9 }).verdict).toBe("normal");
-    expect(evaluatePreflight({ xinde: 0, textbook: 17, exam: 0 }).verdict).toBe("single_source");
-    expect(evaluatePreflight({ xinde: 0, textbook: 0, exam: 0, zhenti: 0 }).verdict).toBe("discussion_only");
+  it("考试分析/讲义/真题三轴中两轴实锤才算正常作答", () => {
+    expect(evaluatePreflight({ kaoshi: 15, jiangyi: 9, zhenti: 0 }).verdict).toBe("normal");
+    expect(evaluatePreflight({ kaoshi: 15, jiangyi: 0, zhenti: 4 }).verdict).toBe("normal");
+    expect(evaluatePreflight({ kaoshi: 0, jiangyi: 17, zhenti: 0 }).verdict).toBe("single_source");
+    expect(evaluatePreflight({ kaoshi: 0, jiangyi: 0, zhenti: 0 }).verdict).toBe("discussion_only");
   });
 
-  it("exam 与 zhenti 合并计入真题一项，不重复加权", () => {
+  // 本条锁住 8-25 实测证伪的那个缺陷：讲义心得 100% 是讲义摘抄，
+  // 旧判权把"心得＋教材"当两项独立实锤，实际是同一个源被数了两遍。
+  it("讲义心得不与讲义构成第二轴——同源不得重复计数", () => {
+    const onlyJiangyi = evaluatePreflight({ kaoshi: 0, jiangyi: 20, zhenti: 0 });
+    expect(onlyJiangyi.solid).toBe(1);
+    expect(onlyJiangyi.verdict).toBe("single_source");
+  });
+
+  it("做题心得与易混库只记录、不进判权", () => {
+    const scored = evaluatePreflight({ kaoshi: 0, jiangyi: 0, zhenti: 0, xinde: 30, yixiao: 30 });
+    expect(scored.xinde).toBe(30);
+    expect(scored.yixiao).toBe(30);
+    expect(scored.solid).toBe(0);
+    expect(scored.verdict).toBe("discussion_only");
+  });
+
+  it("exam 与 zhenti 合并计入真题一轴，不重复加权", () => {
     const scored = evaluatePreflight({ exam: 4, zhenti: 5 });
     expect(scored.zhenti).toBe(9);
     expect(scored.solid).toBe(1);
   });
 
-  it("易混库零命中不拉低判权——它本就只收录成对易混概念", () => {
-    const scored = evaluatePreflight({ xinde: 1, textbook: 1, yixiao: 0 });
-    expect(scored.yixiao).toBe(0);
-    expect(scored.verdict).toBe("normal");
+  it("旧格式回执拆不出考试分析与讲义，整体只当一轴", () => {
+    const legacy = evaluatePreflight({ legacyDoctrine: 19, zhenti: 0 });
+    expect(legacy.solid).toBe(1);
+    expect(legacy.verdict).toBe("single_source");
+    expect(evaluatePreflight({ legacyDoctrine: 19, zhenti: 4 }).verdict).toBe("normal");
+  });
+
+  it("只有讲义有、考试分析没有时，清单必须给出口径警告", () => {
+    const { checklist } = buildPreflightChecklist({
+      category: "民法/监护/概念辨析",
+      hits: { kaoshi: 0, jiangyi: 12, zhenti: 3 },
+    });
+    expect(checklist).toContain("只有讲义有、《考试分析》没有");
+    expect(buildPreflightChecklist({ category: "民法/监护/概念辨析", hits: { kaoshi: 5, jiangyi: 12, zhenti: 3 } }).checklist)
+      .not.toContain("只有讲义有");
   });
 
   it("问题归类必须带题型，含糊归类直接 BLOCK", () => {
-    const hits = { xinde: 1, textbook: 1 };
+    const hits = { kaoshi: 1, jiangyi: 1 };
     expect(() => buildPreflightChecklist({ category: "法制史随便写", hits }))
       .toThrow(/必须含题型之一/u);
     expect(buildPreflightChecklist({ category: "法制史/西周/概念辨析", hits }).checklist)
       .toContain("1 问题归类：法制史/西周/概念辨析");
   });
 
-  it("清单六项按规定格式输出，零命中项写「无」而不是省略", () => {
+  it("清单按规定格式输出，零命中项写「无」而不是省略", () => {
     const { checklist } = buildPreflightChecklist({
       category: "法制史/西周/概念辨析",
-      hits: { xinde: 2, textbook: 17, exam: 9, yixiao: 0 },
+      hits: { kaoshi: 15, jiangyi: 0, zhenti: 9, xinde: 2, yixiao: 0 },
       queries: 2,
     });
-    expect(checklist).toContain("3 易混检索：无");
-    expect(checklist).toContain("4 教材锚定：命中 17 行");
-    expect(checklist).toContain("判权：第 2/4/5 项 3 项实锤");
+    expect(checklist).toContain("2 考试分析锚定★：命中 15 行");
+    expect(checklist).toContain("3 讲义锚定★：无");
+    expect(checklist).toContain("5 辅助检索：做题心得 2 行｜易混库 0 行（只提示争点，不进判权）");
+    expect(checklist).toContain("★三轴（考试分析／讲义／真题）中 2 轴实锤");
   });
 
   it("零实锤时拒签，除非显式承认这是讨论性回答", () => {
