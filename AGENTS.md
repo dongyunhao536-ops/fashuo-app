@@ -51,6 +51,16 @@ This version has breaking changes — APIs, conventions, and file structure may 
   主树的同名未提交改动可能是**更旧的快照**；收口前逐文件比对，别整体提交。
 - Claude 侧**无权写** `.claude/settings.local.json` 与 `~/.claude/hooks/` 的接线，
   宿主分类器硬拦、云口头授权也不解闸。这两处变更一律由云本人执行。
+- **Claude 侧跑任何写学习事实的脚本，命令必须带这两个环境变量**：
+  ```
+  FASHUO_SESSION_ID="$CLAUDE_CODE_SESSION_ID" FASHUO_PRODUCER_HOST=claude \
+    node --env-file=.env.local scripts/<名>.mjs …
+  ```
+  原因：hook 的身份来自载荷，**脚本的身份只来自环境变量**，两条路不通。
+  漏 `FASHUO_SESSION_ID` → `skill-run.mjs:500` 抛 `SKILL_IDENTITY_REQUIRED`；
+  漏 `FASHUO_PRODUCER_HOST` → 宿主判成 `unknown`、**该闸不触发**，
+  会静默建出 `sessionId=null` 的无归属 Run，随后 Stop 守卫永远匹配不上它、
+  每轮都判 `missing_run`。`--env-file` 同样不能漏，否则资料库路径回落到不存在的目录。
 <!-- END:dual-host-boundaries -->
 
 <!-- BEGIN:fashuo-answering-preference -->
