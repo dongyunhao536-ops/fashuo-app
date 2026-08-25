@@ -118,7 +118,7 @@ export function recoveryHint(skill, step, { runId = null, subject = null, phase 
     case "judgment_output_verified":
       return `${withRun(`${BARE}/judgment-result.mjs check --file <判题结果.json>`, runId)}；只展示脚本返回的证据卡`;
     case "diagnosis_recorded":
-      return `${withRun(`${ENV}/cuoti.mjs classify <事件id> --diagnosis <confirmed|rejected>`, runId)}；只有用户明确说忘了/不认领时才用 ${withRun(`${ENV}/cuoti.mjs mark-untraceable <事件id> --user-ref <用户原话或回合引用> --reason <明确决定>`, runId)}；断网/Stop/Run 中止只记遥测`;
+      return `${withRun(`${ENV}/cuoti.mjs classify <事件id> --diagnosis <confirmed|rejected>`, runId)}；只有用户明确说忘了/不认领时才用 ${withRun(`${ENV}/cuoti.mjs mark-untraceable <事件id> --user-ref "user:<用户原话或回合引用>" --reason <明确决定>`, runId)}；同 Run 想起可对同一关系 classify 更正，断网/Stop/Run 中止只记遥测`;
     case "progress_recorded":
       return `${withRun(`${ENV}/coach.mjs log --subject ${subjectSlot(subject)} --activity 自背 --chapter <规范章节>`, runId)}；脚本会规范为 activity=背诵 并在 raw 保留 [背诵方式=自背]`;
     case "result_recorded":

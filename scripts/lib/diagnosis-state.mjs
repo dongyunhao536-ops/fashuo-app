@@ -8,6 +8,8 @@ function clean(value) {
 
 export function normalizeDiagnosisTransition({
   fromStatus,
+  fromDecisionRunId = null,
+  fromUntraceableBy = null,
   toStatus,
   decisionRunId = null,
   untraceableAt = null,
@@ -16,6 +18,8 @@ export function normalizeDiagnosisTransition({
   migration = false,
 } = {}) {
   const from = clean(fromStatus) || "unassessed";
+  const priorDecision = clean(fromDecisionRunId) || null;
+  const priorUntraceableBy = clean(fromUntraceableBy) || null;
   const to = clean(toStatus) || "unassessed";
   const decision = clean(decisionRunId) || null;
 
@@ -27,7 +31,14 @@ export function normalizeDiagnosisTransition({
   }
 
   if (from === "untraceable" && to !== "untraceable") {
-    throw new Error("UNTRACEABLE_DIAGNOSIS_TERMINAL｜不可追溯病根不得事后改造成确定诊断或与老账并案");
+    // [gpt] 2026-08-25：当场制允许同一 Run 内撤回“忘了”；跨 Run、政策封账和换成非判定态仍是终态。
+    const sameRunCorrection = priorUntraceableBy === "user"
+      && priorDecision != null
+      && decision === priorDecision
+      && ["confirmed", "rejected"].includes(to);
+    if (!sameRunCorrection) {
+      throw new Error("UNTRACEABLE_DIAGNOSIS_TERMINAL｜不可追溯病根仅允许用户在原决定 Run 内更正为 confirmed/rejected；跨 Run、政策封账和与老账并案均禁止");
+    }
   }
   if (["confirmed", "rejected"].includes(to) && !migration && !decision) {
     throw new Error("DIAGNOSIS_DECISION_RUN_REQUIRED｜病根认领或排除必须由当前 Run 的 Gate 留下决定回执");

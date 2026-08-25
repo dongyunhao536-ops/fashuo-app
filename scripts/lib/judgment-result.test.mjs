@@ -103,4 +103,9 @@ describe("validateJudgmentResult", () => {
     expect(() => validateJudgmentResult(valid({ targetRef: "E#107" }))).toThrow(/T#/);
     expect(() => validateJudgmentResult(valid({ targetRef: "T#95/监护顺位" }))).toThrow(/模糊文本/);
   });
+
+  it("F6：证据卡字段拦孤立裸编号，并豁免并列列举", () => {
+    expect(() => validateJudgmentResult(valid({ application: "已入账 #72。" }))).toThrow(/bare_reference_summary_required/);
+    expect(validateJudgmentResult(valid({ application: "对照 L28／L29／L30 后确认边界。" })).application).toContain("L28／L29／L30");
+  });
 });

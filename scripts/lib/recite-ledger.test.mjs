@@ -185,6 +185,20 @@ describe("recite ledger", () => {
     })).toThrow("必须记录栽点类型");
   });
 
+  it("F6 拒绝把新的孤立裸编号写进带背证据", () => {
+    const original = `${header}
+### L10｜法理｜法律规则
+- 挂 08-01 ｜ 最后碰 **08-01** ｜ 状态：挂
+`;
+    const parsed = parseReciteLedger(original, { referenceDate: "2026-08-05" });
+    expect(() => applyEvidenceEvent(original, parsed, {
+      id: "L10",
+      date: "2026-08-05",
+      result: "pass",
+      evidenceAnchor: "新挂 L10",
+    })).toThrow(/BARE_REFERENCE_SUMMARY_REQUIRED/);
+  });
+
   it("污染题 void 只留教练事故审计，不刷新最后碰或用户栽点", () => {
     const original = `${header}
 ### X1｜刑法｜程度词
@@ -199,7 +213,7 @@ describe("recite ledger", () => {
       cold: false,
       promptIntegrity: "invalid",
       failurePatternCode: "degree_strength",
-      evidenceAnchor: "污染题#1",
+      evidenceAnchor: "污染题#1：程度词题面",
       note: "点名错误项",
     });
     const checked = parseReciteLedger(applied.markdown, { referenceDate: "2026-08-05" });
@@ -224,14 +238,14 @@ describe("recite ledger", () => {
       result: "pass",
       cold: true,
       promptIntegrity: "clean",
-      evidenceAnchor: "教材#L1",
+      evidenceAnchor: "教材#L1：普通挂账",
     });
     const afterEvidence = parseReciteLedger(evidenced.markdown, { referenceDate: "2026-08-10" });
     const transitioned = applyTransition(evidenced.markdown, afterEvidence, {
       id: "L1",
       event: "withdraw",
       date: "2026-08-10",
-      evidence: "教材#L1",
+      evidence: "教材#L1：普通挂账",
       note: "冷检通过",
     });
     const final = parseReciteLedger(transitioned.markdown, { referenceDate: "2026-08-10" });

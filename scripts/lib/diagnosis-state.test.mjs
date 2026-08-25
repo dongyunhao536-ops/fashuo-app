@@ -32,10 +32,38 @@ describe("diagnosis same-run lifecycle", () => {
     })).toMatchObject({ toStatus: "untraceable", decisionRunId: "SR-A", untraceableBy: "user" });
   });
 
-  it("untraceable 是终态，只能正面考知识且不得并案", () => {
+  it("用户 untraceable 同 Run 可更正，跨 Run 与政策封账仍是终态", () => {
+    expect(normalizeDiagnosisTransition({
+      fromStatus: "untraceable",
+      fromDecisionRunId: "SR-A",
+      fromUntraceableBy: "user",
+      toStatus: "confirmed",
+      decisionRunId: "SR-A",
+    })).toMatchObject({
+      fromStatus: "untraceable",
+      toStatus: "confirmed",
+      decisionRunId: "SR-A",
+      untraceableAt: null,
+      untraceableBy: null,
+      untraceableReason: null,
+    });
     expect(() => normalizeDiagnosisTransition({
-      fromStatus: "untraceable", toStatus: "confirmed", originRunId: "SR-A", decisionRunId: "SR-A",
+      fromStatus: "untraceable",
+      fromDecisionRunId: "SR-A",
+      fromUntraceableBy: "user",
+      toStatus: "confirmed",
+      decisionRunId: "SR-B",
     })).toThrow(/UNTRACEABLE_DIAGNOSIS_TERMINAL/);
+    expect(() => normalizeDiagnosisTransition({
+      fromStatus: "untraceable",
+      fromDecisionRunId: null,
+      fromUntraceableBy: "policy_migration",
+      toStatus: "confirmed",
+      decisionRunId: "SR-A",
+    })).toThrow(/UNTRACEABLE_DIAGNOSIS_TERMINAL/);
+  });
+
+  it("untraceable 未更正时只能正面考知识且不得并案", () => {
     expect(diagnosisProbePolicy("untraceable")).toEqual({
       mode: "positive_knowledge_only",
       allowMisconceptionProbe: false,

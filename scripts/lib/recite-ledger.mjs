@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { FAILURE_PATTERNS } from "./knowledge-state.mjs";
+import { assertStructuredReferencesHaveSummary } from "./structured-reference-lint.mjs";
 
 const SUBJECTS = new Set(["刑法", "民法", "法理", "宪法", "法制史"]);
 const ENTRY_HEADING = /^###\s+([A-Z]\d+)[｜|]([^｜|]+)[｜|](.+)$/;
@@ -371,6 +372,8 @@ export function formatReciteLedgerSummary(summary) {
 }
 
 export function applyTransition(markdown, parsed, { id, event, date, evidence, note }) {
+  assertStructuredReferencesHaveSummary(evidence, { field: "带背迁移 evidence" });
+  if (note) assertStructuredReferencesHaveSummary(note, { field: "带背迁移 note" });
   const entry = parsed.records.find((record) => record.id === id);
   if (!entry) throw new Error(`未找到带背条目：${id}`);
   const lines = markdown.replace(/\r\n/g, "\n").split("\n");
@@ -467,6 +470,8 @@ export function applyEvidenceEvent(markdown, parsed, {
   note = null,
   backfill = false,
 }) {
+  assertStructuredReferencesHaveSummary(evidenceAnchor, { field: "带背复检 evidenceAnchor" });
+  if (note) assertStructuredReferencesHaveSummary(note, { field: "带背复检 note" });
   const entry = parsed.records.find((record) => record.id === id);
   if (!entry) throw new Error(`未找到带背条目：${id}`);
   if (typeof cold !== "boolean") throw new Error("cold 必须是布尔值");

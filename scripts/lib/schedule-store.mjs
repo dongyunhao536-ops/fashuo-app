@@ -6,6 +6,7 @@ import {
   getInterventionProtocol,
   validateProtocolAssignment,
 } from "./intervention-protocols.mjs";
+import { assertStructuredReferencesHaveSummary } from "./structured-reference-lint.mjs";
 
 const SCHEDULE_ROUTES = new Set(["ask-pc", "cuoti-fupan", "daibei-pc", "lunshu-pc", "yingyu-pc", "coach-pc"]);
 const SCHEDULE_DIMENSIONS = new Set(["exposure", "understanding", "recall", "application"]);
@@ -59,6 +60,7 @@ function validateItem(item) {
   if (!/^P[0-2]$/.test(normalized.priority)) throw new Error("排期 priority 只能是 P0/P1/P2");
   if (!normalized.type) throw new Error("排期缺少 type");
   if (!normalized.task) throw new Error("排期缺少 task");
+  assertStructuredReferencesHaveSummary(normalized.task, { field: "新增排期 task" });
   if (Boolean(normalized.route) !== Boolean(normalized.dimension)) throw new Error("排期 route 与 dimension 必须成对提供");
   if (normalized.route && !SCHEDULE_ROUTES.has(normalized.route)) throw new Error(`排期 route 不合法：${normalized.route}`);
   if (normalized.dimension && !SCHEDULE_DIMENSIONS.has(normalized.dimension)) throw new Error(`排期 dimension 不合法：${normalized.dimension}`);

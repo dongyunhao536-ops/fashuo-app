@@ -184,13 +184,16 @@ async function linkErrorTopic(db, studyErrorId, topicId, topic, nowIso) {
   const role = topic.role ?? "primary";
   const diagnosisStatus = validatePersistedDiagnosisStatus(topic.diagnosisStatus ?? "unassessed");
   const current = await db.from("study_error_topic")
-    .select("diagnosis_status")
+    // [gpt] 2026-08-25：同 Run 更正必须核对原决定 Run 与 actor；只看状态会放大终态豁免。
+    .select("diagnosis_status, diagnosis_decided_run_id, untraceable_by")
     .eq("study_error_id", studyErrorId)
     .eq("topic_id", topicId)
     .maybeSingle();
   throwOnError(current, "读取病根原状态失败");
   const transition = normalizeDiagnosisTransition({
     fromStatus: current.data?.diagnosis_status ?? "unassessed",
+    fromDecisionRunId: current.data?.diagnosis_decided_run_id,
+    fromUntraceableBy: current.data?.untraceable_by,
     toStatus: diagnosisStatus,
     decisionRunId: topic.diagnosisDecidedRunId,
     untraceableAt: topic.untraceableAt,

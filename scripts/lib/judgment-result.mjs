@@ -1,6 +1,7 @@
 // [gpt] 2026-08-13：错题判题输出的单一机器 Gate；确定性字段、证据卡与病根状态由代码约束。
 
 import { DIAGNOSIS_STATUSES, REVIEW_RESULTS } from "./error-taxonomy.mjs";
+import { findBareStructuredReferences } from "./structured-reference-lint.mjs";
 
 const MAX_TEXT = 4000;
 const DEFINITIVE_PENDING_PATTERNS = [
@@ -154,6 +155,26 @@ export function validateJudgmentResult(input) {
   if (diagnosis.status === "pending") {
     const unsafeNarrative = [verdict, application].find((item) => DEFINITIVE_PENDING_PATTERNS.some((pattern) => pattern.test(item)));
     if (unsafeNarrative) issues.push(issue("pending_definitive_narrative", "verdict/application", "病根仍为 pending 时，判定与涵摄也禁止写确定性病根表述"));
+  }
+  // [gpt] 2026-08-25：F6 只检查最终会进入证据卡的结构化字段；targetRef 等机器键不在此列。
+  const visibleFields = [
+    ["originalAnswer", originalAnswer],
+    ["verdict", verdict],
+    ["rule", rule],
+    ["application", application],
+    ...evidence.flatMap((item, index) => [
+      [`evidence[${index}].source`, item.source],
+      [`evidence[${index}].anchor`, item.anchor],
+      [`evidence[${index}].excerpt`, item.excerpt],
+    ]),
+    ...diagnosis.candidates.map((candidate, index) => [`diagnosis.candidates[${index}]`, candidate]),
+    ...diagnosis.rejectedCandidates.map((candidate, index) => [`diagnosis.rejectedCandidates[${index}]`, candidate]),
+  ];
+  for (const [field, value] of visibleFields) {
+    const references = findBareStructuredReferences(value);
+    if (references.length) {
+      issues.push(issue("bare_reference_summary_required", field, `${references.map((item) => item.reference).join("、")} 是孤立裸编号；编号后 10 字内须带内容摘要，并列编号串豁免`));
+    }
   }
   if (issues.length) throw new JudgmentResultValidationError(issues);
   return { schemaVersion: 1, targetRef, result, originalAnswer, verdict, rule, application, evidence, confidence, diagnosis };

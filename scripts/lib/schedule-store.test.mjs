@@ -13,6 +13,15 @@ const TODAY = "2026-08-05";
 
 // [gpt] 2026-08-10：补齐结案前后结构复验的回归覆盖。
 describe("schedule store", () => {
+  it("F6 只拦新增排期的孤立裸编号，并列编号串整体豁免", () => {
+    expect(() => appendScheduleItem("# 复盘排期\n", {
+      id: "F6-BAD", date: TODAY, priority: "P1", type: "错题复检", task: "入账 #72。",
+    }, { referenceDate: TODAY })).toThrow(/BARE_REFERENCE_SUMMARY_REQUIRED/);
+    expect(appendScheduleItem("# 复盘排期\n", {
+      id: "F6-GROUP", date: TODAY, priority: "P1", type: "带背复检", task: "L28／L29／L30",
+    }, { referenceDate: TODAY }).added).toBe(true);
+  });
+
   it("追加后用同一个解析器复验结构", () => {
     const result = appendScheduleItem("# 复盘排期\n", {
       id: "AUTO-1",

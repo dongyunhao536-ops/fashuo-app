@@ -315,6 +315,74 @@ describe("study outbox", () => {
     expect(linkUpserts.every((step) => step.args[1].onConflict === "study_error_id,topic_id")).toBe(true);
   });
 
+  it("用户说忘了后只允许在原 Run 内更正同一病根关系", async () => {
+    const topic = {
+      title: "主观方面必备要件口径",
+      role: "primary",
+      rootCauseCode: "knowledge_gap",
+      diagnosisStatus: "confirmed",
+      diagnosisDecidedRunId: "SR-SAME",
+    };
+
+    const sameRunPath = tempPath();
+    writeOutbox(sameRunPath, [{
+      op: "classify_error",
+      operation_id: "correct-untraceable-same-run",
+      studyErrorId: 7,
+      topic,
+    }]);
+    const sameRun = scriptedDb([
+      { data: { id: 7, subject: "刑法", kp_id: null }, error: null },
+      { data: { id: 10, topic_key: "刑法:a", title: topic.title, classification_status: "confirmed" }, error: null },
+      { data: { diagnosis_status: "untraceable", diagnosis_decided_run_id: "SR-SAME", untraceable_by: "user" }, error: null },
+      { data: [], error: null },
+      { data: null, error: null },
+    ]);
+
+    const corrected = await syncStudyOutbox({
+      db: sameRun.db,
+      path: sameRunPath,
+      today: "2026-08-25",
+      now: new Date("2026-08-25T03:00:00.000Z"),
+    });
+
+    expect(corrected.failed).toEqual([]);
+    const upsert = sameRun.calls
+      .filter((call) => call.table === "study_error_topic")
+      .map((call) => call.steps.find((step) => step.method === "upsert"))
+      .find(Boolean);
+    expect(upsert.args[0]).toMatchObject({
+      diagnosis_status: "confirmed",
+      diagnosis_decided_run_id: "SR-SAME",
+      untraceable_at: null,
+      untraceable_by: null,
+      untraceable_reason: null,
+    });
+
+    const crossRunPath = tempPath();
+    writeOutbox(crossRunPath, [{
+      op: "classify_error",
+      operation_id: "correct-untraceable-cross-run",
+      studyErrorId: 7,
+      topic: { ...topic, diagnosisDecidedRunId: "SR-LATER" },
+    }]);
+    const crossRun = scriptedDb([
+      { data: { id: 7, subject: "刑法", kp_id: null }, error: null },
+      { data: { id: 10, topic_key: "刑法:a", title: topic.title, classification_status: "confirmed" }, error: null },
+      { data: { diagnosis_status: "untraceable", diagnosis_decided_run_id: "SR-SAME", untraceable_by: "user" }, error: null },
+    ]);
+
+    const rejected = await syncStudyOutbox({
+      db: crossRun.db,
+      path: crossRunPath,
+      today: "2026-08-25",
+      now: new Date("2026-08-25T03:05:00.000Z"),
+    });
+    expect(rejected.succeeded).toEqual([]);
+    expect(rejected.failed[0].error).toMatch(/UNTRACEABLE_DIAGNOSIS_TERMINAL/);
+    expect(crossRun.calls).toHaveLength(3);
+  });
+
   it("只有显式用户决定操作会把病根标为 untraceable，且不改错题事件状态", async () => {
     const path = tempPath();
     writeOutbox(path, [{

@@ -1515,7 +1515,7 @@ async function main(argv) {
       console.log("      record-batch <批次.json> [--run SR-ID] [--stage]（一条进度 + N 条截图错题，一次同步）");
       console.log("      verify-batch <批次.json> --run SR-ID（只读核验既有批次，不重复写入）");
       console.log("      classify <事件id> --topic <标准主题> [同上主题参数] [--run SR-ID]");
-      console.log('      mark-untraceable <事件id> --run SR-ID --user-ref "用户原话/回合引用" --reason "用户明确说忘了或不认领"（断网/Stop/Run 中止禁用）');
+      console.log('      mark-untraceable <事件id> --run SR-ID --user-ref "user:<用户原话/回合引用>" --reason "用户明确说忘了或不认领"（同 Run 想起可 classify 更正；跨 Run/中止禁用）');
       console.log("      classify-batch <归类计划.json> [--stage]");
       console.log("      review <主题id> <pass|partial|fail|void> --variant original|rule_recall|counterfactual|novel_case|integrated_case|teach_back|invalid --axis 验证轴 [--context practice|timed|full_mock --seconds N --event 错题id --dimension application|recall --pattern 栽点代码 --diagnosis pending|confirmed|rejected|untraceable --same-session --cued --invalid-prompt --angle 角度 --anchor 锚点 --note 说明 --date 北京日 --session 会话键 --schedule 排期id --schedule-file 路径 --run SR-ID]（终态须先有 classify/mark-untraceable 回执）");
       console.log(`  验证轴：${Object.entries(REVIEW_PROBE_AXES).map(([code, item]) => `${code}=${item.label}`).join(" / ")}`);

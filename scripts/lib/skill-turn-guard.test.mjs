@@ -220,6 +220,23 @@ describe("Skill Stop 审计", () => {
     });
   });
 
+  it("F4 裸序号误读事故：把证据卡中的‘上一问’改成‘上一窝’必须阻断", () => {
+    // [gpt] 2026-08-25：点名 2026-08-02 事故，避免通用 hash 测试重构后失去守护意图。
+    const prompt = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-1", prompt: "复盘错题" }, new Map(), "2026-08-12T01:00:00Z");
+    const card = "【判题】void｜裸序号指向不明\n【原答】上一问\n【证据卡】\n1. 用户原话｜当前回合｜指的是上一问";
+    const artifactHash = hashSkillArtifact(card);
+    const completed = run({
+      status: "completed",
+      end: { outcome: "completed", phase: "result" },
+      steps: { judgment_output_verified: { status: "pass", artifactHash, artifactLength: card.length } },
+    });
+    expect(evaluateTurnCompliance(prompt, new Map([["SR-1", completed]]), { lastAssistantMessage: card }).compliant).toBe(true);
+    expect(evaluateTurnCompliance(prompt, new Map([["SR-1", completed]]), { lastAssistantMessage: card.replaceAll("上一问", "上一窝") })).toMatchObject({
+      compliant: false,
+      failureCode: "judgment_display_drift",
+    });
+  });
+
   it("等待病根认领时也必须原样展示 pending 证据卡", () => {
     const prompt = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-1", prompt: "复盘错题" }, new Map(), "2026-08-12T01:00:00Z");
     const card = "【判题】fail｜结论错误\n【证据卡】\n1. 刑法考试分析｜第88页·行3021｜规则摘要\n【病根·待认领】以下仅为候选：1) 规则不会；2) 题干误读";
