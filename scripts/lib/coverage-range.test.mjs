@@ -7,6 +7,7 @@ const outline = `◆ 民法（测试）
 第三章 自然人
 第四章 法人
 第五章 非法人组织
+第六章 民事法律行为：第一节 民事法律行为概述；第二节 意思表示；第三节 民事法律行为的成立和有效
 
 ◆ 宪法（测试）
 第一章 宪法基本理论
@@ -29,6 +30,39 @@ describe("coverage range gate", () => {
     });
     expect(result).toMatchObject({ status: "blocked", code: "COVERAGE_RANGE_UNCONFIRMED" });
     expect(result.pendingUnits.map((unit) => unit.number)).toEqual([3, 4]);
+  });
+
+  it("复现 8-03 原始事故：只报第六章第二节而第一节无流水时必须阻断", () => {
+    const result = planCoverageRange({
+      examOutline: outline,
+      subject: "民法",
+      activity: "听课",
+      target: "第六章第二节 意思表示",
+      priorRows: [],
+    });
+    expect(result).toMatchObject({ status: "blocked", code: "COVERAGE_RANGE_UNCONFIRMED" });
+    expect(result.pendingUnits.map((unit) => unit.label)).toEqual(["第六章第一节 民事法律行为概述"]);
+  });
+
+  it("章内节级支持补齐整段或显式确认真跳过", () => {
+    const base = {
+      examOutline: outline,
+      subject: "民法",
+      activity: "听课",
+      target: "第六章第二节 意思表示",
+      priorRows: [],
+    };
+    const completed = planCoverageRange({ ...base, coverageFrom: "第六章第一节 民事法律行为概述" });
+    expect(completed).toMatchObject({ status: "pass", code: "COVERAGE_RANGE_EXPLICIT" });
+    expect(completed.unitsToWrite.map((unit) => unit.sectionNumber)).toEqual([1, 2]);
+
+    const skipped = planCoverageRange({
+      ...base,
+      coverageGapConfirmed: true,
+      coverageGapReason: "第一节此前已由另一套课程覆盖，本次只听第二节",
+    });
+    expect(skipped).toMatchObject({ status: "pass", code: "COVERAGE_GAP_CONFIRMED" });
+    expect(skipped.unitsToWrite.map((unit) => unit.sectionNumber)).toEqual([2]);
   });
 
   it("显式区间一次规划所有新增覆盖单元且不重复上一落点", () => {

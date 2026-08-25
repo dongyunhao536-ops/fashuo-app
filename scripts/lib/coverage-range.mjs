@@ -1,4 +1,4 @@
-// [gpt] 2026-08-25：8-03 进度只报最新章却被当成唯一覆盖单元；只在可确定的同轨向前跳章时拦截。
+// [gpt] 2026-08-25：8-03 进度只报最新节却被当成唯一覆盖单元；只在可确定的同轨向前跳章/节时拦截。
 import { readFileSync } from "node:fs";
 
 const SEQUENTIAL_ACTIVITIES = new Set(["听课", "看书", "背诵"]);
@@ -33,65 +33,152 @@ export function parseExamOutlineChapters(examOutline) {
     if (!subject) continue;
     const chapters = [];
     for (const line of lines.slice(1)) {
-      const match = line.match(/^第([0-9一二三四五六七八九十]+)章\s*([^：:]*)(?:[：:].*)?$/u);
+      const match = line.match(/^第([0-9一二三四五六七八九十]+)章\s*([^：:]*)(?:[：:](.*))?$/u);
       if (!match) continue;
-      const number = parseChineseNumber(match[1]);
-      if (!number) continue;
+      const chapterNumber = parseChineseNumber(match[1]);
+      if (!chapterNumber) continue;
       const title = match[2].trim();
-      chapters.push({ number, title, label: `第${match[1]}章${title ? ` ${title}` : ""}` });
+      const chapterLabel = `第${match[1]}章${title ? ` ${title}` : ""}`;
+      const sections = String(match[3] ?? "").split(/[；;]/u).map((value) => value.trim()).filter(Boolean)
+        .map((value) => {
+          const section = value.match(/^第([0-9一二三四五六七八九十]+)节\s*(.*)$/u);
+          const sectionNumber = section ? parseChineseNumber(section[1]) : null;
+          if (!sectionNumber) return null;
+          const sectionTitle = section[2].trim();
+          return {
+            level: "section",
+            number: sectionNumber,
+            position: sectionNumber,
+            chapterNumber,
+            sectionNumber,
+            title: sectionTitle,
+            label: `第${match[1]}章第${section[1]}节${sectionTitle ? ` ${sectionTitle}` : ""}`,
+          };
+        })
+        .filter(Boolean);
+      chapters.push({
+        level: "chapter",
+        number: chapterNumber,
+        position: chapterNumber,
+        chapterNumber,
+        sectionNumber: null,
+        title,
+        label: chapterLabel,
+        sections,
+      });
     }
     bySubject.set(subject, chapters.sort((a, b) => a.number - b.number));
   }
   return bySubject;
 }
 
-function resolveChapterFromList(chapters, value) {
+function uniqueSemanticMatch(units, text) {
+  const normalized = normalizeLabel(text);
+  const matches = units
+    .map((unit) => ({ unit, key: normalizeLabel(unit.title) }))
+    .filter(({ key }) => key.length >= 2 && (normalized.includes(key) || key.includes(normalized)));
+  const mostSpecific = matches.filter(({ key }) => !matches.some(({ key: other }) => other.length > key.length && other.includes(key)));
+  return [...new Map(mostSpecific.map(({ unit }) => [`${unit.chapterNumber}:${unit.sectionNumber ?? 0}`, unit])).values()];
+}
+
+function resolveUnitFromList(chapters, value) {
   const text = String(value ?? "").trim();
   if (!text || chapters.length === 0) return { state: "unresolved", value: text, chapter: null };
 
-  const explicitNumbers = [...text.matchAll(/第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/gu)]
+  const explicitChapters = [...text.matchAll(/第\s*([0-9]+|[一二三四五六七八九十]+)\s*章/gu)]
     .map((match) => parseChineseNumber(match[1]))
     .filter((number) => chapters.some((chapter) => chapter.number === number));
-  const uniqueExplicit = [...new Set(explicitNumbers)];
-  if (uniqueExplicit.length === 1) {
-    return { state: "resolved", value: text, chapter: chapters.find((item) => item.number === uniqueExplicit[0]) };
-  }
-  if (uniqueExplicit.length > 1) return { state: "ambiguous", value: text, chapter: null };
+  const chapterNumbers = [...new Set(explicitChapters)];
+  if (chapterNumbers.length > 1) return { state: "ambiguous", value: text, chapter: null };
 
-  const normalized = normalizeLabel(text);
-  const semanticMatches = chapters
-    .map((chapter) => ({ chapter, key: normalizeLabel(chapter.title) }))
-    .filter(({ key }) => key.length >= 2 && (normalized.includes(key) || key.includes(normalized)));
-  const mostSpecific = semanticMatches.filter(({ key }) => !semanticMatches.some(({ key: other }) => other.length > key.length && other.includes(key)));
-  const uniqueSemantic = [...new Map(mostSpecific.map(({ chapter }) => [chapter.number, chapter])).values()];
-  if (uniqueSemantic.length === 1) return { state: "resolved", value: text, chapter: uniqueSemantic[0] };
-  if (uniqueSemantic.length > 1) return { state: "ambiguous", value: text, chapter: null };
+  const explicitSections = [...text.matchAll(/第\s*([0-9]+|[一二三四五六七八九十]+)\s*节/gu)]
+    .map((match) => parseChineseNumber(match[1]));
+  const sectionNumbers = [...new Set(explicitSections)];
+  if (sectionNumbers.length > 1) return { state: "ambiguous", value: text, chapter: null };
+  if (chapterNumbers.length === 1 && sectionNumbers.length === 1) {
+    const section = chapters.find((chapter) => chapter.number === chapterNumbers[0])?.sections
+      .find((item) => item.sectionNumber === sectionNumbers[0]);
+    return section
+      ? { state: "resolved", value: text, chapter: section }
+      : { state: "unresolved", value: text, chapter: null };
+  }
+  if (chapterNumbers.length === 1) {
+    return { state: "resolved", value: text, chapter: chapters.find((item) => item.number === chapterNumbers[0]) };
+  }
+
+  const sectionMatches = uniqueSemanticMatch(chapters.flatMap((chapter) => chapter.sections), text);
+  if (sectionMatches.length === 1) return { state: "resolved", value: text, chapter: sectionMatches[0] };
+  if (sectionMatches.length > 1) return { state: "ambiguous", value: text, chapter: null };
+  const chapterMatches = uniqueSemanticMatch(chapters, text);
+  if (chapterMatches.length === 1) return { state: "resolved", value: text, chapter: chapterMatches[0] };
+  if (chapterMatches.length > 1) return { state: "ambiguous", value: text, chapter: null };
   return { state: "unresolved", value: text, chapter: null };
 }
 
 export function resolveOutlineChapter(examOutline, subject, value) {
   const chapters = parseExamOutlineChapters(examOutline).get(subject) ?? [];
-  return resolveChapterFromList(chapters, value);
+  return resolveUnitFromList(chapters, value);
 }
 
 export function isSequentialCoverageActivity(activity) {
   return SEQUENTIAL_ACTIVITIES.has(activity);
 }
 
-function resolveLatestPrior(chapters, priorRows) {
-  for (const row of priorRows ?? []) {
-    const resolved = resolveChapterFromList(chapters, row.chapter);
-    if (resolved.state === "resolved") return { row, chapter: resolved.chapter };
+function comparablePrior(chapters, target, priorRows) {
+  const resolvedRows = (priorRows ?? []).map((row) => ({ row, resolved: resolveUnitFromList(chapters, row.chapter) }))
+    .filter(({ resolved }) => resolved.state === "resolved");
+  if (target.level === "chapter") {
+    const latest = resolvedRows[0];
+    if (!latest) return null;
+    const chapter = chapters.find((item) => item.chapterNumber === latest.resolved.chapter.chapterNumber);
+    return { row: latest.row, chapter };
   }
-  return null;
+
+  const sameChapter = resolvedRows.find(({ resolved }) => resolved.chapter.chapterNumber === target.chapterNumber);
+  if (sameChapter) return { row: sameChapter.row, chapter: sameChapter.resolved.chapter };
+  const latest = resolvedRows[0];
+  if (latest?.resolved.chapter.chapterNumber > target.chapterNumber) {
+    return { row: latest.row, chapter: latest.resolved.chapter, reverse: true };
+  }
+  return {
+    row: null,
+    chapter: {
+      level: "section",
+      number: 0,
+      position: 0,
+      chapterNumber: target.chapterNumber,
+      sectionNumber: 0,
+      title: "本章起点",
+      label: `第${target.chapterNumber}章起点`,
+    },
+    synthetic: true,
+  };
 }
 
-function chapterRange(chapters, fromNumber, toNumber) {
-  return chapters.filter((chapter) => chapter.number >= fromNumber && chapter.number <= toNumber);
+function sequenceForTarget(chapters, target) {
+  return target.level === "section"
+    ? chapters.find((chapter) => chapter.number === target.chapterNumber)?.sections ?? []
+    : chapters;
+}
+
+function positionInTargetSequence(prior, target, sequence) {
+  if (!prior) return null;
+  if (prior.reverse) return Number.POSITIVE_INFINITY;
+  if (target.level === "section" && prior.chapter.level === "chapter") return sequence.length;
+  return prior.chapter.position;
+}
+
+function unitRange(sequence, fromPosition, toPosition) {
+  return sequence.filter((unit) => unit.position >= fromPosition && unit.position <= toPosition);
+}
+
+function sameSequence(from, target) {
+  return from.level === target.level
+    && (target.level === "chapter" || from.chapterNumber === target.chapterNumber);
 }
 
 /**
- * 纯函数：规划一次学习流水写入。没有可确认顺序时只返回 hint；可确认且向前跳章时才 block。
+ * 纯函数：规划一次学习流水写入。章级与章内节级分开判序；无法确认顺序时只返回 hint。
  */
 export function planCoverageRange({
   examOutline,
@@ -108,7 +195,7 @@ export function planCoverageRange({
   }
 
   const chapters = parseExamOutlineChapters(examOutline).get(subject) ?? [];
-  const targetResolved = resolveChapterFromList(chapters, target);
+  const targetResolved = resolveUnitFromList(chapters, target);
   if (targetResolved.state !== "resolved") {
     if (coverageFrom || coverageGapConfirmed) {
       return { status: "invalid", code: "COVERAGE_SEQUENCE_UNRESOLVED", message: `无法把目标“${target ?? ""}”唯一归入《考试分析》章节顺序` };
@@ -121,11 +208,14 @@ export function planCoverageRange({
     };
   }
 
-  const prior = resolveLatestPrior(chapters, priorRows);
-  const targetChapter = targetResolved.chapter;
-  const hasForwardGap = prior && targetChapter.number > prior.chapter.number + 1;
+  // 课程目录与《考试分析》偶有同章内节号差异；顺序位置用受控目录，终点标签保留用户原始汇报。
+  const targetChapter = { ...targetResolved.chapter, label: String(target).trim() || targetResolved.chapter.label };
+  const sequence = sequenceForTarget(chapters, targetChapter);
+  const prior = comparablePrior(chapters, targetChapter, priorRows);
+  const priorPosition = positionInTargetSequence(prior, targetChapter, sequence);
+  const hasForwardGap = priorPosition != null && targetChapter.position > priorPosition + 1;
   const pendingUnits = hasForwardGap
-    ? chapterRange(chapters, prior.chapter.number + 1, targetChapter.number - 1)
+    ? unitRange(sequence, priorPosition + 1, targetChapter.position - 1)
     : [];
 
   const gapReason = coverageGapReason == null ? "" : String(coverageGapReason).trim();
@@ -134,15 +224,18 @@ export function planCoverageRange({
   }
 
   if (coverageFrom) {
-    const fromResolved = resolveChapterFromList(chapters, coverageFrom);
+    const fromResolved = resolveUnitFromList(chapters, coverageFrom);
     if (fromResolved.state !== "resolved") {
       return { status: "invalid", code: "COVERAGE_FROM_UNRESOLVED", message: `无法把区间起点“${coverageFrom}”唯一归入《考试分析》章节顺序` };
     }
-    if (fromResolved.chapter.number > targetChapter.number) {
+    if (!sameSequence(fromResolved.chapter, targetChapter)) {
+      return { status: "invalid", code: "COVERAGE_SEQUENCE_MISMATCH", message: "--coverage-from 必须与本次终点属于同一章级或同一章内节级顺序" };
+    }
+    if (fromResolved.chapter.position > targetChapter.position) {
       return { status: "invalid", code: "COVERAGE_RANGE_REVERSED", message: "--coverage-from 必须不晚于本次 --chapter；倒序复盘请逐单元记账" };
     }
-    if (hasForwardGap && fromResolved.chapter.number > prior.chapter.number + 1 && !coverageGapConfirmed) {
-      const stillMissing = chapterRange(chapters, prior.chapter.number + 1, fromResolved.chapter.number - 1);
+    if (hasForwardGap && fromResolved.chapter.position > priorPosition + 1 && !coverageGapConfirmed) {
+      const stillMissing = unitRange(sequence, priorPosition + 1, fromResolved.chapter.position - 1);
       return {
         status: "blocked",
         code: "COVERAGE_RANGE_UNCONFIRMED",
@@ -152,13 +245,13 @@ export function planCoverageRange({
         pendingUnits: stillMissing,
       };
     }
-    const confirmedSkippedUnits = hasForwardGap && fromResolved.chapter.number > prior.chapter.number + 1
-      ? chapterRange(chapters, prior.chapter.number + 1, fromResolved.chapter.number - 1)
+    const confirmedSkippedUnits = hasForwardGap && fromResolved.chapter.position > priorPosition + 1
+      ? unitRange(sequence, priorPosition + 1, fromResolved.chapter.position - 1)
       : [];
-    const effectiveFrom = prior && targetChapter.number > prior.chapter.number
-      ? Math.max(fromResolved.chapter.number, prior.chapter.number + 1)
-      : fromResolved.chapter.number;
-    const units = chapterRange(chapters, effectiveFrom, targetChapter.number);
+    const effectiveFrom = priorPosition != null && targetChapter.position > priorPosition
+      ? Math.max(fromResolved.chapter.position, priorPosition + 1)
+      : fromResolved.chapter.position;
+    const units = unitRange(sequence, effectiveFrom, targetChapter.position);
     return {
       status: "pass",
       code: confirmedSkippedUnits.length
@@ -170,8 +263,10 @@ export function planCoverageRange({
       target: targetChapter,
       pendingUnits: confirmedSkippedUnits,
       coverageFrom: fromResolved.chapter,
-      coverageGapReason: confirmedSkippedUnits.length ? gapReason : null,
-      unitsToWrite: units.map((chapter) => ({ ...chapter, isTarget: chapter.number === targetChapter.number })),
+      coverageGapReason: coverageGapConfirmed ? gapReason : null,
+      unitsToWrite: units.map((chapter) => chapter.position === targetChapter.position
+        ? { ...chapter, label: targetChapter.label, isTarget: true }
+        : { ...chapter, isTarget: false }),
     };
   }
 
