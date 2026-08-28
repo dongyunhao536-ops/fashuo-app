@@ -328,4 +328,12 @@ describe("schedule store", () => {
     expect(audit.counts.errors).toBe(1);
     expect(audit.issues[0]).toMatchObject({ code: "stale-open-recite-link" });
   });
+
+  it("关联审计接受由 daibei-pc 执行的 recall KP 排期", () => {
+    // [gpt] 2026-08-28：带背冷检可直接写 knowledge attempt，不要求先伪造 L# 挂账。
+    const markdown = "# 复盘排期\n- [ ] 2026-08-05 | P1 | id=K-RECALL | type=带背复检 | task=司法三原则无提示复述 | route=daibei-pc | dimension=recall | kp=FL-0057 | ref=coach-engine:knowledge:FL-0057:2026-08-05\n";
+    const audit = auditScheduleLinks(markdown, { referenceDate: TODAY });
+    expect(audit.counts.errors).toBe(0);
+    expect(audit.issues).not.toContainEqual(expect.objectContaining({ code: "ambiguous-recite-link" }));
+  });
 });

@@ -15,7 +15,7 @@ import {
 import { buildReciteMemoryModel } from "./lib/learning-coach.mjs";
 import { parseReciteLedger, summarizeReciteLedger } from "./lib/recite-ledger.mjs";
 import { readOutbox } from "./lib/study-outbox.mjs";
-import { readSkillRunEvents, summarizeSkillRuns } from "./lib/skill-run.mjs";
+import { expireIdleWaitingSkillRuns, readSkillRunEvents, summarizeSkillRuns } from "./lib/skill-run.mjs";
 import { findGuardNotInvokedRuns, readSkillTurnEvents, summarizeSkillTurns } from "./lib/skill-turn-guard.mjs";
 
 const LOCAL_DIR = ".local/system-observability";
@@ -276,6 +276,8 @@ async function saveSnapshot(db, report, sha) {
 
 async function runCheck(db, flags) {
   const now = new Date();
+  // [gpt] 2026-08-26：监控先回收已超过 30 分钟的 waiting_user，避免日报/周检继续报告永久悬空状态。
+  expireIdleWaitingSkillRuns({ now });
   const end = assertDate(flags.end === true ? null : flags.end ?? beijingDate(now), "--end");
   const start = assertDate(flags.start === true ? null : flags.start ?? shiftDate(end, -6), "--start");
   if (start > end) throw new Error("--start 不能晚于 --end");
@@ -293,6 +295,7 @@ async function runCheck(db, flags) {
 
 async function runWeekly(db, flags) {
   const now = new Date();
+  expireIdleWaitingSkillRuns({ now });
   const today = beijingDate(now);
   const currentWeek = beijingWeekMonday(today);
   const weekStart = assertDate(flags.week === true ? null : flags.week ?? (flags.current ? currentWeek : shiftDate(currentWeek, -7)), "--week");

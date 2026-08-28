@@ -663,8 +663,22 @@ export function buildCuotiContext({ assessment, errorSummary, eventProofs = new 
   };
 }
 
-function daibeiReciteIds(item = {}) {
-  return extractDaibeiReciteIds(item.ref, item.title, item.id);
+function daibeiStableTargets(item = {}) {
+  const reciteIds = extractDaibeiReciteIds(item.ref, item.title, item.id);
+  const { knowledgeIds } = extractScheduleTargetIds({ ref: item.ref, task: item.title });
+  return {
+    reciteIds,
+    knowledgeIds,
+    items: [
+      ...reciteIds.map((id) => ({ id, kind: "ledger" })),
+      ...knowledgeIds.map((id) => ({ id, kind: "knowledge" })),
+    ],
+  };
+}
+
+function scheduleMatchesDaibeiTarget(item, target = {}) {
+  const targets = daibeiStableTargets(item);
+  return targets.reciteIds.includes(target.reciteId) || targets.knowledgeIds.includes(target.kpId);
 }
 
 // [gpt] 2026-08-14：调度顺序固化为等待目标、到期排期、主线续接，模型不再自由改序。
@@ -673,12 +687,15 @@ function daibeiSelection({ recovery = null, schedule, study }) {
     const matchingSchedule = [...schedule.overdue, ...schedule.dueToday, ...schedule.upcoming]
       .find((item) => item.id === recovery.preferred.targetRef
         || String(recovery.preferred.targetRef).includes(String(item.id))
-        || daibeiReciteIds(item).includes(recovery.preferred.reciteId));
+        || scheduleMatchesDaibeiTarget(item, recovery.preferred));
     return {
       source: "waiting_run",
       blocked: false,
       runId: recovery.preferred.runId,
       targetRef: recovery.preferred.targetRef,
+      targetId: recovery.preferred.targetId,
+      targetKind: recovery.preferred.targetKind,
+      kpId: recovery.preferred.kpId,
       reciteId: recovery.preferred.reciteId,
       scheduleId: matchingSchedule?.id ?? null,
       reason: "已有 waiting_user 且冻结了唯一稳定条目；必须先恢复，不得另选新章。",
@@ -688,13 +705,16 @@ function daibeiSelection({ recovery = null, schedule, study }) {
     const matchingSchedule = [...schedule.overdue, ...schedule.dueToday, ...schedule.upcoming]
       .find((item) => item.id === recovery.targetFallback.targetRef
         || String(recovery.targetFallback.targetRef).includes(String(item.id))
-        || daibeiReciteIds(item).includes(recovery.targetFallback.reciteId));
+        || scheduleMatchesDaibeiTarget(item, recovery.targetFallback));
     return {
       source: "waiting_target_recovered",
       blocked: false,
       runId: null,
       priorRunId: recovery.targetFallback.runId,
       targetRef: recovery.targetFallback.targetRef,
+      targetId: recovery.targetFallback.targetId,
+      targetKind: recovery.targetFallback.targetKind,
+      kpId: recovery.targetFallback.kpId,
       reciteId: recovery.targetFallback.reciteId,
       scheduleId: matchingSchedule?.id ?? null,
       reason: "旧 waiting Run 含跨题结果，已隔离旧遥测；只继承冻结目标到新 Run，不复用污染结果。",
@@ -708,17 +728,21 @@ function daibeiSelection({ recovery = null, schedule, study }) {
     || String(left.date ?? "").localeCompare(String(right.date ?? ""))
     || String(left.id ?? "").localeCompare(String(right.id ?? "")));
   if (due.length) {
-    const reciteIds = daibeiReciteIds(due[0]);
+    const targets = daibeiStableTargets(due[0]);
+    const target = targets.items.length === 1 ? targets.items[0] : null;
     return {
       source: "due_schedule",
-      blocked: reciteIds.length !== 1,
+      blocked: targets.items.length !== 1,
       runId: null,
       targetRef: due[0].id,
-      reciteId: reciteIds.length === 1 ? reciteIds[0] : null,
+      targetId: target?.id ?? null,
+      targetKind: target?.kind ?? null,
+      kpId: target?.kind === "knowledge" ? target.id : null,
+      reciteId: target?.kind === "ledger" ? target.id : null,
       scheduleId: due[0].id,
-      reason: reciteIds.length === 1
+      reason: targets.items.length === 1
         ? `${due[0].scheduleState}/${due[0].priority ?? "P?"} 的稳定排期先于自由续章。`
-        : `到期排期 ${due[0].id} 未绑定唯一带背条目 ID；禁止猜题冲抵，先修排期。`,
+        : `到期排期 ${due[0].id} 未绑定唯一带背目标（挂账条目 ID 或 KP-ID）；禁止猜题冲抵，先修排期。`,
     };
   }
   const recentGuided = study?.recent?.find((item) => item.recitationMode === "带背") ?? null;
@@ -727,6 +751,9 @@ function daibeiSelection({ recovery = null, schedule, study }) {
     blocked: false,
     runId: null,
     targetRef: null,
+    targetId: null,
+    targetKind: null,
+    kpId: null,
     reciteId: null,
     scheduleId: null,
     anchor: recentGuided?.chapter ?? null,
@@ -929,6 +956,9 @@ export function formatSkillContext(context) {
     lines.push("", "【命题完整性 Gate】", `- ${context.questionIntegrity.rule}`, `- 命令：${context.questionIntegrity.command}`);
     if (context.judgmentResult) {
       lines.push("", "【判题证据卡 Gate】", `- ${context.judgmentResult.rule}`, `- 命令：${context.judgmentResult.command}`);
+      // [claude] 2026-08-26：schema 随开场一起下发，取消“翻源码或照抄旧样例”这条唯一出路。
+      lines.push(`- ${context.judgmentResult.templateRule}`);
+      lines.push(`- 模板（schemaVersion=${context.judgmentResult.schemaVersion}）：${JSON.stringify(context.judgmentResult.template)}`);
     }
     lines.push("", `【主题】${context.topics.length} 个；到期 ${context.dueTopicIds.join(",") || "无"}`);
     for (const item of context.topics) lines.push(`- T#${item.id} ${item.title}｜${item.state}/${item.masteryStatus}｜open ${item.eventCounts?.open ?? 0}｜最早 ${item.nextProbe?.earliestDate ?? "?"}｜${item.nextProbe?.variantKind ?? "?"}/${item.nextProbe?.probeAxis ?? "?"}`);
@@ -942,7 +972,7 @@ export function formatSkillContext(context) {
   if (context.skill === "daibei-pc") {
     lines.push("", "【调度裁决】");
     lines.push(`- 固定顺序：${context.selection.rule}`);
-    lines.push(`- 当前：${context.selection.source}${context.selection.source === "waiting_run" && context.selection.runId ? `｜恢复 ${context.selection.runId}` : ""}${context.selection.source === "waiting_target_recovered" && context.selection.runId ? `｜新建 ${context.selection.runId}` : ""}${context.selection.priorRunId ? `｜隔离旧 Run ${context.selection.priorRunId}` : ""}${context.selection.scheduleId ? `｜排期 ${context.selection.scheduleId}` : ""}${context.selection.reciteId ? `｜条目 ${context.selection.reciteId}` : ""}`);
+    lines.push(`- 当前：${context.selection.source}${context.selection.source === "waiting_run" && context.selection.runId ? `｜恢复 ${context.selection.runId}` : ""}${context.selection.source === "waiting_target_recovered" && context.selection.runId ? `｜新建 ${context.selection.runId}` : ""}${context.selection.priorRunId ? `｜隔离旧 Run ${context.selection.priorRunId}` : ""}${context.selection.scheduleId ? `｜排期 ${context.selection.scheduleId}` : ""}${context.selection.reciteId ? `｜条目 ${context.selection.reciteId}` : ""}${context.selection.kpId ? `｜知识点 ${context.selection.kpId}` : ""}`);
     lines.push(`- ${context.selection.blocked ? "BLOCK｜" : ""}${context.selection.reason}`);
     lines.push("", "【带背进度线】");
     const trail = context.study.trail;

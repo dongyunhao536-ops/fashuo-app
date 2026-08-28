@@ -7,6 +7,7 @@ import {
   assertPreflightSignable,
   buildPreflightChecklist,
   evaluatePreflight,
+  mergeMaterialHits,
 } from "./ask-preflight.mjs";
 import { AskEvidenceCardError, renderAskEvidenceCard, validateAskEvidenceCard } from "./ask-evidence-card.mjs";
 import { SKILL_AUTOMATIC_STEPS, SKILL_MANUAL_STEPS } from "./skill-run.mjs";
@@ -104,6 +105,76 @@ describe("六步预检判权从检索回执推导", () => {
   it("preflight_checked 已移出手工步骤，不能再被 --done 补签", () => {
     expect(SKILL_MANUAL_STEPS).not.toContain("preflight_checked");
     expect(SKILL_AUTOMATIC_STEPS).toContain("preflight_checked");
+  });
+});
+
+// [claude] 2026-08-27：锁住"补检索不必重跑全量"。
+// 事故：2026-08-27 那场答疑里 material-batch 跑了三次。第二次是我自己 head 截断输出
+// 造成的重复；第三次是漏了「对向犯」这个争点后补检索，而 preflight 当时只读最后一条
+// 回执，只跑增量会把 q:7 覆盖成 q:2、判权掉档，只能重扫全库。两次共赔约 240 秒。
+describe("多条检索回执聚合", () => {
+  const full = { queries: 5, kaoshi: 277, jiangyi: 375, xinde: 15, yixiao: 45, zhenti: 151, legacyDoctrine: null };
+  const topUp = { queries: 2, kaoshi: 0, jiangyi: 38, xinde: 1, yixiao: 1, zhenti: 0, legacyDoctrine: null };
+
+  it("只读最后一条回执会掉档——这就是要修的行为", () => {
+    // 旧实现等价物：补检索后只看增量那条。考试分析与真题两轴归零，3 轴掉到 1 轴。
+    expect(evaluatePreflight(topUp).solid).toBe(1);
+    expect(evaluatePreflight(topUp).verdict).toBe("single_source");
+  });
+
+  it("聚合后判权回到 3 轴，补检索不必重跑全量", () => {
+    const merged = mergeMaterialHits([full, topUp]);
+    expect(evaluatePreflight(merged).solid).toBe(3);
+    expect(evaluatePreflight(merged).verdict).toBe("normal");
+  });
+
+  it("各轴取 max 不取 sum，重叠争点不得被数两遍", () => {
+    const merged = mergeMaterialHits([full, topUp]);
+    expect(merged.jiangyi).toBe(375);
+    expect(merged.kaoshi).toBe(277);
+    expect(merged.queries).toBe(5);
+    // 同一批检索重跑一次，命中数不得翻倍。
+    expect(mergeMaterialHits([full, full]).jiangyi).toBe(375);
+  });
+
+  it("混进旧格式回执就整体降级为两轴，宁严勿宽", () => {
+    const legacy = { queries: 3, kaoshi: 0, jiangyi: 0, xinde: 0, yixiao: 2, zhenti: 90, legacyDoctrine: 120 };
+    const merged = mergeMaterialHits([full, legacy]);
+    expect(merged.legacyDoctrine).toBe(652); // max(277+375, 120)
+    expect(merged.kaoshi).toBe(0);
+    expect(merged.jiangyi).toBe(0);
+    expect(evaluatePreflight(merged).solid).toBe(2);
+  });
+
+  it("没有回执时返回 null，让调用方回落而不是伪造零命中", () => {
+    expect(mergeMaterialHits([])).toBeNull();
+    expect(mergeMaterialHits(null)).toBeNull();
+    expect(mergeMaterialHits([null, "x"])).toBeNull();
+  });
+
+  it("聚合了多条时清单要写出来，别让人以为只检索过一轮", () => {
+    const merged = mergeMaterialHits([full, topUp]);
+    const built = buildPreflightChecklist({
+      category: "刑法·第十章量刑·选项排除",
+      hits: merged,
+      queries: merged.queries,
+      receipts: 2,
+    });
+    expect(built.checklist).toMatch(/已聚合本 Run 2 条检索回执/u);
+    // 各轴取 max 后 queries 也是单次最大值，不是累计跑过的组数——措辞不许把它说成"共 N 组"。
+    expect(built.checklist).toMatch(/单次最多 5 组检索/u);
+    expect(built.checklist).not.toMatch(/共 5 组检索/u);
+    expect(built.receipts).toBe(2);
+  });
+
+  it("单条回执时清单保持原样，不多话", () => {
+    const built = buildPreflightChecklist({
+      category: "刑法·第十章量刑·选项排除",
+      hits: full,
+      queries: full.queries,
+    });
+    expect(built.checklist).not.toMatch(/已聚合/u);
+    expect(built.receipts).toBe(1);
   });
 });
 

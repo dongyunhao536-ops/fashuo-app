@@ -1,5 +1,5 @@
 {
-  "_comment": "[gpt] content_mirror 同步范围；root 是 Windows 兼容默认值，FASHUO_ARCHIVE_ROOT/ARCHIVE_DIR 可跨平台覆盖。kind 决定 grep 工具命中。",
+  "_comment": "[gpt] content_mirror 同步范围；root 是 Windows 兼容默认值，FASHUO_ARCHIVE_ROOT/ARCHIVE_DIR 可跨平台覆盖。kind 决定 grep 工具命中。[gpt] 2026-08-27 接入宪法·马峰 2027 版 OCR。[gpt] 2026-08-28 接入马峰2027宪法精讲全文及作者标注。",
   "root": "D:\\fashuo",
   "sealedExamFromYear": 2025,
   "rules": [
@@ -22,6 +22,13 @@
     {
       "pattern": "教材/法制史讲义_文本.txt",
       "kind": "textbook"
+    },
+    {
+      "pattern": "教材/宪法讲义_文本.txt",
+      "kind": "textbook",
+      "required": true,
+      "sha256": "f20fde282308571404aea9504dd92ecf3c44a02e9a1e230e4125a368b846f4cc",
+      "sourceVersion": "2027-mafeng-daa19879e3df"
     },
     {
       "pattern": "教材/民法学_文本.txt",
@@ -58,6 +65,13 @@
     {
       "pattern": "真题分析/_法制史讲义心得.md",
       "kind": "xinde"
+    },
+    {
+      "pattern": "真题分析/_宪法讲义心得.md",
+      "kind": "xinde",
+      "required": true,
+      "sha256": "e0988159b2a25886d64a03baf868bdd7dee5ab052698f7ff83a343a8a66105c2",
+      "sourceVersion": "2027-mafeng-daa19879e3df"
     },
     {
       "pattern": "真题分析/_民法做题心得.md",
@@ -156,6 +170,12 @@
       "kind": "textbook",
       "required": true,
       "sha256": "ffcf76ab3b6884e7ecfc9e807462bb587ce009e68c087de48fa087cd204be0c2"
+    },
+    {
+      "pattern": "教材/带背/_文本/宪法学_带背_文本.txt",
+      "kind": "textbook",
+      "required": true,
+      "sha256": "3a86f2c990d4895437fe3b9d224906590c0b59f88ea19b5309cf08221f4f9b53"
     }
   ]
 }

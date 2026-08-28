@@ -4,14 +4,17 @@ import { appendFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { main as skillRunCli } from "../skill-run.mjs";
 import {
   SkillRunGateError,
   assertCuotiJudgmentReady,
   assertDaibeiTargetWritebackReady,
   checkpointSkillRun,
   endSkillRun,
+  expireIdleWaitingSkillRuns,
   findDaibeiRecovery,
   readSkillRunEvents,
+  reconstructSkillRuns,
   recordAutomaticSkillStep,
   recordBusinessWriteback,
   recordDaibeiKnowledgeAttemptWriteback,
@@ -23,6 +26,7 @@ import {
   recordManualSkillStep,
   resumeDaibeiSkillRun,
   startSkillRun,
+  touchWaitingRunsForUserActivity,
   summarizeSkillRuns,
 } from "./skill-run.mjs";
 
@@ -31,7 +35,56 @@ function harness() {
   return { file: join(dir, "skill-runs.jsonl") };
 }
 
+// [claude] 2026-08-26：SR-TIMEOUT 在 00:01 进入 waiting_user；SR-ACTIVE 是同期的 active Run。
+function waitingRunFixture() {
+  return [
+    { schemaVersion: 2, eventId: "SE-T1", runId: "SR-TIMEOUT", event: "started", observedAt: "2026-08-26T00:00:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", runPurpose: "learning" },
+    { schemaVersion: 2, eventId: "SE-T2", runId: "SR-TIMEOUT", event: "step", observedAt: "2026-08-26T00:00:30.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", step: "materials_checked", status: "pass", source: "cuoti-material" },
+    { schemaVersion: 2, eventId: "SE-T3", runId: "SR-TIMEOUT", event: "checkpoint_passed", observedAt: "2026-08-26T00:01:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", phase: "question" },
+    { schemaVersion: 2, eventId: "SE-A1", runId: "SR-ACTIVE", event: "started", observedAt: "2026-08-25T22:00:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "active-session", turnId: "active-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "coach-pc", runPurpose: "learning" },
+  ];
+}
+
 describe("Skill Run 硬闸", () => {
+  // [gpt] 2026-08-28：不存在的 resume 曾只打印帮助并退出 0，让恢复失败看起来成功。
+  it("未知 CLI 命令失败并说明如何续用，不假装已经恢复 Run", () => {
+    expect(() => skillRunCli(["resume", "--run", "SR-MISSING"]))
+      .toThrow(/没有 resume 子命令.*--run/u);
+    expect(() => skillRunCli(["strat"]))
+      .toThrow(/未知 Skill Run 命令/u);
+  });
+
+  it("错题复检一题一 Run：PASS 题面不可被第二份草稿覆盖", () => {
+    const { file } = harness();
+    const run = startSkillRun({ skill: "cuoti-fupan", file, runId: "SR-CUOTI-ONE-QUESTION" });
+    recordAutomaticSkillStep({
+      runId: run.runId,
+      step: "question_integrity_pass",
+      source: "question-integrity",
+      artifactHash: "a".repeat(64),
+      artifactLength: 20,
+      file,
+    });
+
+    // [gpt] 2026-08-26：同一草稿重放幂等；不同草稿必须另开 Run，防止跨题串步。
+    expect(recordAutomaticSkillStep({
+      runId: run.runId,
+      step: "question_integrity_pass",
+      source: "question-integrity",
+      artifactHash: "a".repeat(64),
+      artifactLength: 20,
+      file,
+    }).steps.question_integrity_pass.artifactHash).toBe("a".repeat(64));
+    expect(() => recordAutomaticSkillStep({
+      runId: run.runId,
+      step: "question_integrity_pass",
+      source: "question-integrity",
+      artifactHash: "b".repeat(64),
+      artifactLength: 21,
+      file,
+    })).toThrow(/CUOTI_ONE_QUESTION_PER_RUN/);
+  });
+
   it("缺材料或题面 Gate 时拒绝展示题目，补真实回执后才放行", () => {
     const { file } = harness();
     const run = startSkillRun({ skill: "cuoti-fupan", file, now: "2026-08-12T01:00:00Z", runId: "SR-QUESTION" });
@@ -96,6 +149,40 @@ describe("Skill Run 硬闸", () => {
     recordAutomaticSkillStep({ runId: run.runId, step: "writeback_verified", source: "test", evidenceRef: "T#42:fail:diagnosis=pending", file });
     recordAutomaticSkillStep({ runId: run.runId, step: "judgment_output_verified", source: "test", evidenceRef: "T#43:partial:diagnosis=pending", artifactHash: "b".repeat(64), artifactLength: 20, file });
     expect(() => endSkillRun({ runId: run.runId, phase: "result", artifactHash: "b".repeat(64), file })).toThrow(/不一致/);
+  });
+
+  // [gpt] 2026-08-26：即便旁路造出历史式 pass+rejected artifact，最终收口也要 fail-closed。
+  it("pass 只允许 pending 单次写回，病根终态不能收口", () => {
+    const buildRun = (file, runId, diagnosisStatus, hash) => {
+      const started = startSkillRun({ skill: "cuoti-fupan", file, runId });
+      recordManualSkillStep({ runId: started.runId, step: "target_frozen", evidenceRef: "T#42", file });
+      recordAutomaticSkillStep({ runId: started.runId, step: "materials_checked", source: "test", file });
+      recordAutomaticSkillStep({ runId: started.runId, step: "question_integrity_pass", source: "test", artifactHash: "a".repeat(64), artifactLength: 10, file });
+      recordAutomaticSkillStep({ runId: started.runId, step: "result_recorded", source: "test", evidenceRef: `T#42:pass:diagnosis=${diagnosisStatus}`, file });
+      recordAutomaticSkillStep({ runId: started.runId, step: "writeback_verified", source: "test", evidenceRef: `T#42:pass:diagnosis=${diagnosisStatus}`, file });
+      if (diagnosisStatus !== "pending") {
+        recordAutomaticSkillStep({ runId: started.runId, step: "diagnosis_recorded", source: "test", evidenceRef: `T#42:diagnosis=${diagnosisStatus}`, file });
+      }
+      recordAutomaticSkillStep({
+        runId: started.runId,
+        step: "judgment_output_verified",
+        source: "test",
+        evidenceRef: `T#42:pass:diagnosis=${diagnosisStatus}`,
+        artifactHash: hash,
+        artifactLength: 100,
+        file,
+      });
+      return started;
+    };
+
+    const pendingHarness = harness();
+    const pending = buildRun(pendingHarness.file, "SR-PASS-PENDING", "pending", "b".repeat(64));
+    expect(endSkillRun({ runId: pending.runId, phase: "result", artifactHash: "b".repeat(64), file: pendingHarness.file }).status).toBe("completed");
+
+    const terminalHarness = harness();
+    const terminal = buildRun(terminalHarness.file, "SR-PASS-TERMINAL", "rejected", "c".repeat(64));
+    expect(() => endSkillRun({ runId: terminal.runId, phase: "result", artifactHash: "c".repeat(64), file: terminalHarness.file }))
+      .toThrow(/PASS_DIAGNOSIS_NOT_APPLICABLE/);
   });
 
   it("partial/fail 的 pending 病根必须先展示证据卡暂停，认领写回后才能收口", () => {
@@ -255,7 +342,8 @@ describe("Skill Run 硬闸", () => {
     expect(recorded.steps.answer_key_checked).toBeUndefined();
   });
 
-  it("自背进度走轻量 progress 回执，不加载全盘画像也不冒充抽查结果", () => {
+  // [gpt] 2026-08-28：自背与带背都归一为背诵，真实方式不能被 progress 写回误拒。
+  it.each(["自背", "带背"])("%s进度走轻量 progress 回执，不加载全盘画像也不冒充抽查结果", (recitationMode) => {
     const { file } = harness();
     const run = startSkillRun({
       skill: "daibei-pc",
@@ -270,7 +358,7 @@ describe("Skill Run 硬闸", () => {
       subject: "法制史",
       chapter: "第四章 隋唐宋",
       activity: "背诵",
-      recitationMode: "自背",
+      recitationMode,
       file,
     })).toThrow(/TARGET_MISMATCH/);
     expect(validateBusinessWriteback({
@@ -278,7 +366,7 @@ describe("Skill Run 硬闸", () => {
       subject: "法制史",
       chapter: "第三章 秦汉三国两晋南北朝",
       activity: "背诵",
-      recitationMode: "自背",
+      recitationMode,
       file,
     })).toMatchObject({ expectedSkill: "daibei-pc", businessMode: "daibei_progress" });
     const recorded = recordDaibeiProgressWriteback({
@@ -286,7 +374,7 @@ describe("Skill Run 硬闸", () => {
       subject: "法制史",
       chapter: "第三章 秦汉三国两晋南北朝",
       activity: "背诵",
-      recitationMode: "自背",
+      recitationMode,
       operationId: "op-progress-1",
       file,
     });
@@ -305,17 +393,185 @@ describe("Skill Run 硬闸", () => {
     }).status).toBe("completed");
   });
 
+  // [gpt] 2026-08-28：放行真实带背不放宽活动、科目和方式来源校验。
+  it.each([
+    [{ recitationMode: null }, /MODE_INVALID/],
+    [{ recitationMode: "" }, /MODE_INVALID/],
+    [{ recitationMode: "听课" }, /MODE_INVALID/],
+    [{ activity: "带背" }, /ACTIVITY_INVALID/],
+    [{ subject: "民法" }, /SUBJECT_MISMATCH/],
+  ])("背诵进度拒绝非法写回字段 %j", (overrides, error) => {
+    const { file } = harness();
+    const run = startSkillRun({
+      skill: "daibei-pc",
+      subject: "宪法",
+      kind: "progress",
+      targetRef: "第一章 宪法基本理论·第三节 宪法原则",
+      file,
+      runId: "SR-DAIBEI-PROGRESS-INVALID",
+    });
+    expect(() => validateBusinessWriteback({
+      runId: run.runId,
+      subject: "宪法",
+      chapter: "第一章 宪法基本理论·第三节 宪法原则",
+      activity: "背诵",
+      recitationMode: "带背",
+      ...overrides,
+      file,
+    })).toThrow(error);
+  });
+
   it("带背 recall 禁止降级成 plan 收口", () => {
     const { file } = harness();
     const run = startSkillRun({
       skill: "daibei-pc",
       subject: "法制史",
       kind: "recall",
-      targetRef: "第三章 秦汉三国两晋南北朝",
+      // [claude] 2026-08-25：章节级 target 现在在 start 就被路线校验挡下，这里改用条目 ID；
+      // 本例考的是 plan 降级，不是目标类型。
+      targetRef: "S6",
       file,
       runId: "SR-DAIBEI-RECALL-NOT-PLAN",
     });
     expect(() => endSkillRun({ runId: run.runId, phase: "plan", file })).toThrow(/不能按 plan 收口/);
+  });
+
+  // [claude] 2026-08-25：写回路线在 start 声明并按目标语法硬校验。
+  // 事故：同日一个 recall Run 的 target 冻成章节级，跑完材料/Gate/出题/判分才在写回炸掉，整条链返工。
+  it("kind=recall 的目标定不出写回路线时 start 直接阻断", () => {
+    const { file } = harness();
+    expect(() => startSkillRun({
+      skill: "daibei-pc",
+      subject: "法制史",
+      kind: "recall",
+      targetRef: "第二章 夏商西周春秋战国法律制度·第1轮骨架级抽查",
+      file,
+      runId: "SR-ROUTE-UNRESOLVED",
+    })).toThrow(/DAIBEI_RESULT_ROUTE_REQUIRED/);
+  });
+
+  it("目标语法决定路线：KP-ID 走 knowledge，挂账条目 ID 走 ledger", () => {
+    const { file } = harness();
+    const kp = startSkillRun({
+      skill: "daibei-pc", subject: "法制史", kind: "recall", targetRef: "LS-0012", file, runId: "SR-ROUTE-KP",
+    });
+    expect(kp.resultRoute).toBe("knowledge");
+    endSkillRun({ runId: kp.runId, outcome: "aborted", abortReason: "用例收尾", abortSource: "system", file });
+    const ledger = startSkillRun({
+      skill: "daibei-pc", subject: "法理", kind: "recall", targetRef: "L12", file, runId: "SR-ROUTE-LEDGER",
+    });
+    expect(ledger.resultRoute).toBe("ledger");
+  });
+
+  it("声明的路线与目标类型不符时 start 阻断，recall 不许声明 none", () => {
+    const { file } = harness();
+    expect(() => startSkillRun({
+      skill: "daibei-pc", subject: "法理", kind: "recall", targetRef: "L12", resultRoute: "knowledge", file, runId: "SR-ROUTE-X1",
+    })).toThrow(/DAIBEI_ROUTE_TARGET_MISMATCH/);
+    expect(() => startSkillRun({
+      skill: "daibei-pc", subject: "法制史", kind: "recall", targetRef: "LS-0012", resultRoute: "ledger", file, runId: "SR-ROUTE-X2",
+    })).toThrow(/DAIBEI_ROUTE_TARGET_MISMATCH/);
+    expect(() => startSkillRun({
+      skill: "daibei-pc", subject: "法制史", kind: "recall", targetRef: "LS-0012", resultRoute: "none", file, runId: "SR-ROUTE-X3",
+    })).toThrow(/DAIBEI_ROUTE_NONE_REQUIRED_WRITEBACK/);
+  });
+
+  it("recall-sameday 强制 route=none，且两条写回路线都提前拒绝", () => {
+    const { file } = harness();
+    expect(() => startSkillRun({
+      skill: "daibei-pc", subject: "法制史", kind: "recall-sameday", targetRef: "LS-0012", resultRoute: "knowledge", file, runId: "SR-ROUTE-SD-X",
+    })).toThrow(/DAIBEI_SAMEDAY_ROUTE_FORCED/);
+    const run = startSkillRun({
+      skill: "daibei-pc",
+      subject: "法理",
+      kind: "recall-sameday",
+      targetRef: "L12",
+      file,
+      runId: "SR-ROUTE-SD-OK",
+    });
+    expect(run.resultRoute).toBe("none");
+    recordAutomaticSkillStep({ runId: run.runId, step: "materials_checked", source: "test", file });
+    recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "test", artifactHash: "b".repeat(64), artifactLength: 32, file });
+    // 目标是合法挂账条目 ID，旧代码会让它从 ledger 那条路把结果写进带背台账。
+    expect(() => assertDaibeiTargetWritebackReady({ runId: run.runId, reciteId: "L12", file }))
+      .toThrow(/DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK/);
+    expect(() => recordDaibeiKnowledgeAttemptWriteback({ runId: run.runId, kpId: "LS-0012", operationId: "op-x", file }))
+      .toThrow(/DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK/);
+  });
+
+  // [claude] 2026-08-25：当日进度后的抽查不落账（云拍板），probe 是它唯一的合法出口，
+  // 同时必须锁住"普通 recall 借 probe 绕开写回"这条后门。
+  it("当日抽查 recall-sameday 用 probe 收口，不需要任何写回回执", () => {
+    const { file } = harness();
+    const run = startSkillRun({
+      skill: "daibei-pc",
+      subject: "法制史",
+      kind: "recall-sameday",
+      targetRef: "LS-0012",
+      file,
+      runId: "SR-DAIBEI-SAMEDAY-OK",
+    });
+    recordAutomaticSkillStep({ runId: run.runId, step: "materials_checked", source: "test", evidenceRef: "q:1|kaoshi:3|jiangyi:5|zhenti:2", file });
+    recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "test", artifactHash: "e".repeat(64), artifactLength: 40, file });
+    expect(endSkillRun({
+      runId: run.runId,
+      phase: "probe",
+      done: ["response_verified"],
+      evidenceRef: "LS-0012 法经六篇·当日热检不落账",
+      file,
+    }).status).toBe("completed");
+  });
+
+  it("recall-sameday 不能按 result 收口，普通 recall 也不能借 probe 绕开写回", () => {
+    const { file } = harness();
+    const sameday = startSkillRun({
+      skill: "daibei-pc",
+      subject: "法制史",
+      kind: "recall-sameday",
+      targetRef: "LS-0012",
+      file,
+      runId: "SR-DAIBEI-SAMEDAY-WRONG-PHASE",
+    });
+    expect(() => endSkillRun({ runId: sameday.runId, phase: "result", file })).toThrow(/不能按 result 收口；应为 probe/);
+
+    const { file: file2 } = harness();
+    const plain = startSkillRun({
+      skill: "daibei-pc",
+      subject: "法制史",
+      kind: "recall",
+      targetRef: "LS-0012",
+      file: file2,
+      runId: "SR-DAIBEI-RECALL-NO-PROBE",
+    });
+    recordAutomaticSkillStep({ runId: plain.runId, step: "materials_checked", source: "test", file: file2 });
+    recordAutomaticSkillStep({ runId: plain.runId, step: "question_integrity_pass", source: "test", artifactHash: "f".repeat(64), artifactLength: 40, file: file2 });
+    expect(() => endSkillRun({
+      runId: plain.runId,
+      phase: "probe",
+      done: ["response_verified"],
+      evidenceRef: "想绕开 result_recorded",
+      file: file2,
+    })).toThrow(/不能按 probe 收口；应为 question\|result/);
+  });
+
+  it("recall-sameday 试图写 learning_attempt 时给出不落账的明确拒绝", () => {
+    const { file } = harness();
+    const run = startSkillRun({
+      skill: "daibei-pc",
+      subject: "法制史",
+      kind: "recall-sameday",
+      targetRef: "LS-0012",
+      file,
+      runId: "SR-DAIBEI-SAMEDAY-NO-WRITEBACK",
+    });
+    recordAutomaticSkillStep({ runId: run.runId, step: "materials_checked", source: "test", file });
+    recordAutomaticSkillStep({ runId: run.runId, step: "question_integrity_pass", source: "test", artifactHash: "a".repeat(64), artifactLength: 40, file });
+    expect(() => recordDaibeiKnowledgeAttemptWriteback({
+      runId: run.runId,
+      kpId: "LS-0012",
+      operationId: "attempt-sameday",
+      file,
+    })).toThrow(/DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK/);
   });
 
   it("带背新章节 KP 抽查用 learning_attempt 回执收口且目标必须一致", () => {
@@ -526,6 +782,27 @@ describe("Skill Run 硬闸", () => {
     expect(resumed).toMatchObject({ runId: "SR-L31", sessionId: "new-session", turnId: "new-turn", status: "waiting_user" });
   });
 
+  it("稳定 KP-ID 的带背 waiting Run 可以跨轮恢复", () => {
+    // [gpt] 2026-08-28：KP recall 与挂账 recall 共用 waiting_user 恢复优先级，不能因目标不是 L#/X# 丢单。
+    const { file } = harness();
+    const events = [
+      { schemaVersion: 2, eventId: "SE-KP1", runId: "SR-FL0057", event: "started", observedAt: "2026-08-28T01:00:00.000Z", beijingDate: "2026-08-28", sessionId: "old", turnId: "turn-old", producerHost: "codex", skill: "daibei-pc", subject: "法理", kind: "recall", referenceDate: "2026-08-28", entryMode: "direct", resultRoute: "knowledge" },
+      { schemaVersion: 2, eventId: "SE-KP2", runId: "SR-FL0057", event: "step", observedAt: "2026-08-28T01:00:01.000Z", beijingDate: "2026-08-28", sessionId: "old", turnId: "turn-old", producerHost: "codex", skill: "daibei-pc", step: "target_frozen", status: "pass", evidenceRef: "FL-0057" },
+      { schemaVersion: 2, eventId: "SE-KP3", runId: "SR-FL0057", event: "checkpoint_passed", observedAt: "2026-08-28T01:00:02.000Z", beijingDate: "2026-08-28", sessionId: "old", turnId: "turn-old", producerHost: "codex", skill: "daibei-pc", phase: "question" },
+    ];
+    appendFileSync(file, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+
+    const recovery = findDaibeiRecovery({ subject: "法理", file });
+    expect(recovery.preferred).toMatchObject({
+      runId: "SR-FL0057",
+      targetId: "FL-0057",
+      targetKind: "knowledge",
+      kpId: "FL-0057",
+      reciteId: null,
+      stable: true,
+    });
+  });
+
   it("历史 waiting Run 已含跨题结果时只回收目标，不把污染 Run 标成可恢复", () => {
     const { file } = harness();
     const events = [
@@ -658,7 +935,9 @@ describe("Skill Run 监控摘要", () => {
     expect(() => summarizeSkillRuns(parsed, { runPurpose: "other" })).toThrow(/runPurpose/);
   });
 
-  it("把带背阶段错配和进度后未抽查从干净收口中剔除", () => {
+  // [claude] 2026-08-25：当日抽查改成无 Run 的 stateless probe 后，
+  // "进度后没有抽查 Run" 不再是断链——正确执行恰好一条抽查 Run 都没有。
+  it("把带背阶段错配从干净收口中剔除，进度 Run 本身仍算干净", () => {
     const { file } = harness();
     const events = [
       { schemaVersion: 1, eventId: "SE-P1", runId: "SR-PROGRESS", event: "started", observedAt: "2026-08-21T01:00:00.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", subject: "法制史", kind: "progress", entryMode: "direct" },
@@ -672,29 +951,31 @@ describe("Skill Run 监控摘要", () => {
       nowIso: "2026-08-21T03:00:00.000Z",
       windowStart: "2026-08-21",
       windowEnd: "2026-08-21",
-      postProgressProbeGraceMinutes: 10,
     });
-    expect(summary.counts).toMatchObject({ daibeiPhaseKindMismatches: 1, daibeiPostProgressProbeMissing: 1 });
-    expect(summary.compliance).toMatchObject({ completed: 2, closedCleanly: 0, rate: 0, rawRate: 0 });
+    expect(summary.counts).toMatchObject({ daibeiPhaseKindMismatches: 1 });
+    expect(summary.counts.daibeiPostProgressProbeMissing).toBeUndefined();
+    expect(summary.compliance).toMatchObject({ completed: 2, closedCleanly: 1 });
   });
 
-  it("进度 Run 后同科首题进入 waiting_user 时不报抽查断链", () => {
+  // [claude] 2026-08-25：新流程不再建抽查 Run，但历史 Run 仍要能正确回放。
+  it("legacy recall-sameday Run 回放时，probe 与 kind 的双向锁仍成立", () => {
     const { file } = harness();
     const events = [
-      { schemaVersion: 1, eventId: "SE-P1", runId: "SR-PROGRESS", event: "started", observedAt: "2026-08-21T01:00:00.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", subject: "法制史", kind: "progress", entryMode: "direct" },
-      { schemaVersion: 1, eventId: "SE-P2", runId: "SR-PROGRESS", event: "step", observedAt: "2026-08-21T01:00:01.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", step: "target_frozen", status: "pass", source: "skill-run-start", evidenceRef: "第三章 秦汉三国两晋南北朝" },
-      { schemaVersion: 1, eventId: "SE-P3", runId: "SR-PROGRESS", event: "ended", observedAt: "2026-08-21T01:00:05.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", phase: "progress", outcome: "completed" },
-      { schemaVersion: 1, eventId: "SE-Q1", runId: "SR-QUESTION", event: "started", observedAt: "2026-08-21T01:00:06.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", subject: "法制史", kind: "recall", entryMode: "direct" },
-      { schemaVersion: 1, eventId: "SE-Q2", runId: "SR-QUESTION", event: "checkpoint_passed", observedAt: "2026-08-21T01:00:10.000Z", beijingDate: "2026-08-21", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", phase: "question" },
+      { schemaVersion: 1, eventId: "SE-P1", runId: "SR-PROGRESS", event: "started", observedAt: "2026-08-25T01:00:00.000Z", beijingDate: "2026-08-25", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", subject: "法制史", kind: "progress", entryMode: "direct" },
+      { schemaVersion: 1, eventId: "SE-P2", runId: "SR-PROGRESS", event: "ended", observedAt: "2026-08-25T01:00:05.000Z", beijingDate: "2026-08-25", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", phase: "progress", outcome: "completed" },
+      { schemaVersion: 1, eventId: "SE-S1", runId: "SR-SAMEDAY", event: "started", observedAt: "2026-08-25T01:00:06.000Z", beijingDate: "2026-08-25", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", subject: "法制史", kind: "recall-sameday", entryMode: "direct" },
+      { schemaVersion: 1, eventId: "SE-S2", runId: "SR-SAMEDAY", event: "checkpoint_passed", observedAt: "2026-08-25T01:00:10.000Z", beijingDate: "2026-08-25", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", phase: "question" },
+      { schemaVersion: 1, eventId: "SE-S3", runId: "SR-SAMEDAY", event: "ended", observedAt: "2026-08-25T01:00:20.000Z", beijingDate: "2026-08-25", sessionId: "session-1", turnId: "turn-1", skill: "daibei-pc", phase: "probe", outcome: "completed" },
+      { schemaVersion: 1, eventId: "SE-B1", runId: "SR-PROBE-ABUSE", event: "started", observedAt: "2026-08-25T02:00:00.000Z", beijingDate: "2026-08-25", sessionId: "session-2", turnId: "turn-2", skill: "daibei-pc", subject: "法制史", kind: "recall", entryMode: "direct" },
+      { schemaVersion: 1, eventId: "SE-B2", runId: "SR-PROBE-ABUSE", event: "ended", observedAt: "2026-08-25T02:00:05.000Z", beijingDate: "2026-08-25", sessionId: "session-2", turnId: "turn-2", skill: "daibei-pc", phase: "probe", outcome: "completed" },
     ];
     appendFileSync(file, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
     const summary = summarizeSkillRuns(readSkillRunEvents(file), {
-      nowIso: "2026-08-21T03:00:00.000Z",
-      windowStart: "2026-08-21",
-      windowEnd: "2026-08-21",
-      postProgressProbeGraceMinutes: 10,
+      nowIso: "2026-08-25T03:00:00.000Z",
+      windowStart: "2026-08-25",
+      windowEnd: "2026-08-25",
     });
-    expect(summary.counts.daibeiPostProgressProbeMissing).toBe(0);
+    expect(summary.counts.daibeiPhaseKindMismatches).toBe(1);
   });
 
   it("过期 waiting_user 标成孤儿等待并进入完整率分母，但不改写 Run 状态", () => {
@@ -715,6 +996,124 @@ describe("Skill Run 监控摘要", () => {
     expect(summary.counts).toMatchObject({ active: 1, actionableActive: 0, waitingUser: 1, freshWaitingUser: 0, orphanedWaiting: 1 });
     expect(summary.compliance).toMatchObject({ eligible: 2, closedCleanly: 1, rate: 50, rawStarted: 2, rawRate: 50 });
     expect(summary.orphanedWaitingRuns[0]).toMatchObject({ runId: "SR-WAIT", status: "waiting_user" });
+  });
+
+  // [claude] 2026-08-26：空闲钟数的是 Run 遥测事件，而用户在聊天里回话不产生 Run 事件。
+  // 于是"30 分钟无操作"实际是"30 分钟没跑脚本"——本会话一个 waiting_user Run 因为中途
+  // 岔开排查而 idle 132 分钟被回收。心跳由宿主 UserPromptSubmit 调，把语义补齐。
+  it("用户发话给同 session 的 waiting_user Run 续命，且不签任何步骤", () => {
+    const { file } = harness();
+    const events = waitingRunFixture();
+    appendFileSync(file, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    const before = reconstructSkillRuns(readSkillRunEvents(file).events).get("SR-TIMEOUT");
+
+    const beat = touchWaitingRunsForUserActivity({ sessionId: "claude-session", file, now: new Date("2026-08-26T00:25:00.000Z") });
+    expect(beat.touched).toEqual([expect.objectContaining({ runId: "SR-TIMEOUT", skill: "cuoti-fupan" })]);
+
+    const after = reconstructSkillRuns(readSkillRunEvents(file).events).get("SR-TIMEOUT");
+    expect(after.status).toBe("waiting_user");
+    expect(after.end).toBeNull();
+    expect(after.steps).toEqual(before.steps);
+    expect(after.checkpoints).toEqual(before.checkpoints);
+    expect(after.lastEventAt).toBe("2026-08-26T00:25:00.000Z");
+
+    // 续命之后，原本会在 00:31 到期的 Run 不再被回收。
+    expect(expireIdleWaitingSkillRuns({ file, now: "2026-08-26T00:31:01.000Z", idleMinutes: 30 }).expired).toHaveLength(0);
+    expect(expireIdleWaitingSkillRuns({ file, now: "2026-08-26T00:55:01.000Z", idleMinutes: 30 }).expired)
+      .toEqual([expect.objectContaining({ runId: "SR-TIMEOUT" })]);
+  });
+
+  it("心跳只碰同 session、未收口、waiting_user 的 Run", () => {
+    const { file } = harness();
+    appendFileSync(file, `${waitingRunFixture().map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    const now = new Date("2026-08-26T00:25:00.000Z");
+
+    expect(touchWaitingRunsForUserActivity({ sessionId: "别的会话", file, now }).touched).toEqual([]);
+    expect(touchWaitingRunsForUserActivity({ sessionId: null, file, now }).touched).toEqual([]);
+    // SR-ACTIVE 是 active 而不是 waiting_user，不该被续命。
+    expect(touchWaitingRunsForUserActivity({ sessionId: "active-session", file, now }).touched).toEqual([]);
+
+    expireIdleWaitingSkillRuns({ file, now: "2026-08-26T01:00:00.000Z", idleMinutes: 30 });
+    expect(touchWaitingRunsForUserActivity({ sessionId: "claude-session", file, now: new Date("2026-08-26T01:05:00.000Z") }).touched)
+      .toEqual([]);
+  });
+
+  it("绝对上限之外不再续命，Run 永久悬空这条保证不被削弱", () => {
+    const { file } = harness();
+    appendFileSync(file, `${waitingRunFixture().map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    // 进入 waiting_user 的时点是 00:01 的 question checkpoint。
+    const beat = touchWaitingRunsForUserActivity({
+      sessionId: "claude-session",
+      file,
+      now: new Date("2026-08-26T06:02:00.000Z"),
+      maxWaitMinutes: 360,
+    });
+    expect(beat.touched).toEqual([]);
+    expect(beat.skipped).toEqual([expect.objectContaining({ runId: "SR-TIMEOUT", reason: "max_wait_reached" })]);
+    expect(expireIdleWaitingSkillRuns({ file, now: "2026-08-26T06:02:01.000Z", idleMinutes: 30 }).expired)
+      .toEqual([expect.objectContaining({ runId: "SR-TIMEOUT" })]);
+  });
+
+  it("waiting_user 30 分钟后跨宿主安全收口，且不生成用户 fail 或学习事实", () => {
+    const { file } = harness();
+    const events = [
+      { schemaVersion: 2, eventId: "SE-T1", runId: "SR-TIMEOUT", event: "started", observedAt: "2026-08-26T00:00:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", runPurpose: "learning" },
+      { schemaVersion: 2, eventId: "SE-T2", runId: "SR-TIMEOUT", event: "step", observedAt: "2026-08-26T00:00:30.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", step: "materials_checked", status: "pass", source: "cuoti-material" },
+      { schemaVersion: 2, eventId: "SE-T3", runId: "SR-TIMEOUT", event: "checkpoint_passed", observedAt: "2026-08-26T00:01:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "claude-session", turnId: "claude-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", phase: "question" },
+      { schemaVersion: 2, eventId: "SE-A1", runId: "SR-ACTIVE", event: "started", observedAt: "2026-08-25T22:00:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "active-session", turnId: "active-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "coach-pc", runPurpose: "learning" },
+    ];
+    appendFileSync(file, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+    const before = reconstructSkillRuns(readSkillRunEvents(file).events).get("SR-TIMEOUT");
+
+    expect(expireIdleWaitingSkillRuns({ file, now: "2026-08-26T00:30:59.000Z", idleMinutes: 30 }).expired).toHaveLength(0);
+    const result = expireIdleWaitingSkillRuns({ file, now: "2026-08-26T00:31:01.000Z", idleMinutes: 30 });
+    expect(result.expired).toEqual([
+      expect.objectContaining({ runId: "SR-TIMEOUT", skill: "cuoti-fupan", producerHost: "claude", timeoutMinutes: 30 }),
+    ]);
+
+    const parsed = readSkillRunEvents(file);
+    const runs = reconstructSkillRuns(parsed.events);
+    const timedOut = runs.get("SR-TIMEOUT");
+    expect(timedOut).toMatchObject({
+      status: "aborted",
+      producerHost: "claude",
+      end: {
+        outcome: "aborted",
+        abortSource: "system",
+      },
+    });
+    expect(timedOut.end.abortReason).toMatch(/未记录用户 fail、未确认错因、未改写学习事实/);
+    expect(timedOut.steps).toEqual(before.steps);
+    expect(timedOut.events.filter((event) => event.event === "step" && event.status === "fail")).toHaveLength(0);
+    expect(summarizeSkillRuns(parsed, {
+      nowIso: "2026-08-26T00:31:02.000Z",
+      windowStart: "2026-08-26",
+      windowEnd: "2026-08-26",
+    }).counts).toMatchObject({ aborted: 1, idleTimeoutAborted: 1, abandonedAborted: 0 });
+    expect(runs.get("SR-ACTIVE").status).toBe("active");
+    expect(expireIdleWaitingSkillRuns({ file, now: "2026-08-26T01:00:00.000Z", idleMinutes: 30 }).expired).toHaveLength(0);
+    expect(readSkillRunEvents(file).events.filter((event) => event.runId === "SR-TIMEOUT" && event.event === "ended")).toHaveLength(1);
+  });
+
+  it("启动新 Skill 时自动回收同会话的超时等待 Run", () => {
+    const { file } = harness();
+    const events = [
+      { schemaVersion: 2, eventId: "SE-S1", runId: "SR-OLD-WAIT", event: "started", observedAt: "2026-08-26T00:00:00.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "shared-session", turnId: "old-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", runPurpose: "learning" },
+      { schemaVersion: 2, eventId: "SE-S2", runId: "SR-OLD-WAIT", event: "checkpoint_passed", observedAt: "2026-08-26T00:00:01.000Z", beijingDate: "2026-08-26", producerHost: "claude", sessionId: "shared-session", turnId: "old-prompt", turnIdSource: "prompt_id", identityState: "full", skill: "cuoti-fupan", phase: "question" },
+    ];
+    appendFileSync(file, `${events.map((event) => JSON.stringify(event)).join("\n")}\n`, "utf8");
+
+    const next = startSkillRun({
+      skill: "coach-pc",
+      file,
+      runId: "SR-NEXT",
+      sessionId: "shared-session",
+      turnId: "new-prompt",
+      now: "2026-08-26T00:31:00.000Z",
+    });
+    const runs = reconstructSkillRuns(readSkillRunEvents(file).events);
+    expect(next.status).toBe("active");
+    expect(runs.get("SR-OLD-WAIT")).toMatchObject({ status: "aborted", end: { abortSource: "system" } });
   });
 
   it("识别过期未收口、Gate 失败和启动耗时", () => {

@@ -33,7 +33,22 @@ describe("Skill 宿主路由", () => {
     expect(routeSkillPrompt("带我背法理学基本原则")?.skill).toBe("daibei-pc");
     expect(routeSkillPrompt("这道刑法题为什么选 B")?.skill).toBe("ask-pc");
     expect(routeSkillPrompt("解释一下犯罪中止")?.skill).toBe("ask-pc");
+    expect(routeSkillPrompt("从民法离婚开始给我上课")).toBeNull();
+    expect(routeSkillPrompt("用基础精讲讲义从民法离婚开始讲")).toBeNull();
+    expect(routeSkillPrompt("按精讲一本通继续授课")).toBeNull();
+    expect(routeSkillPrompt("继续刚才的课")).toBeNull();
+    expect(routeSkillPrompt("系统讲完法理第八章")).toBeNull();
+    expect(routeSkillPrompt("下一节")).toBeNull();
     expect(routeSkillPrompt("诊断一下 ask-pc skill 为什么执行慢")).toBeNull();
+    expect(routeSkillPrompt("所以 Claude 那边也可以正常授课了是吗")).toBeNull();
+    expect(routeSkillPrompt("这个授课入口现在能正常运行吗")).toBeNull();
+    expect(routeSkillPrompt("读取一下刚才的授课记录，似乎有问题")).toBeNull();
+    expect(routeSkillPrompt("所以意思是下次授课前还是要提前让你准备是吗？那和之前有什么区别，准备的时间变少了？")).toBeNull();
+    expect(routeSkillPrompt("提醒一句：docs/shouke-pc授课Skill方案.md 里的 claude-enforce@4 还没更新成 5")).toBeNull();
+    expect(routeSkillPrompt("现在从民法离婚开始给我正常授课")).toBeNull();
+    expect(routeSkillPrompt("按更新后的授课方案从民法离婚开始上课")).toBeNull();
+    expect(routeSkillPrompt("继续民法课堂教学")).toBeNull();
+    expect(routeSkillPrompt("使用 shouke-pc 讲讲犯罪中止")).toBeNull();
     expect(routeSkillPrompt("使用 ask-pc 讲讲犯罪中止")?.skill).toBe("ask-pc");
     expect(routeSkillPrompt("这两天系统升级后 skill 执行慢吗")).toBeNull();
   });
@@ -93,6 +108,19 @@ describe("Skill 宿主路由", () => {
     expect(switchSkill).toMatchObject({ expectedSkill: "coach-pc", expectedRunId: null, routeSource: "strong_trigger" });
   });
 
+  it("已撤下 Skill 的旧活动 Run 只作历史记录，不再接管新 prompt 或 Stop", () => {
+    const retired = run({ skill: "shouke-pc", status: "waiting_delivery" });
+    const routed = createPromptRoutedEvent({
+      session_id: "session-1", turn_id: "turn-2", prompt: "继续",
+    }, new Map([[retired.runId, retired]]), "2026-08-12T01:05:00Z");
+    expect(routed).toMatchObject({ expectedSkill: null, expectedRunId: null, routeSource: "none" });
+    expect(evaluateTurnCompliance({
+      expectedSkill: "shouke-pc", expectedRunId: retired.runId, sessionId: "session-1", turnId: "turn-2",
+    }, new Map([[retired.runId, retired]]))).toMatchObject({
+      applicable: false, compliant: true, retiredSkill: "shouke-pc",
+    });
+  });
+
   it("同 Skill 强触发和模糊交卷续用活动 Run，英语作文不会误切主观题", () => {
     const cuotiRuns = new Map([["SR-1", run()]]);
     const sameSkill = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-2", prompt: "继续清几道老题" }, cuotiRuns, "2026-08-12T01:05:00Z");
@@ -108,6 +136,30 @@ describe("Skill 宿主路由", () => {
     const closed = run({ status: "completed", end: { outcome: "completed" }, lastEventAt: "2026-08-12T01:00:02.000Z" });
     const event = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-4", prompt: "继续" }, new Map([["SR-1", closed]]), "2026-08-12T01:07:00Z");
     expect(event).toMatchObject({ expectedSkill: "cuoti-fupan", expectedRunId: null, routeSource: "continuation" });
+  });
+
+  // [gpt] 2026-08-26：实跑中“修复 → 继续”被数小时前的错题 Run 抢走，误触学习硬闸。
+  it("系统对话已插入时，短继续不回跳到更早的已收口 Skill", () => {
+    const closed = run({ status: "completed", end: { outcome: "completed" }, lastEventAt: "2026-08-12T01:00:02.000Z" });
+    const engineeringPrompt = createPromptRoutedEvent({
+      session_id: "session-1",
+      turn_id: "turn-engineering",
+      prompt: "修复这个 Skill 的执行速度，顺便核对 Claude",
+    }, new Map([["SR-1", closed]]), "2026-08-12T01:06:00Z");
+    expect(engineeringPrompt.expectedSkill).toBeNull();
+    const continuation = createPromptRoutedEvent(
+      { session_id: "session-1", turn_id: "turn-continue", prompt: "继续" },
+      new Map([["SR-1", closed]]),
+      "2026-08-12T01:07:00Z",
+      { previousPromptEvents: [engineeringPrompt] },
+    );
+    expect(continuation).toMatchObject({ expectedSkill: null, expectedRunId: null, routeSource: "none" });
+  });
+
+  it("已收口 Run 超过 30 分钟时，裸继续不再自动恢复", () => {
+    const closed = run({ status: "completed", end: { outcome: "completed" }, lastEventAt: "2026-08-12T01:00:02.000Z" });
+    const event = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-4", prompt: "继续" }, new Map([["SR-1", closed]]), "2026-08-12T01:31:00Z");
+    expect(event).toMatchObject({ expectedSkill: null, expectedRunId: null, routeSource: "none" });
   });
 
   it("上一轮被中断且尚未建 Run 时，短继续继承最近路由", () => {
@@ -190,7 +242,9 @@ describe("Skill Stop 审计", () => {
     });
   });
 
-  it("普通自背进度落账后没有更晚的抽查 Run 时阻断 Stop", () => {
+  // [claude] 2026-08-25：反转断言。云拍板当日抽查改成无 Run 的 stateless probe（不落任何账），
+  // 原来的 post_progress_probe_missing 会把每次正确执行都误报成断链，故整条闸移除。
+  it("普通自背进度落账后不再因缺抽查 Run 而阻断 Stop（当日抽查已无 Run）", () => {
     const prompt = createPromptRoutedEvent({
       session_id: "session-1",
       turn_id: "turn-1",
@@ -204,8 +258,8 @@ describe("Skill Stop 审计", () => {
       events: [{ turnId: "turn-1", event: "ended" }],
     });
     expect(evaluateTurnCompliance(prompt, new Map([[progress.runId, progress]]))).toMatchObject({
-      compliant: false,
-      failureCode: "post_progress_probe_missing",
+      compliant: true,
+      failureCode: null,
     });
   });
 
@@ -307,6 +361,22 @@ describe("Skill Stop 审计", () => {
       compliant: false,
       failureCode: "judgment_display_drift",
     });
+  });
+
+  // [gpt] 2026-08-26：真实事故是模型给每行加 Markdown 硬换行双空格，正文未改却触发整轮重试。
+  it("判题卡容忍 CRLF 与行尾 Markdown 空格，但正文改字仍阻断", () => {
+    const prompt = createPromptRoutedEvent({ session_id: "session-1", turn_id: "turn-1", prompt: "复盘错题" }, new Map(), "2026-08-12T01:00:00Z");
+    const card = "【判题】pass｜结论与理由正确\n【规则】中央与地方机关须按题干层级识别\n【病根·不新增】本题通过，本轮没有新的错误可供认领。";
+    const completed = run({
+      status: "completed",
+      end: { outcome: "completed", phase: "result" },
+      steps: { judgment_output_verified: { status: "pass", artifactHash: hashSkillArtifact(card), artifactLength: card.length } },
+    });
+    const markdownHardBreaks = `结论如下：\r\n\r\n${card.replaceAll("\n", "  \r\n")}  \r\n\r\n下一步稍后再说。`;
+    expect(evaluateTurnCompliance(prompt, new Map([["SR-1", completed]]), { lastAssistantMessage: markdownHardBreaks }).compliant).toBe(true);
+    expect(evaluateTurnCompliance(prompt, new Map([["SR-1", completed]]), {
+      lastAssistantMessage: markdownHardBreaks.replace("中央与地方机关", "中央与基层机关"),
+    })).toMatchObject({ compliant: false, failureCode: "judgment_display_drift" });
   });
 
   it("F4 裸序号误读事故：把证据卡中的‘上一问’改成‘上一窝’必须阻断", () => {

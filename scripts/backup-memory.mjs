@@ -28,6 +28,7 @@ import {
   resolveCodexHome,
   resolveLegacyMemoryRoot,
 } from "./lib/workspace-paths.mjs";
+import { auditLiveSkillEntries, CLAUDE_SKILL_NAMES, formatViolations } from "./lib/claude-live-skills.mjs";
 
 const args = new Set(process.argv.slice(2));
 const dryRun = args.has("--dry-run");
@@ -71,7 +72,8 @@ const JOBS = [
     src: CLAUDE_SKILLS_ROOT,
     dest: "Claude现役Skills备份",
   },
-  // [claude] 2026-08-25：Claude 宿主守卫 handler 是生产件（本机已在 enforce 档运行），
+  // [claude] 2026-08-25 立、[gpt] 2026-08-26 订正：Claude 宿主守卫 handler 是生产件，
+  // 实际档位只认线上 handler 签名；仓库规范切档后、云本人安装前必须按漂移处理，不能预称已生效。
   // 却既不在 Git 也不在灾备链，丢了无从恢复。只白名单 fashuo-*.mjs——同目录下的
   // 其他 hook 与任何 settings 都不进档案，后者含权限与代理配置。
   {
@@ -120,6 +122,10 @@ const REQUIRED_ARCHIVE_ASSETS = [
   "教材/带背/_文本/法理学_带背_文本.txt",
   "教材/带背/_文本/法制史_带背_文本.txt",
   "教材/带背/_文本/刑法_带背_文本.txt",
+  "教材/带背/_文本/宪法学_带背_文本.txt", // [gpt] 2026-08-27：宪法·马峰 2027 版 OCR 纳入必需源。
+  // [gpt] 2026-08-28：精讲全文与作者框是检索源；原扫描 PDF 仍走私有原件备份。
+  "教材/宪法讲义_文本.txt",
+  "真题分析/_宪法讲义心得.md",
 ];
 
 function assertInsideArchive(target) {
@@ -277,6 +283,19 @@ for (const job of availableJobs) {
   const suffix = drift ? `｜规范版本一致：${drift.join("、")}` : "";
   console.log(`- ${job.label}: ${job.src} → ${job.dest}（${sourceCounts.get(job.label)} 个文件）${suffix}`);
 }
+
+// [claude] 2026-08-25：备份链原本只回答"九个现役入口在不在、空不空"，回答不了"它们还
+// 说得对不对"。2026-08-25 的两次事故（107s / 335s）恰恰是文件都在、内容却把执行者引向
+// 全盘快照；后来又出现 26 处双反斜杠续行让所有命令不可运行。这类语义漂移只有跑一遍审计
+// 才看得见，而 `npm test` 按设计不碰仓库外目录，所以必须挂在这条每天都会跑的链上。
+const liveSkillViolations = auditLiveSkillEntries({ root: CLAUDE_SKILLS_ROOT });
+if (liveSkillViolations.length) {
+  console.error(`\n现役 Claude 入口路由契约不合规（${liveSkillViolations.length} 项），拒绝继续：`);
+  console.error(formatViolations(liveSkillViolations));
+  console.error("\n补救：修复现役入口后重跑；单独复核用 npm run skill:contract:live。");
+  process.exit(1);
+}
+console.log(`✓ 现役 Claude 入口路由契约：通过（${CLAUDE_SKILL_NAMES.length} 个入口）`);
 
 if (dryRun) {
   console.log(`✓ dry-run 通过：全部 ${JOBS.length} 个必需备份源均存在且非空，${REQUIRED_ARCHIVE_ASSETS.length} 个必需档案均可用；未写文件、未执行 Git。`);

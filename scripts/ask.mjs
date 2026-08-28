@@ -17,6 +17,7 @@ import {
   buildPreflightChecklist,
   describeVerdict,
   formatPreflightEvidenceRef,
+  mergeMaterialHits,
 } from "./lib/ask-preflight.mjs";
 import { AskEvidenceCardError, renderAskEvidenceCard, validateAskEvidenceCard } from "./lib/ask-evidence-card.mjs";
 
@@ -278,13 +279,20 @@ function preflight(options) {
     );
     process.exit(2);
   }
-  const hits = parseMaterialEvidenceRef(materials.evidenceRef);
+  // [claude] 2026-08-27：改读本 Run 的**全部** materials_checked 回执。
+  // run.steps 只留最后一条（skill-run.mjs:420），只读它会逼着执行者为补一两组争点
+  // 重跑全量检索，否则回执被覆盖成小数、判权掉档。run.events 保着全部回执，取并集。
+  const receipts = (run.events ?? [])
+    .filter((event) => event.event === "step" && event.step === "materials_checked" && event.status === "pass")
+    .map((event) => parseMaterialEvidenceRef(event.evidenceRef));
+  const hits = mergeMaterialHits(receipts) ?? parseMaterialEvidenceRef(materials.evidenceRef);
   let built;
   try {
     built = buildPreflightChecklist({
       category: options.category,
       hits,
       queries: hits.queries,
+      receipts: receipts.length || 1,
       updated: options.updated === true ? null : options.updated,
     });
     assertPreflightSignable(built, { discussionOnly: options["discussion-only"] === true });

@@ -132,7 +132,9 @@ describe("learning flow monitor", () => {
     expect(report.metrics.skillExecution.counts.runs).toBe(2);
   });
 
-  it("带背阶段错配和记完未抽查分别进入错误与警告", () => {
+  // [claude] 2026-08-25：daibei_post_progress_probe_missing 已随"当日抽查不建 Run"整条删除；
+  // 断言反转成"即使旧字段还在载荷里，也不再生成该 issue"，防它日后被悄悄加回来。
+  it("带背阶段错配进错误；已废弃的记完未抽查不再产出 issue", () => {
     const report = evaluateLearningFlow({
       ...baseFacts,
       skillExecution: {
@@ -155,10 +157,9 @@ describe("learning flow monitor", () => {
       },
     });
     expect(report.status).toBe("degraded");
-    expect(report.issues.map((issue) => issue.code)).toEqual(expect.arrayContaining([
-      "daibei_phase_kind_mismatch",
-      "daibei_post_progress_probe_missing",
-    ]));
+    const codes = report.issues.map((issue) => issue.code);
+    expect(codes).toEqual(expect.arrayContaining(["daibei_phase_kind_mismatch"]));
+    expect(codes).not.toContain("daibei_post_progress_probe_missing");
   });
 
   it("宿主守卫能区分自动保护、最终不合规与漏审", () => {

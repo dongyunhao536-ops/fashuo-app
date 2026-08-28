@@ -1,9 +1,13 @@
 // node --env-file=.env.local scripts/smoke-llm.mjs
 // 七牛云 Claude 连通 + 缓存烟测。会真实花费（~¥0.5）。需手动运行。
 // 验证：①连接/模型/已去掉 output_config ②prompt caching 透传 ③记账写入 api_usage
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+// [claude] 2026-08-26：缓存前缀原来硬编码 `D:/fashuo/真题分析/_刑法做题心得.md`，
+// 2026-08-23 迁 macOS 后必 ENOENT。改走全仓统一的档案根解析。
+import { resolveArchiveRoot } from "./lib/workspace-paths.mjs";
 
 const MODEL = process.env.MODEL_ASK ?? "anthropic/claude-4.7-opus";
 const client = new Anthropic({
@@ -19,6 +23,19 @@ const sb = createClient(
 const pricing = JSON.parse(readFileSync("config/pricing.json", "utf8"));
 const RMB = pricing._汇率 ?? 7.2;
 const P = pricing.opus;
+
+// [claude] 2026-08-26：测试 B 的缓存前缀取自档案库。这里先验一次路径再开花钱的调用——
+// 否则测试 A 已经付过钱，才在下面撞一个看不出根因的 ENOENT。
+const XINDE_PATH = join(resolveArchiveRoot(), "真题分析", "_刑法做题心得.md");
+if (!existsSync(XINDE_PATH)) {
+  console.error(
+    `缓存测试语料不存在：${XINDE_PATH}\n`
+    + `  - 命令要带 --env-file=.env.local 才能读到 FASHUO_ARCHIVE_ROOT；\n`
+    + `  - 或在 .env.local 设 FASHUO_ARCHIVE_ROOT=<档案仓绝对路径>。\n`
+    + `  （已提前退出，未产生任何 API 费用。）`,
+  );
+  process.exit(2);
+}
 const usd = (u) =>
   (u.in * P.input + u.cw * P.cache_write + u.cr * P.cache_read + u.out * P.output) / 1e6;
 
@@ -72,7 +89,7 @@ try {
 
 // ── 测试 B：缓存透传（同一 ≥4096 token 前缀连发两次）──
 console.log("\n【B】缓存透传测试（同前缀连发两次）...");
-const md = readFileSync("D:/fashuo/真题分析/_刑法做题心得.md", "utf8").slice(0, 6000);
+const md = readFileSync(XINDE_PATH, "utf8").slice(0, 6000);
 const prefix = `以下是刑法做题心得（仅作缓存测试上下文）：\n${md}`;
 
 async function createWithRetry(params, max = 6) {

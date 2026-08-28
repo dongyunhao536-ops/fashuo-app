@@ -1,7 +1,7 @@
 // [gpt] 2026-08-24：锁定 Claude 记忆缺失/空目录不得再被 dry-run 假绿放行。
 // [gpt] 2026-08-25：Claude 现役 Skills 是第七个必需源，不得只留在单机用户目录。
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,11 +12,48 @@ const REQUIRED_ARCHIVE_ASSETS = [
   "教材/带背/_文本/法理学_带背_文本.txt",
   "教材/带背/_文本/法制史_带背_文本.txt",
   "教材/带背/_文本/刑法_带背_文本.txt",
+  "教材/带背/_文本/宪法学_带背_文本.txt", // [gpt] 2026-08-27：锁住新增宪法 OCR 必需源。
+  // [gpt] 2026-08-28：真实备份脚本的必需精讲资产也由同一 fixture 覆盖缺失闸。
+  "教材/宪法讲义_文本.txt",
+  "真题分析/_宪法讲义心得.md",
 ];
 
 function writeFixture(file, value = "fixture") {
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, value, "utf8");
+}
+
+// [claude] 2026-08-25：备份链现在除了"九个入口在不在"，还会跑路由契约审计（语义漂移只有
+// 跑一遍才看得见）。所以 fixture 必须是**合规**的九个入口，否则测的是"闸会不会误伤"而不是备份逻辑。
+const IDENT_FIXTURE = 'FASHUO_SESSION_ID="$CLAUDE_CODE_SESSION_ID" FASHUO_PRODUCER_HOST=claude \\\n  node --env-file=.env.local scripts/';
+const ROUTED_FIXTURE = {
+  "daibei-pc": { light: "coach.mjs log --auto-run daibei-progress --subject 法制史", heavy: "skill-context.mjs daibei 法制史" },
+  "coach-pc": { light: "skill-run.mjs start --skill cuoti-fupan --kind intake --target X", heavy: "skill-context.mjs coach" },
+  "cuoti-fupan": { light: "skill-run.mjs start --skill cuoti-fupan --kind intake --target X", heavy: "skill-context.mjs cuoti [聚焦科目]" },
+};
+// [gpt] 2026-08-26：备份链的现役入口 fixture 同样必须满足刑法分则范围契约。
+const XINGFA_SCOPE_FIXTURE = "刑法分则＝170 罪全量最低覆盖 ＋ 60 罪重点深带；60 罪盘裁深度，不裁范围。";
+const LIVE_SKILL_NAMES = ["ask-pc", "coach-pc", "cuoti-fupan", "daibei-pc", "lunshu-pc", "pinggu-pc", "ribao-pc", "weekly-pc", "yingyu-pc"];
+
+function writeCompliantSkill(rootDir, name) {
+  const routed = ROUTED_FIXTURE[name];
+  let body = `# ${name}\n\n`;
+  if (routed) {
+    body += "## 〇、先判断路径\n\n";
+    body += "```bash\n" + IDENT_FIXTURE + routed.light + "\n```\n\n";
+    if (name === "coach-pc") {
+      body += "```bash\n" + IDENT_FIXTURE + "skill-run.mjs start --skill coach-pc --kind conversation --json\n```\n\n";
+      body += "```bash\n" + IDENT_FIXTURE + 'skill-run.mjs end --run <SR-ID> --phase conversation --done response_verified --ref "x"\n```\n\n';
+    }
+    body += "兜底：\n\n```bash\n" + IDENT_FIXTURE + routed.heavy + "\n```\n\n**⚠️ 这是兜底，不是默认。**\n\n";
+  }
+  if (name === "daibei-pc") body += `${XINGFA_SCOPE_FIXTURE}\n\n`;
+  body += "## 一、云是谁\n\n正文。\n";
+  writeFixture(join(rootDir, name, "SKILL.md"), body);
+}
+
+function writeCompliantSkillTree(rootDir) {
+  for (const name of LIVE_SKILL_NAMES) writeCompliantSkill(rootDir, name);
 }
 
 describe("backup-memory dry-run", () => {
@@ -48,7 +85,7 @@ describe("backup-memory dry-run", () => {
     writeFixture(join(appRoot, "AGENTS.md"));
     writeFixture(join(codexHome, "memories", "fixture.md"));
     writeFixture(join(appRoot, ".local", "ledger.md"));
-    writeFixture(join(claudeSkillsRoot, "ask-pc", "SKILL.md"));
+    writeCompliantSkillTree(claudeSkillsRoot);
     mkdirSync(join(archiveRoot, ".git"), { recursive: true });
     for (const asset of REQUIRED_ARCHIVE_ASSETS) writeFixture(join(archiveRoot, asset));
   });
@@ -106,6 +143,49 @@ describe("backup-memory dry-run", () => {
     expect(result.stdout).toContain("（2 个文件）");
     expect(result.stdout).toContain("Claude 现役 Skills");
     expect(result.stdout).toContain("全部 8 个必需备份源均存在且非空");
+  });
+
+  // [gpt] 2026-08-28：漏带任一教材/讲义派生物时不能给迁移备份报绿。
+  it.each(REQUIRED_ARCHIVE_ASSETS)("缺少必需档案 %s 时拒绝备份", (asset) => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    rmSync(join(archiveRoot, asset));
+    const result = run();
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(asset);
+    expect(`${result.stdout}${result.stderr}`).not.toContain("dry-run 通过");
+  });
+
+  // [claude] 2026-08-25：文件都在 ≠ 内容还说得对。08-25 两次事故（107s / 335s）就是
+  // 九个文件齐全、内容却把执行者引向全盘快照；随后又出现 26 处双反斜杠续行让命令不可运行。
+  // 这条证明语义闸真的接在备份链上，而不是 fixture 恰好合规才绿。
+  it("现役入口语义漂移时备份链拒绝继续", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    expect(run().status).toBe(0);
+    // 抽掉 daibei 的路径判断——正是两次事故的形状
+    writeFixture(join(claudeSkillsRoot, "daibei-pc", "SKILL.md"), "# daibei-pc\n\n## 一、云是谁\n\n正文。\n");
+    const drifted = run();
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toContain("routing_section_missing");
+    expect(`${drifted.stdout}${drifted.stderr}`).not.toContain("dry-run 通过");
+  });
+
+  it("daibei 现役入口丢失刑法分则统一范围时备份链拒绝继续", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    const file = join(claudeSkillsRoot, "daibei-pc", "SKILL.md");
+    const good = readFileSync(file, "utf8");
+    writeFixture(file, good.replace(XINGFA_SCOPE_FIXTURE, "刑法分则重点复习。"));
+    const drifted = run();
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toContain("xingfa_scope_contract_missing");
+  });
+
+  it("现役入口出现非法双反斜杠续行时备份链拒绝继续", () => {
+    writeFixture(join(claudeMemoryRoot, "MEMORY.md"));
+    const good = readFileSync(join(claudeSkillsRoot, "daibei-pc", "SKILL.md"), "utf8");
+    writeFixture(join(claudeSkillsRoot, "daibei-pc", "SKILL.md"), good.replace("claude \\\n", "claude \\\\\n"));
+    const drifted = run();
+    expect(drifted.status).toBe(1);
+    expect(drifted.stderr).toContain("invalid_shell_continuation");
   });
 
   // [claude] 2026-08-25：守卫 handler 是生产件却不在 Git 也不在灾备；补第八源。

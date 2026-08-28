@@ -176,7 +176,14 @@ export function assertScheduleLink(markdown, scheduleId, { kind, targetId, refer
   if (item.status === "completed") throw new Error(`排期已完成：${id}`);
 
   const target = normalizeLinkTarget(kind, targetId);
-  const expectedType = kind === "recite" ? /带背/ : kind === "topic" ? /错题/ : /知识点/;
+  // [gpt] 2026-08-28：稳定 KP-ID 不只服务错题/答疑；daibei-pc 的 recall KP 排期仍应保留“带背复检”类型。
+  const expectedType = kind === "recite"
+    ? /带背/
+    : kind === "topic"
+      ? /错题/
+      : route === "daibei-pc" && dimension === "recall"
+        ? /(?:知识点|带背)/
+        : /知识点/;
   const kindLabel = kind === "recite" ? "带背" : kind === "topic" ? "错题" : "知识点";
   if (!expectedType.test(item.type)) throw new Error(`排期 ${id} 类型“${item.type}”与 ${kindLabel}联动不匹配`);
 

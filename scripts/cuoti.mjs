@@ -451,13 +451,17 @@ export function clip(s, anchor) {
 }
 
 export function grep(rows, keyword, refine) {
+  // [gpt] 2026-08-28：空白分隔词按同一原文行 AND 匹配，避免“2018 宪法修正案”零命中后反复换写法。
+  // 单词仍为字面子串；不跨行拼证据、不解释正则、不把 refine 变成过滤条件。
+  const terms = String(keyword ?? "").trim().split(/\s+/u).filter(Boolean);
+  if (!terms.length) throw new Error("material 需要非空关键词");
   const blocks = [];
   let totalHits = 0;
   for (const row of rows) {
     const lines = String(row.content).split("\n");
     const base = row.start_line ?? 1;
     const hits = [];
-    lines.forEach((ln, i) => { if (ln.includes(keyword) && !/\.{6,}/.test(ln)) hits.push(i); });
+    lines.forEach((ln, i) => { if (terms.every((term) => ln.includes(term)) && !/\.{6,}/.test(ln)) hits.push(i); });
     totalHits += hits.length;
     const spans = [];
     for (const i of hits) {
@@ -472,7 +476,9 @@ export function grep(rows, keyword, refine) {
       const text = [];
       for (let i = s.from; i <= s.to; i++) {
         if (refine && lines[i].includes(refine)) refineHit = true;
-        const anchor = hitSet.has(i) ? keyword : (refine && lines[i].includes(refine) ? refine : undefined);
+        const anchor = hitSet.has(i)
+          ? (lines[i].includes(keyword) ? keyword : terms[0])
+          : (refine && lines[i].includes(refine) ? refine : undefined);
         text.push(`${base + i}${hitSet.has(i) ? "►" : " "} ${clip(lines[i], anchor)}`);
       }
       blocks.push({
@@ -515,6 +521,8 @@ export function buildMaterialOutput(corpus, keyword, refine) {
   const output = [
     `检索「${keyword}${refine ? " + " + refine : ""}」的出题弹药（►=命中行，自动附最近页码/行号锚点）`,
   ];
+  // [gpt] 2026-08-28：显示与 materials_checked 计数共用 grep，明确多词匹配语义。
+  if (String(keyword).trim().split(/\s+/u).length > 1) output.push("（空白分隔的关键词须在同一行全部命中；按字面检索，不跨行拼接）");
   if (refine) output.push(`（特征词「${refine}」同时命中的条目已置顶）`);
   // 配额制（2026-07-22 修）：原先四个 kind 共享一个 14000 总预算、超了直接 return，
   // 宽词下 xinde 的合并巨块一段就吃光，教材/易混/真题整段不输出 → 预检"教材锚定"写成"无"＝假阴性。
@@ -1142,6 +1150,11 @@ async function review(rest) {
     const failurePatternCode = validateFailurePattern(takeNamed(rest, "--pattern"));
     const diagnosisRaw = takeNamed(rest, "--diagnosis");
     if (diagnosisRaw && !failurePatternCode) throw new Error("--diagnosis 必须和 --pattern 一起使用");
+    // [gpt] 2026-08-26：pass 是无新增病根的单次写回快路径；终态病根会额外触发 classify/sync，
+    // 且把“本轮未犯错”误写成用户排除了某病根。
+    if (result === "pass" && (failurePatternCode || diagnosisRaw)) {
+      throw new Error("PASS_DIAGNOSIS_NOT_APPLICABLE｜本题通过时不要传 --pattern/--diagnosis；省略两项即以 pending 单次 review 写回，不再 classify");
+    }
     if (result === "void" && failurePatternCode) throw new Error("作废题只归责教练，不能记录用户 failure pattern");
     // [gpt] 2026-08-10：CLI 先做完整语义预检，坏题干/缺变式不得先进入 outbox。
     const reviewEvidence = buildReviewEvidence({
@@ -1280,6 +1293,27 @@ async function review(rest) {
       console.error(`⚠️ 排期结案失败：${scheduleId}：${error instanceof Error ? error.message : String(error)}（复检证据已落库；请先核对原排期目标。单主题修正关联后重跑 review --schedule；整组须逐题留证后用 schedule.mjs done ${scheduleId} --topics <完整T#集合> --evidence-refs <已落库证据引用> --result "..."）`);
       process.exitCode = 1;
     }
+  }
+  // [claude] 2026-08-26：落库后直接报本事件的销账资格。
+  //
+  // 起因：2026-08-26 周三轻滚里我按开场快照规划「补第二轴就能当场销账」，写完两条 pass
+  // 去跑 absorb 才被拒（1/2 通过、1/2 轴），追原因花了 5 次工具往返；真正的原因是同日
+  // 另有一条 fail 落在两条 pass 中间，把「最近一次失败之后」的计数清零了。门槛数据在
+  // review 落库那一刻就已经可算，却要等 absorb 失败才暴露——这一段往返完全是白烧的。
+  // 只读一次证据表，不改任何写入路径与门槛本身。
+  if (op.studyErrorId && process.exitCode !== 1) {
+    try {
+      const { data, error } = await db.from("study_error").select("id,log_date").eq("id", op.studyErrorId).maybeSingle();
+      if (!error && data) {
+        const proof = (await loadEventAbsorptionProofs(db, [data], today)).get(Number(data.id));
+        if (proof?.eligible) {
+          console.log(`🎯 #${op.studyErrorId} 已达销账门槛（${proof.passCount} 条通过／轴 ${proof.axes.join("+")}／冷检 ${proof.coldPassCount} 次）：node --env-file=.env.local scripts/cuoti.mjs absorb ${op.studyErrorId}${runId ? ` --run ${runId}` : ""}`);
+        } else if (proof) {
+          console.log(`📋 #${op.studyErrorId} 暂不可销账：${proof.blockers.join("；")}`);
+          if (proof.latestFailure?.date) console.log(`   计数起点＝最近一次失败 ${proof.latestFailure.date}（${proof.latestFailure.result}）；该日之前的通过不计入。`);
+        }
+      }
+    } catch { /* 资格播报是附加信息，读失败绝不影响已落库的复检证据 */ }
   }
   if (runId && process.exitCode !== 1) {
     recordBusinessWriteback({

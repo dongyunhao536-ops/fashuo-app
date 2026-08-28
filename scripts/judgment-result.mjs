@@ -22,7 +22,7 @@ function flags(args) {
   return output;
 }
 
-export function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   const [command = "help", ...rest] = argv;
   if (command !== "check") {
     console.log("用法：node scripts/judgment-result.mjs check --file <判题结果.json> [--run SR-...] [--json]");
@@ -31,6 +31,17 @@ export function main(argv = process.argv.slice(2)) {
   const options = flags(rest);
   if (!options.file) throw new Error("check 必须提供 --file <判题结果.json>");
   const startedAt = Date.now();
+  // [claude] 2026-08-26：延迟审答案键的 Run，判分前必须先补跑一次带答案键的 Gate。
+  //
+  // 没有这道闸，`--defer-answer` 就成了「永远不审答案键」的免检通道——间接污染
+  // （题干只点正解集或其补集）会一路无人发现。补审在用户作答之后跑，不再泄题。
+  if (options.run) {
+    const { readSkillRunEvents, reconstructSkillRuns } = await import("./lib/skill-run.mjs");
+    const run = reconstructSkillRuns(readSkillRunEvents().events).get(options.run);
+    if (run?.steps?.question_integrity_pass?.evidenceRef === "answer_deferred") {
+      throw new Error(`${options.run} 的题面 Gate 仍处于 --defer-answer 延迟态；判分前先用同一份题干补跑一次带 --answer/--answer-file 的 question-integrity check --run ${options.run}（不要再加 --checkpoint），PASS 后再判分；若补审 BLOCK，按题面污染走 void --invalid-prompt，责任归教练`);
+    }
+  }
   const parsed = JSON.parse(readFileSync(options.file, "utf8"));
   const normalized = validateJudgmentResult(parsed);
   const card = renderJudgmentCard(normalized);
@@ -56,7 +67,7 @@ export function main(argv = process.argv.slice(2)) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
-    process.exitCode = main();
+    process.exitCode = await main();
   } catch (error) {
     if (error instanceof JudgmentResultValidationError) {
       console.error(`JUDGMENT_RESULT_BLOCK｜${error.issues.length} 项`);

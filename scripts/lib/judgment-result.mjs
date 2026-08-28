@@ -4,6 +4,29 @@ import { DIAGNOSIS_STATUSES, REVIEW_RESULTS } from "./error-taxonomy.mjs";
 import { findBareStructuredReferences } from "./structured-reference-lint.mjs";
 
 const MAX_TEXT = 4000;
+
+// [claude] 2026-08-26：Gate 原来对陌生字段一律沉默，旧扁平样例（diagnosisStatus +
+// 字符串 diagnosis）能拿到 ok:true，病根被归一成 pending 后静默丢失。以下三张表把
+// 「认识哪些键」变成显式契约，未知键与错误类型一律 fail-closed。
+export const JUDGMENT_RESULT_SCHEMA_VERSION = 1;
+const SUPPORTED_SCHEMA_VERSIONS = [1];
+const TOP_LEVEL_KEYS = [
+  "schemaVersion", "targetRef", "result", "originalAnswer",
+  "verdict", "rule", "application", "evidence", "confidence", "diagnosis",
+];
+const DIAGNOSIS_KEYS = ["status", "claim", "candidates", "rejectedCandidates", "recognitionRef"];
+const EVIDENCE_KEYS = ["source", "anchor", "excerpt"];
+
+// 旧字段 → 迁移提示。只在顶层生效：这些键全部来自 2026-08-13 之前的扁平写法。
+const DEPRECATED_TOP_LEVEL_KEYS = {
+  diagnosisStatus: "已废弃，请改用 diagnosis.status",
+  evidenceAnchors: "已废弃，请改用 evidence[]，每项给 source/anchor/excerpt",
+  topicId: "已废弃，主题与事件统一写进 targetRef，如 T#95/E#107",
+  eventId: "已废弃，主题与事件统一写进 targetRef，如 T#95/E#107",
+  userAnswer: "已废弃，请改用 originalAnswer",
+  correctAnswer: "已废弃，正确结论写进 rule 与 verdict",
+};
+
 const DEFINITIVE_PENDING_PATTERNS = [
   /(?:你的|本题的|这次的)?(?:病根|根因|错误原因|栽点)(?:就)?是/u,
   /(?:这|它)(?:就)?说明你/u,
@@ -28,11 +51,23 @@ function requiredText(value, field, issues, label, { max = MAX_TEXT } = {}) {
   return normalized;
 }
 
+/** 未知键一律阻断；命中废弃表时改报可执行的迁移提示。 */
+function assertKnownKeys(value, allowed, path, issues, deprecated = null) {
+  for (const key of Object.keys(value)) {
+    if (allowed.includes(key)) continue;
+    const field = path === "$" ? key : `${path}.${key}`;
+    const hint = deprecated?.[key];
+    if (hint) issues.push(issue("deprecated_key", field, `${key} ${hint}`));
+    else issues.push(issue("unknown_key", field, `未知字段 ${key}；${path === "$" ? "判题结果" : path} 只接受：${allowed.join("/")}`));
+  }
+}
+
 function normalizeEvidence(value, index, issues) {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     issues.push(issue("evidence_type", `evidence[${index}]`, "证据必须是对象"));
     return null;
   }
+  assertKnownKeys(value, EVIDENCE_KEYS, `evidence[${index}]`, issues);
   const source = requiredText(value.source, `evidence[${index}].source`, issues, "证据来源", { max: 240 });
   const anchor = requiredText(value.anchor, `evidence[${index}].anchor`, issues, "证据锚点", { max: 500 });
   const excerpt = requiredText(value.excerpt, `evidence[${index}].excerpt`, issues, "必要原文或内容摘要", { max: 1200 });
@@ -47,8 +82,17 @@ function normalizeEvidence(value, index, issues) {
   return { source, anchor, excerpt };
 }
 
-function normalizeDiagnosis(value, result, issues) {
-  const diagnosis = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+function normalizeDiagnosis(value, result, issues, present) {
+  // [claude] 2026-08-26：原来这里把任何非对象 diagnosis（含旧版字符串写法）
+  // 悄悄换成 {} 再落回 pending，是本次 fail-open 的第二层根因。类型错误必须显式报。
+  const isObject = Boolean(value) && typeof value === "object" && !Array.isArray(value);
+  if (!present) {
+    issues.push(issue("diagnosis_missing", "diagnosis", `缺少 diagnosis；即使本题通过也要显式写 { "status": "pending", "candidates": [] }`));
+  } else if (!isObject) {
+    issues.push(issue("diagnosis_type_invalid", "diagnosis", `diagnosis 必须是对象；旧版把病根写成字符串的格式已废弃，请改用 { status, claim, candidates, rejectedCandidates, recognitionRef }`));
+  }
+  const diagnosis = isObject ? value : {};
+  if (isObject) assertKnownKeys(diagnosis, DIAGNOSIS_KEYS, "diagnosis", issues);
   const status = text(diagnosis.status) || "pending";
   if (!DIAGNOSIS_STATUSES.includes(status)) {
     issues.push(issue("diagnosis_status_invalid", "diagnosis.status", `病根状态必须是：${DIAGNOSIS_STATUSES.join("/")}`));
@@ -61,6 +105,17 @@ function normalizeDiagnosis(value, result, issues) {
     ? diagnosis.rejectedCandidates.map(text).filter(Boolean)
     : [];
   const recognitionRef = text(diagnosis.recognitionRef) || null;
+
+  // [gpt] 2026-08-26：通过题没有本轮错误可供认领。固定为空 pending，避免把“未复现旧病根”
+  // 误写成 rejected/confirmed 后再多跑一次 classify 与远端同步。
+  if (result === "pass") {
+    if (status !== "pending") {
+      issues.push(issue("pass_diagnosis_terminal_forbidden", "diagnosis.status", "本题通过时不产生新的病根终态；固定使用 pending，并直接 review，禁止 classify"));
+    }
+    if (claim || candidates.length || rejectedCandidates.length || recognitionRef) {
+      issues.push(issue("pass_diagnosis_payload_forbidden", "diagnosis", "本题通过时 diagnosis 只能是空 pending：claim=null、candidates=[]、rejectedCandidates=[]、recognitionRef=null"));
+    }
+  }
 
   if (new Set(candidates).size !== candidates.length) {
     issues.push(issue("diagnosis_candidates_duplicate", "diagnosis.candidates", "病根候选必须互斥且不得重复"));
@@ -132,6 +187,13 @@ export function validateJudgmentResult(input) {
   if (!input || typeof input !== "object" || Array.isArray(input)) {
     throw new JudgmentResultValidationError([issue("result_type", "$", "判题结果必须是对象")]);
   }
+  assertKnownKeys(input, TOP_LEVEL_KEYS, "$", issues, DEPRECATED_TOP_LEVEL_KEYS);
+  const schemaVersion = input.schemaVersion;
+  if (schemaVersion === undefined || schemaVersion === null || schemaVersion === "") {
+    issues.push(issue("schema_version_missing", "schemaVersion", `缺少 schemaVersion；当前受支持版本：${SUPPORTED_SCHEMA_VERSIONS.join("/")}。无版本的历史 artifact 一律不得复用`));
+  } else if (!SUPPORTED_SCHEMA_VERSIONS.includes(schemaVersion)) {
+    issues.push(issue("schema_version_unsupported", "schemaVersion", `不支持的 schemaVersion「${String(schemaVersion)}」；当前受支持：${SUPPORTED_SCHEMA_VERSIONS.join("/")}（必须是数字，不接受字符串）`));
+  }
   const result = text(input.result);
   if (!REVIEW_RESULTS.includes(result)) {
     issues.push(issue("result_invalid", "result", `判题结果必须是：${REVIEW_RESULTS.join("/")}`));
@@ -145,10 +207,13 @@ export function validateJudgmentResult(input) {
   if (!['high', 'medium', 'low'].includes(confidence)) {
     issues.push(issue("confidence_invalid", "confidence", "信心度必须是 high/medium/low"));
   }
+  if (input.evidence !== undefined && !Array.isArray(input.evidence)) {
+    issues.push(issue("evidence_type_invalid", "evidence", "evidence 必须是数组；单条证据也要写成只含一个对象的数组"));
+  }
   const rawEvidence = Array.isArray(input.evidence) ? input.evidence : [];
   if (!rawEvidence.length) issues.push(issue("evidence_missing", "evidence", "至少需要一条可核对证据"));
   const evidence = rawEvidence.map((item, index) => normalizeEvidence(item, index, issues)).filter(Boolean);
-  const diagnosis = normalizeDiagnosis(input.diagnosis, result, issues);
+  const diagnosis = normalizeDiagnosis(input.diagnosis, result, issues, Object.hasOwn(input, "diagnosis"));
   if (!/^T#\d+(?:\/E#\d+)?$/u.test(targetRef)) {
     issues.push(issue("target_ref_invalid", "targetRef", "错题复检判题引用只接受 T#主题或 T#主题/E#事件，禁止模糊文本"));
   }
@@ -177,7 +242,7 @@ export function validateJudgmentResult(input) {
     }
   }
   if (issues.length) throw new JudgmentResultValidationError(issues);
-  return { schemaVersion: 1, targetRef, result, originalAnswer, verdict, rule, application, evidence, confidence, diagnosis };
+  return { schemaVersion: JUDGMENT_RESULT_SCHEMA_VERSION, targetRef, result, originalAnswer, verdict, rule, application, evidence, confidence, diagnosis };
 }
 
 /** 从已校验结构确定性渲染用户可见证据卡，避免模型另写一份不受检的答案。 */
@@ -203,9 +268,41 @@ export function renderJudgmentCard(value) {
   } else if (item.diagnosis.candidates.length) {
     lines.push(`【病根·待认领】以下仅为候选：${item.diagnosis.candidates.map((candidate, index) => `${index + 1}) ${candidate}`).join("；")}`);
   } else {
-    lines.push("【病根·待认领】本题通过，本轮不作确定性病根推断。");
+    lines.push("【病根·不新增】本题通过，本轮没有新的错误可供认领。");
   }
   return lines.join("\n");
+}
+
+/**
+ * [claude] 2026-08-26：判题 artifact 的唯一机器事实源。
+ *
+ * 装它的原因：schema 此前只存在于本文件的校验逻辑里，任何 skill 文档都没写。
+ * 执行者要么翻源码（快路径明令禁止），要么照抄 .local 里的旧样例（正好是会被
+ * 静默降级的那批）。模板从校验器同源导出，开场上下文直接带上，正常会话零额外调用。
+ */
+export function judgmentResultTemplate() {
+  return {
+    schemaVersion: JUDGMENT_RESULT_SCHEMA_VERSION,
+    targetRef: "T#<主题号>[/E#<事件号>]",
+    result: `${REVIEW_RESULTS.join("|")}`,
+    originalAnswer: "<逐字保留用户原答>",
+    verdict: "<判定结论>",
+    rule: "<判题规则>",
+    application: "<涵摄过程>",
+    evidence: [{
+      source: "<来源>",
+      anchor: "<教材/讲义：页码+行号，页码未知须写明；法条：条号；真题：年份+题号>",
+      excerpt: "<必要原文或内容摘要>",
+    }],
+    confidence: "high|medium|low",
+    diagnosis: {
+      status: `${DIAGNOSIS_STATUSES.join("|")}`,
+      claim: null,
+      candidates: [],
+      rejectedCandidates: [],
+      recognitionRef: null,
+    },
+  };
 }
 
 export function judgmentResultContext(runId = null) {
@@ -214,5 +311,8 @@ export function judgmentResultContext(runId = null) {
     command: `node scripts/judgment-result.mjs check --file <判题结果.json>${runFlag}`,
     passToken: "JUDGMENT_RESULT_PASS",
     rule: "先把原答、规则、涵摄、证据锚点和病根状态写入结构化结果，再由脚本渲染证据卡；不得绕过脚本另写判词",
+    schemaVersion: JUDGMENT_RESULT_SCHEMA_VERSION,
+    template: judgmentResultTemplate(),
+    templateRule: "未知字段、缺 schemaVersion 与错误类型的 diagnosis 一律阻断；pass 固定 diagnosis=pending 且全部附加字段为空，直接 review、禁止 classify；partial/fail 的 pending 才给 2–4 个候选并等待认领。本模板与校验器同源，不要照抄 .local 里的历史文件",
   };
 }

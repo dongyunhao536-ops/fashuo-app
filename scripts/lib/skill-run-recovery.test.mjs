@@ -6,7 +6,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { formatRecovery, recoveryHint, recoveryHints, repeatedMaterialHint } from "./skill-run-recovery.mjs";
+import { formatRecovery, materialQueryCount, recoveryHint, recoveryHints, repeatedMaterialHint } from "./skill-run-recovery.mjs";
 import {
   SKILL_AUTOMATIC_STEPS,
   SKILL_MANUAL_STEPS,
@@ -40,6 +40,14 @@ describe("阻断补救指令", () => {
     expect(hint).toContain("--env-file=.env.local");
     expect(hint).toContain("material-batch");
     expect(hint).toContain("别拆成多次 material");
+  });
+
+  it("daibei 有现役母版时优先提示 template-entry 单调用快路径", () => {
+    const hint = recoveryHint("daibei-pc", "materials_checked", { runId: "SR-DB" });
+    expect(hint).toContain("--template-entry");
+    expect(hint).toContain("同一次调用");
+    expect(hint).toContain("material-batch");
+    expect(hint).toContain("--run SR-DB");
   });
 
   it("题面 Gate 指令说明 PASS 草稿与 hash 的绑定关系", () => {
@@ -178,9 +186,24 @@ describe("阻断原因聚合", () => {
 
 // [claude] 2026-08-24：2026-08-24 实测一个 Run 连打 7 次单查询检索，
 // 本该一次 material-batch；脚本只要 127ms，代价全在往返上。
+// [claude] 2026-08-26：本组原来全部用旧格式 `queries:N` 造样本，所以 2026-08-25
+// 回执改成 `q:N|kaoshi:N|…` 之后测试照常全绿、提醒却已实质失效。主样本改用现行格式，
+// 旧格式单独留一条兼容用例。
 describe("重复单查询提醒", () => {
-  const single = { event: "step", step: "materials_checked", evidenceRef: "queries:1" };
-  const batch = { event: "step", step: "materials_checked", evidenceRef: "queries:5" };
+  const single = { event: "step", step: "materials_checked", evidenceRef: "q:1|kaoshi:2|jiangyi:1|xinde:0|yixiao:0|zhenti:1" };
+  const batch = { event: "step", step: "materials_checked", evidenceRef: "q:5|kaoshi:38|jiangyi:51|xinde:0|yixiao:0|zhenti:22" };
+
+  it("认现行回执格式：q:N 与旧的 queries:N 都要数得出来", () => {
+    expect(materialQueryCount("q:1|kaoshi:2|jiangyi:1|xinde:0|yixiao:0|zhenti:1")).toBe(1);
+    expect(materialQueryCount("queries:1")).toBe(1);
+    expect(materialQueryCount("q:3|kaoshi:38")).toBe(3);
+    expect(materialQueryCount("kaoshi:2|jiangyi:1")).toBeNull();
+  });
+
+  it("旧格式仍然触发，兼容不掉链", () => {
+    const legacy = { event: "step", step: "materials_checked", evidenceRef: "queries:1" };
+    expect(repeatedMaterialHint([legacy, legacy, legacy])).toContain("material-batch");
+  });
 
   it("前两次不打扰——两个争点分开查是合理的", () => {
     expect(repeatedMaterialHint([])).toBeNull();
@@ -201,7 +224,7 @@ describe("重复单查询提醒", () => {
   });
 
   it("只数本 Run 的材料步骤，别的步骤不参与计数", () => {
-    const noise = { event: "step", step: "question_integrity_pass", evidenceRef: "queries:1" };
+    const noise = { event: "step", step: "question_integrity_pass", evidenceRef: "q:1|kaoshi:0" };
     expect(repeatedMaterialHint([noise, noise, noise, single])).toBeNull();
   });
 });

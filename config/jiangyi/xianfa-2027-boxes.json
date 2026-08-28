@@ -1,0 +1,1783 @@
+{
+  "_comment": "[gpt] 2026-08-28：宪法专属边界清单。全书 OCR 框词普查 + 原 PDF 栏目边界核对；未作全文逐字校对。保留跨页与嵌套提示；PDF87页下方老马识途标题漏识别，以首正文行锚定。",
+  "subject": "宪法",
+  "book": "马峰《法律硕士考试精讲一本通·宪法学》2027年",
+  "sourcePath": "教材/宪法讲义_文本.txt",
+  "sourceSha256": "f20fde282308571404aea9504dd92ecf3c44a02e9a1e230e4125a368b846f4cc",
+  "pdfPath": "教材/讲义/27法硕一本通-宪法.pdf",
+  "pdfSha256": "daa19879e3df7ede5376d05bceae9e6400e18767cd60ee74e25351b0231dbdf3",
+  "physicalPageCount": 168,
+  "printedPageOffset": -5,
+  "excludedFromXinde": [
+    "典型真题及答案",
+    "普通正文",
+    "框外思维导图",
+    "七言宪法附录（仍保留在讲义全文）"
+  ],
+  "counts": {
+    "重点提示": 6,
+    "注意": 23,
+    "老马识途": 53,
+    "备注": 1,
+    "补充": 1
+  },
+  "boxes": [
+    {
+      "id": "XF-001",
+      "marker": "重点提示",
+      "anchorLine": 139,
+      "anchorText": "重点提示",
+      "pdfPages": [
+        6
+      ],
+      "bookPages": [
+        1,
+        1
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 140,
+          "endLine": 144
+        }
+      ]
+    },
+    {
+      "id": "XF-002",
+      "marker": "注意",
+      "anchorLine": 186,
+      "anchorText": "［注意］宪法中有三个必须要记住的“根本”问题：根本任务是社会主义现代化建",
+      "pdfPages": [
+        7
+      ],
+      "bookPages": [
+        2,
+        2
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 186,
+          "endLine": 187
+        }
+      ]
+    },
+    {
+      "id": "XF-003",
+      "marker": "老马识途",
+      "anchorLine": 327,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        10
+      ],
+      "bookPages": [
+        5,
+        5
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 328,
+          "endLine": 348
+        }
+      ]
+    },
+    {
+      "id": "XF-004",
+      "marker": "老马识途",
+      "anchorLine": 765,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        19,
+        20
+      ],
+      "bookPages": [
+        14,
+        15
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 766,
+          "endLine": 778
+        },
+        {
+          "startLine": 784,
+          "endLine": 806
+        }
+      ]
+    },
+    {
+      "id": "XF-005",
+      "marker": "老马识途",
+      "anchorLine": 921,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        23
+      ],
+      "bookPages": [
+        18,
+        18
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 922,
+          "endLine": 940
+        }
+      ]
+    },
+    {
+      "id": "XF-006",
+      "marker": "老马识途",
+      "anchorLine": 1006,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        25
+      ],
+      "bookPages": [
+        20,
+        20
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1007,
+          "endLine": 1016
+        }
+      ]
+    },
+    {
+      "id": "XF-007",
+      "marker": "重点提示",
+      "anchorLine": 1037,
+      "anchorText": "重点提宗",
+      "pdfPages": [
+        26
+      ],
+      "bookPages": [
+        21,
+        21
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1038,
+          "endLine": 1046
+        }
+      ]
+    },
+    {
+      "id": "XF-008",
+      "marker": "老马识途",
+      "anchorLine": 1089,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        27
+      ],
+      "bookPages": [
+        22,
+        22
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1090,
+          "endLine": 1113
+        }
+      ]
+    },
+    {
+      "id": "XF-009",
+      "marker": "老马识途",
+      "anchorLine": 1191,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        29
+      ],
+      "bookPages": [
+        24,
+        24
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1192,
+          "endLine": 1193
+        }
+      ]
+    },
+    {
+      "id": "XF-010",
+      "marker": "老马识途",
+      "anchorLine": 1218,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        30
+      ],
+      "bookPages": [
+        25,
+        25
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1219,
+          "endLine": 1222
+        }
+      ]
+    },
+    {
+      "id": "XF-011",
+      "marker": "老马识途",
+      "anchorLine": 1234,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        30
+      ],
+      "bookPages": [
+        25,
+        25
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1235,
+          "endLine": 1239
+        }
+      ]
+    },
+    {
+      "id": "XF-012",
+      "marker": "老马识途",
+      "anchorLine": 1350,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        33
+      ],
+      "bookPages": [
+        28,
+        28
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1351,
+          "endLine": 1364
+        }
+      ]
+    },
+    {
+      "id": "XF-013",
+      "marker": "重点提示",
+      "anchorLine": 1380,
+      "anchorText": "点提示",
+      "pdfPages": [
+        34
+      ],
+      "bookPages": [
+        29,
+        29
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1381,
+          "endLine": 1401
+        }
+      ]
+    },
+    {
+      "id": "XF-014",
+      "marker": "老马识途",
+      "anchorLine": 1662,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        39,
+        40
+      ],
+      "bookPages": [
+        34,
+        35
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1663,
+          "endLine": 1698
+        },
+        {
+          "startLine": 1704,
+          "endLine": 1724
+        }
+      ]
+    },
+    {
+      "id": "XF-015",
+      "marker": "注意",
+      "anchorLine": 1732,
+      "anchorText": "［注意］立法规划，应当开会，可以评估，难事论证，大事听证",
+      "pdfPages": [
+        40
+      ],
+      "bookPages": [
+        35,
+        35
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1732,
+          "endLine": 1732
+        }
+      ]
+    },
+    {
+      "id": "XF-016",
+      "marker": "注意",
+      "anchorLine": 1739,
+      "anchorText": "［注意］草案公开三十天，委员长会议有例外，基层立法联系，点",
+      "pdfPages": [
+        40
+      ],
+      "bookPages": [
+        35,
+        35
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1739,
+          "endLine": 1739
+        }
+      ]
+    },
+    {
+      "id": "XF-017",
+      "marker": "注意",
+      "anchorLine": 1813,
+      "anchorText": "［注意］1.人大一个月，常委会一星期；2.到本单位开会，名正言顺叫出",
+      "pdfPages": [
+        42
+      ],
+      "bookPages": [
+        37,
+        37
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1813,
+          "endLine": 1814
+        }
+      ]
+    },
+    {
+      "id": "XF-018",
+      "marker": "注意",
+      "anchorLine": 1849,
+      "anchorText": "［注意〕合宪性问题要说明。",
+      "pdfPages": [
+        42
+      ],
+      "bookPages": [
+        37,
+        37
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1849,
+          "endLine": 1849
+        }
+      ]
+    },
+    {
+      "id": "XF-019",
+      "marker": "注意",
+      "anchorLine": 1860,
+      "anchorText": "［注意］撤回提案需同意",
+      "pdfPages": [
+        42
+      ],
+      "bookPages": [
+        37,
+        37
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1860,
+          "endLine": 1860
+        }
+      ]
+    },
+    {
+      "id": "XF-020",
+      "marker": "注意",
+      "anchorLine": 1876,
+      "anchorText": "［注意］两年可终止，必要时延长",
+      "pdfPages": [
+        42
+      ],
+      "bookPages": [
+        37,
+        37
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1876,
+          "endLine": 1876
+        }
+      ]
+    },
+    {
+      "id": "XF-021",
+      "marker": "注意",
+      "anchorLine": 1893,
+      "anchorText": "［注意］可以单独合并，委员长会议统一定",
+      "pdfPages": [
+        43
+      ],
+      "bookPages": [
+        38,
+        38
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1893,
+          "endLine": 1893
+        }
+      ]
+    },
+    {
+      "id": "XF-022",
+      "marker": "注意",
+      "anchorLine": 1898,
+      "anchorText": "［注意］法律主席相对多，宪法主席团绝对多",
+      "pdfPages": [
+        43
+      ],
+      "bookPages": [
+        38,
+        38
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1898,
+          "endLine": 1898
+        }
+      ]
+    },
+    {
+      "id": "XF-023",
+      "marker": "注意",
+      "anchorLine": 1904,
+      "anchorText": "［注意］变通备案，单独说明",
+      "pdfPages": [
+        43
+      ],
+      "bookPages": [
+        38,
+        38
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1904,
+          "endLine": 1904
+        }
+      ]
+    },
+    {
+      "id": "XF-024",
+      "marker": "注意",
+      "anchorLine": 1949,
+      "anchorText": "［注意］文件报网，公报为准",
+      "pdfPages": [
+        44
+      ],
+      "bookPages": [
+        39,
+        39
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1949,
+          "endLine": 1949
+        }
+      ]
+    },
+    {
+      "id": "XF-025",
+      "marker": "老马识途",
+      "anchorLine": 1950,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        44
+      ],
+      "bookPages": [
+        39,
+        39
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 1951,
+          "endLine": 2001
+        }
+      ]
+    },
+    {
+      "id": "XF-026",
+      "marker": "老马识途",
+      "anchorLine": 2035,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        45
+      ],
+      "bookPages": [
+        40,
+        40
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2036,
+          "endLine": 2038
+        }
+      ]
+    },
+    {
+      "id": "XF-027",
+      "marker": "老马识途",
+      "anchorLine": 2139,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        46,
+        47
+      ],
+      "bookPages": [
+        41,
+        42
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2140,
+          "endLine": 2164
+        },
+        {
+          "startLine": 2170,
+          "endLine": 2214
+        },
+        {
+          "startLine": 2216,
+          "endLine": 2223
+        }
+      ]
+    },
+    {
+      "id": "XF-028",
+      "marker": "注意",
+      "anchorLine": 2147,
+      "anchorText": "［注意］人大人常，政府部门，政府内部",
+      "pdfPages": [
+        46
+      ],
+      "bookPages": [
+        41,
+        41
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2147,
+          "endLine": 2147
+        }
+      ]
+    },
+    {
+      "id": "XF-029",
+      "marker": "注意",
+      "anchorLine": 2154,
+      "anchorText": "［注意］监督关系看人常，同级政府你别狂，下一级人大和人常，",
+      "pdfPages": [
+        46
+      ],
+      "bookPages": [
+        41,
+        41
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2154,
+          "endLine": 2155
+        }
+      ]
+    },
+    {
+      "id": "XF-030",
+      "marker": "老马识途",
+      "anchorLine": 2258,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        48
+      ],
+      "bookPages": [
+        43,
+        43
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2259,
+          "endLine": 2260
+        }
+      ]
+    },
+    {
+      "id": "XF-031",
+      "marker": "重点提示",
+      "anchorLine": 2339,
+      "anchorText": "直点提养",
+      "pdfPages": [
+        49
+      ],
+      "bookPages": [
+        44,
+        44
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2340,
+          "endLine": 2346
+        }
+      ]
+    },
+    {
+      "id": "XF-032",
+      "marker": "老马识途",
+      "anchorLine": 2432,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        51
+      ],
+      "bookPages": [
+        46,
+        46
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2433,
+          "endLine": 2446
+        }
+      ]
+    },
+    {
+      "id": "XF-033",
+      "marker": "老马识途",
+      "anchorLine": 2509,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        52
+      ],
+      "bookPages": [
+        47,
+        47
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2510,
+          "endLine": 2513
+        }
+      ]
+    },
+    {
+      "id": "XF-034",
+      "marker": "注意",
+      "anchorLine": 2526,
+      "anchorText": "［注意］国家对不同性质经济成分的态度和政策总结：",
+      "pdfPages": [
+        53
+      ],
+      "bookPages": [
+        48,
+        48
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2526,
+          "endLine": 2529
+        }
+      ]
+    },
+    {
+      "id": "XF-035",
+      "marker": "注意",
+      "anchorLine": 2618,
+      "anchorText": "［注意］我国当前的教育政策可概括为：普及中间（小学和初中义务教育阶段），发",
+      "pdfPages": [
+        55
+      ],
+      "bookPages": [
+        50,
+        50
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2618,
+          "endLine": 2621
+        }
+      ]
+    },
+    {
+      "id": "XF-036",
+      "marker": "老马识途",
+      "anchorLine": 2653,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        56
+      ],
+      "bookPages": [
+        51,
+        51
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2654,
+          "endLine": 2668
+        }
+      ]
+    },
+    {
+      "id": "XF-037",
+      "marker": "老马识途",
+      "anchorLine": 2809,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        59
+      ],
+      "bookPages": [
+        54,
+        54
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2811,
+          "endLine": 2820
+        }
+      ]
+    },
+    {
+      "id": "XF-038",
+      "marker": "老马识途",
+      "anchorLine": 2982,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        63
+      ],
+      "bookPages": [
+        58,
+        58
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 2983,
+          "endLine": 2990
+        }
+      ]
+    },
+    {
+      "id": "XF-039",
+      "marker": "老马识途",
+      "anchorLine": 3007,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        64
+      ],
+      "bookPages": [
+        59,
+        59
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3008,
+          "endLine": 3024
+        }
+      ]
+    },
+    {
+      "id": "XF-040",
+      "marker": "老马识途",
+      "anchorLine": 3045,
+      "anchorText": "［老马识途",
+      "pdfPages": [
+        65
+      ],
+      "bookPages": [
+        60,
+        60
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3046,
+          "endLine": 3050
+        }
+      ]
+    },
+    {
+      "id": "XF-041",
+      "marker": "老马识途",
+      "anchorLine": 3086,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        66
+      ],
+      "bookPages": [
+        61,
+        61
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3087,
+          "endLine": 3092
+        }
+      ]
+    },
+    {
+      "id": "XF-042",
+      "marker": "老马识途",
+      "anchorLine": 3153,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        67
+      ],
+      "bookPages": [
+        62,
+        62
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3155,
+          "endLine": 3170
+        }
+      ]
+    },
+    {
+      "id": "XF-043",
+      "marker": "老马识途",
+      "anchorLine": 3272,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        70
+      ],
+      "bookPages": [
+        65,
+        65
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3273,
+          "endLine": 3280
+        }
+      ]
+    },
+    {
+      "id": "XF-044",
+      "marker": "老马识途",
+      "anchorLine": 3365,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        72
+      ],
+      "bookPages": [
+        67,
+        67
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3366,
+          "endLine": 3378
+        }
+      ]
+    },
+    {
+      "id": "XF-045",
+      "marker": "老马识途",
+      "anchorLine": 3434,
+      "anchorText": "［老马识途",
+      "pdfPages": [
+        74
+      ],
+      "bookPages": [
+        69,
+        69
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3435,
+          "endLine": 3441
+        }
+      ]
+    },
+    {
+      "id": "XF-046",
+      "marker": "注意",
+      "anchorLine": 3529,
+      "anchorText": "［注意］处理边界争议的主管部门为民政部门，具体解决程序是政府协商一报告上级",
+      "pdfPages": [
+        76
+      ],
+      "bookPages": [
+        71,
+        71
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3529,
+          "endLine": 3530
+        }
+      ]
+    },
+    {
+      "id": "XF-047",
+      "marker": "老马识途",
+      "anchorLine": 3531,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        76
+      ],
+      "bookPages": [
+        71,
+        71
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3532,
+          "endLine": 3543
+        }
+      ]
+    },
+    {
+      "id": "XF-048",
+      "marker": "注意",
+      "anchorLine": 3626,
+      "anchorText": "［注意］《香港国安法》将《香港特别行政区基本法》第1条（香港特别行政区是中",
+      "pdfPages": [
+        78
+      ],
+      "bookPages": [
+        73,
+        73
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3626,
+          "endLine": 3629
+        }
+      ]
+    },
+    {
+      "id": "XF-049",
+      "marker": "注意",
+      "anchorLine": 3648,
+      "anchorText": "［注意］在特区的机构体系中，大家要特别注意特首（行政长官）的双重属性：特首",
+      "pdfPages": [
+        78
+      ],
+      "bookPages": [
+        73,
+        73
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3648,
+          "endLine": 3653
+        }
+      ]
+    },
+    {
+      "id": "XF-050",
+      "marker": "注意",
+      "anchorLine": 3761,
+      "anchorText": "［注意］香港特别行政区基本法附件三中包括的全国性法律主要有《关于中华人民共",
+      "pdfPages": [
+        81
+      ],
+      "bookPages": [
+        76,
+        76
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3761,
+          "endLine": 3768
+        }
+      ]
+    },
+    {
+      "id": "XF-051",
+      "marker": "注意",
+      "anchorLine": 3817,
+      "anchorText": "［注意］行政长官、主要官员、立法会主",
+      "pdfPages": [
+        82
+      ],
+      "bookPages": [
+        77,
+        77
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3817,
+          "endLine": 3819
+        }
+      ]
+    },
+    {
+      "id": "XF-052",
+      "marker": "注意",
+      "anchorLine": 3823,
+      "anchorText": "［注意］宣誓人拒绝宣誓，或者宣誓人故意宣读与法定誓言不一致的誓言或者以任何不真诚、不庄重的",
+      "pdfPages": [
+        82
+      ],
+      "bookPages": [
+        77,
+        77
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3823,
+          "endLine": 3826
+        }
+      ]
+    },
+    {
+      "id": "XF-053",
+      "marker": "老马识途",
+      "anchorLine": 3827,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        82
+      ],
+      "bookPages": [
+        77,
+        77
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3828,
+          "endLine": 3842
+        }
+      ]
+    },
+    {
+      "id": "XF-054",
+      "marker": "老马识途",
+      "anchorLine": 3865,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        83
+      ],
+      "bookPages": [
+        78,
+        78
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3866,
+          "endLine": 3875
+        }
+      ]
+    },
+    {
+      "id": "XF-082",
+      "marker": "老马识途",
+      "anchorLine": 3909,
+      "anchorText": "国宗放 定员双会［老马识途］",
+      "pdfPages": [
+        84
+      ],
+      "bookPages": [
+        79,
+        79
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3910,
+          "endLine": 3917
+        }
+      ]
+    },
+    {
+      "id": "XF-055",
+      "marker": "老马识途",
+      "anchorLine": 3935,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        84
+      ],
+      "bookPages": [
+        79,
+        79
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 3936,
+          "endLine": 3940
+        }
+      ]
+    },
+    {
+      "id": "XF-056",
+      "marker": "老马识途",
+      "anchorLine": 4010,
+      "anchorText": "［老马识途",
+      "pdfPages": [
+        86
+      ],
+      "bookPages": [
+        81,
+        81
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4011,
+          "endLine": 4017
+        }
+      ]
+    },
+    {
+      "id": "XF-057",
+      "marker": "老马识途",
+      "anchorLine": 4049,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        87
+      ],
+      "bookPages": [
+        82,
+        82
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4050,
+          "endLine": 4057
+        }
+      ]
+    },
+    {
+      "id": "XF-083",
+      "marker": "老马识途",
+      "anchorLine": 4074,
+      "anchorText": "1.与村民自治类似，居民会和居代会开会均由居委会召集，二者临时开会的规律",
+      "pdfPages": [
+        87
+      ],
+      "bookPages": [
+        82,
+        82
+      ],
+      "boundaryReview": "pdf_visual",
+      "markerOcrMissing": true,
+      "segments": [
+        {
+          "startLine": 4074,
+          "endLine": 4078
+        }
+      ]
+    },
+    {
+      "id": "XF-058",
+      "marker": "老马识途",
+      "anchorLine": 4146,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        89
+      ],
+      "bookPages": [
+        84,
+        84
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4147,
+          "endLine": 4155
+        }
+      ]
+    },
+    {
+      "id": "XF-059",
+      "marker": "重点提示",
+      "anchorLine": 4183,
+      "anchorText": "重点提示",
+      "pdfPages": [
+        90
+      ],
+      "bookPages": [
+        85,
+        85
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4184,
+          "endLine": 4192
+        }
+      ]
+    },
+    {
+      "id": "XF-060",
+      "marker": "老马识途",
+      "anchorLine": 4331,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        93
+      ],
+      "bookPages": [
+        88,
+        88
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4332,
+          "endLine": 4347
+        }
+      ]
+    },
+    {
+      "id": "XF-084",
+      "marker": "备注",
+      "anchorLine": 4729,
+      "anchorText": "［备注］除了以上专门规定的五项义务外，我国公民的基本义务还包括；劳动的义务，",
+      "pdfPages": [
+        102
+      ],
+      "bookPages": [
+        97,
+        97
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4729,
+          "endLine": 4731
+        }
+      ]
+    },
+    {
+      "id": "XF-061",
+      "marker": "老马识途",
+      "anchorLine": 4732,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        102
+      ],
+      "bookPages": [
+        97,
+        97
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4733,
+          "endLine": 4740
+        }
+      ]
+    },
+    {
+      "id": "XF-062",
+      "marker": "重点提示",
+      "anchorLine": 4761,
+      "anchorText": "鱼点提宗",
+      "pdfPages": [
+        104
+      ],
+      "bookPages": [
+        99,
+        99
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4762,
+          "endLine": 4770
+        }
+      ]
+    },
+    {
+      "id": "XF-063",
+      "marker": "老马识途",
+      "anchorLine": 4924,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        107
+      ],
+      "bookPages": [
+        102,
+        102
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4925,
+          "endLine": 4929
+        }
+      ]
+    },
+    {
+      "id": "XF-064",
+      "marker": "老马识途",
+      "anchorLine": 4985,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        108
+      ],
+      "bookPages": [
+        103,
+        103
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 4986,
+          "endLine": 4994
+        }
+      ]
+    },
+    {
+      "id": "XF-065",
+      "marker": "老马识途",
+      "anchorLine": 5029,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        109
+      ],
+      "bookPages": [
+        104,
+        104
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5030,
+          "endLine": 5037
+        }
+      ]
+    },
+    {
+      "id": "XF-066",
+      "marker": "老马识途",
+      "anchorLine": 5082,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        110,
+        111
+      ],
+      "bookPages": [
+        105,
+        106
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5083,
+          "endLine": 5114
+        },
+        {
+          "startLine": 5120,
+          "endLine": 5137
+        }
+      ]
+    },
+    {
+      "id": "XF-067",
+      "marker": "老马识途",
+      "anchorLine": 5160,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        111
+      ],
+      "bookPages": [
+        106,
+        106
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5162,
+          "endLine": 5185
+        }
+      ]
+    },
+    {
+      "id": "XF-068",
+      "marker": "老马识途",
+      "anchorLine": 5215,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        112
+      ],
+      "bookPages": [
+        107,
+        107
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5216,
+          "endLine": 5219
+        }
+      ]
+    },
+    {
+      "id": "XF-069",
+      "marker": "老马识途",
+      "anchorLine": 5275,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        113
+      ],
+      "bookPages": [
+        108,
+        108
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5276,
+          "endLine": 5293
+        }
+      ]
+    },
+    {
+      "id": "XF-070",
+      "marker": "老马识途",
+      "anchorLine": 5479,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        117
+      ],
+      "bookPages": [
+        112,
+        112
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5480,
+          "endLine": 5486
+        }
+      ]
+    },
+    {
+      "id": "XF-071",
+      "marker": "老马识途",
+      "anchorLine": 5559,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        119
+      ],
+      "bookPages": [
+        114,
+        114
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5560,
+          "endLine": 5565
+        }
+      ]
+    },
+    {
+      "id": "XF-072",
+      "marker": "老马识途",
+      "anchorLine": 5658,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        121
+      ],
+      "bookPages": [
+        116,
+        116
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5659,
+          "endLine": 5693
+        }
+      ]
+    },
+    {
+      "id": "XF-073",
+      "marker": "注意",
+      "anchorLine": 5726,
+      "anchorText": "［注意］",
+      "pdfPages": [
+        122
+      ],
+      "bookPages": [
+        117,
+        117
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5727,
+          "endLine": 5730
+        }
+      ]
+    },
+    {
+      "id": "XF-074",
+      "marker": "老马识途",
+      "anchorLine": 5771,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        123
+      ],
+      "bookPages": [
+        118,
+        118
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 5772,
+          "endLine": 5787
+        }
+      ]
+    },
+    {
+      "id": "XF-075",
+      "marker": "老马识途",
+      "anchorLine": 6065,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        129
+      ],
+      "bookPages": [
+        124,
+        124
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6067,
+          "endLine": 6074
+        }
+      ]
+    },
+    {
+      "id": "XF-076",
+      "marker": "老马识途",
+      "anchorLine": 6235,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        133
+      ],
+      "bookPages": [
+        128,
+        128
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6236,
+          "endLine": 6238
+        }
+      ]
+    },
+    {
+      "id": "XF-077",
+      "marker": "注意",
+      "anchorLine": 6279,
+      "anchorText": "［注意］常委专委只到县，秘书长只到地级市。",
+      "pdfPages": [
+        133
+      ],
+      "bookPages": [
+        128,
+        128
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6279,
+          "endLine": 6279
+        }
+      ]
+    },
+    {
+      "id": "XF-078",
+      "marker": "补充",
+      "anchorLine": 6324,
+      "anchorText": "［补充］《监督法》对全国人大常委会及地方人大常委会的质询程序具体规定如下：",
+      "pdfPages": [
+        134
+      ],
+      "bookPages": [
+        129,
+        129
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6324,
+          "endLine": 6341
+        }
+      ]
+    },
+    {
+      "id": "XF-079",
+      "marker": "老马识途",
+      "anchorLine": 6342,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        134
+      ],
+      "bookPages": [
+        129,
+        129
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6343,
+          "endLine": 6345
+        }
+      ]
+    },
+    {
+      "id": "XF-080",
+      "marker": "老马识途",
+      "anchorLine": 6369,
+      "anchorText": "［老马识途",
+      "pdfPages": [
+        135
+      ],
+      "bookPages": [
+        130,
+        130
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6370,
+          "endLine": 6371
+        }
+      ]
+    },
+    {
+      "id": "XF-081",
+      "marker": "老马识途",
+      "anchorLine": 6412,
+      "anchorText": "［老马识途］",
+      "pdfPages": [
+        136
+      ],
+      "bookPages": [
+        131,
+        131
+      ],
+      "boundaryReview": "pdf_visual",
+      "segments": [
+        {
+          "startLine": 6413,
+          "endLine": 6418
+        }
+      ]
+    }
+  ],
+  "rawOcrTextSha256": "7aac7c66666ac1451e99d7ab8c845fd122585c9eb93306a842ed663bac97be3a",
+  "ocrCorrections": [
+    {
+      "line": 3817,
+      "pdfPage": 82,
+      "before": "［注意］行政长官、羔要官员，产法念羔",
+      "after": "［注意］行政长官、主要官员、立法会主",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 3818,
+      "pdfPage": 82,
+      "before": "康、终审法院院长、检察长在就职时，还必",
+      "after": "席、终审法院院长、检察长在就职时，还必",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 3823,
+      "pdfPage": 82,
+      "before": "［注意］宣誓人拒绝宣暂，或者宣誓人热意宣读与法定暂言不一致的暂言或者以任何不真诚、不庄重的",
+      "after": "［注意］宣誓人拒绝宣誓，或者宣誓人故意宣读与法定誓言不一致的誓言或者以任何不真诚、不庄重的",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 3824,
+      "pdfPage": 82,
+      "before": "方式宣誓，也属于拒纯宣誓，所作宣暂无效，宣暂人即丧失就任相应公职的资格。宣暂必须在法律规定",
+      "after": "方式宣誓，也属于拒绝宣誓，所作宣誓无效，宣誓人即丧失就任相应公职的资格。宣誓必须在法律规定",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 3825,
+      "pdfPage": 82,
+      "before": "的监誓人面前进行，监誓人负有确保宣誓合法进行的责任，对符合法律规定的宣誓，应确定为有效宣",
+      "after": "的监誓人面前进行，监誓人负有确保宣誓合法进行的责任，对符合法律规定的宣誓，应确定为有效宣",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 3826,
+      "pdfPage": 82,
+      "before": "暂；对不符合法律规定的宣誓，应确定为无效宣誓，共不得重新安排宣誓。",
+      "after": "誓；对不符合法律规定的宣誓，应确定为无效宣誓，并不得重新安排宣誓。",
+      "evidence": "原PDF物理82页目视核对"
+    },
+    {
+      "line": 4730,
+      "pdfPage": 102,
+      "before": "受教育的义务，杰寒双方实行计划生育的义务，父母有抚养教育未成年子女的义务，成年",
+      "after": "受教育的义务，夫妻双方实行计划生育的义务，父母有抚养教育未成年子女的义务，成年",
+      "evidence": "原PDF物理102页目视核对"
+    }
+  ]
+}

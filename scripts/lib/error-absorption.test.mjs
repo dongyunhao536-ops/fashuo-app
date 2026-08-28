@@ -37,6 +37,27 @@ describe("study error absorption proof", () => {
     expect(proof.axes).toEqual(["fact_signal"]);
   });
 
+  // [claude] 2026-08-26：真实场景回归。当天两条 pass 中间夹了一条别的宿主写的 fail，
+  // 计数从最近一次失败之后重算，于是只剩 1 条 1 轴——这正是那天 absorb 被拒的原因。
+  // 门槛本身没错，错的是它只在 absorb 失败时才说话；latestFailure 要能被上层拿去播报。
+  it("中途插入的失败会重置计数，并报出计数起点", () => {
+    const reviews = [
+      pass(1, "element_structure", { review_date: "2026-08-26" }),
+      pass(2, "fact_signal", {
+        review_date: "2026-08-26",
+        result: "fail",
+        variant_kind: "novel_case",
+        transfer_level: 4,
+      }),
+      pass(3, "concept_boundary", { review_date: "2026-08-26", cold: true }),
+    ];
+    const proof = summarizeEventAbsorptionProof({ event, primaryTopicId: 90, reviews, referenceDate: "2026-08-26" });
+    expect(proof.eligible).toBe(false);
+    expect(proof.passCount).toBe(1);
+    expect(proof.axes).toEqual(["concept_boundary"]);
+    expect(proof.latestFailure).toMatchObject({ result: "fail", date: "2026-08-26" });
+  });
+
   it("两轴通过仍必须至少含一次跨会话冷检", () => {
     const reviews = [pass(1, "fact_signal", { cold: false }), pass(2, "rule_boundary", { cold: false })];
     const proof = summarizeEventAbsorptionProof({ event, primaryTopicId: 90, reviews, referenceDate: "2026-08-10" });

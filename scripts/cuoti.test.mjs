@@ -10,6 +10,7 @@ import {
   parseMaterialArgs,
   parseMaterialBatchArgs,
   requireMaterialRows,
+  summarizeMaterialHits,
 } from "./cuoti.mjs";
 import { buildErrorIntakeBatchOperations, verifyExistingErrorIntakeBatch } from "./lib/error-intake-batch.mjs";
 
@@ -25,6 +26,28 @@ describe("cuoti material sources", () => {
 });
 
 describe("cuoti grep", () => {
+  // [gpt] 2026-08-28：专题词中间的空格是同一行 AND，不是要求原文含完全相同的空格。
+  it("一次检索同时命中教材和带背的年份写法，显示与回执使用同一匹配规则", () => {
+    const rows = [
+      { path: "教材/宪法学_文本.txt", start_line: 52, content: "5.2018 年宪法修正案。\n2004 年宪法修正案。" },
+      { path: "教材/带背/宪法.txt", start_line: 682, content: "重点强调：2018年宪法修正案" },
+      { path: "教材/不应命中.txt", start_line: 1, content: "2018\n宪法修正案" },
+    ];
+    const query = "2018 宪法修正案";
+    const result = grep(rows, query);
+    expect(result.totalHits).toBe(2);
+    expect(result.blocks.map((block) => block.lines)).toEqual([[52], [682]]);
+    const corpus = new Map([["textbook", rows]]);
+    expect(summarizeMaterialHits(corpus, [{ keyword: query }]).kaoshi).toBe(2);
+    expect(buildMaterialOutput(corpus, query)).toContain("同一行");
+  });
+
+  it("多词查询仍按字面匹配，长行围绕真实命中词显示", () => {
+    const content = `${"甲".repeat(240)}2018 年宪法修正案${"乙".repeat(240)}`;
+    expect(grep([{ path: "长行.txt", content }], "2018 宪法修正案").blocks[0].text).toContain("2018 年宪法修正案");
+    expect(grep([{ path: "文本.txt", content: "A+B 2018\nAAAB 2018" }], "A+B 2018").totalHits).toBe(1);
+  });
+
   it("保留真实行号、合并相邻命中，并过滤目录点线", () => {
     const rows = [{
       path: "教材/测试.txt",

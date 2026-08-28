@@ -172,8 +172,22 @@ export function auditReviewQuestion(input = {}) {
     violations.push(evidence("choice-type-required", "stem", "题面实际是选择题，不能以 non-choice 绕过单选/多选标签闸门"));
   }
   if (expectedLabel && !labels.length) violations.push(evidence("missing-options", "stem", "选择题未识别到可审计的选项编号"));
-  if (expectedLabel && !answerKey.length) violations.push(evidence("missing-answer-key", "answerKey", "选择题 Gate 需要教练侧答案键，才能检测间接答案污染"));
-  if (questionType === "non-choice" && !rawAnswer) violations.push(evidence("missing-answer-key", "answerKey", "非选择复检题也需要教练侧参考答案，才能检测答案文本污染"));
+  // [claude] 2026-08-26：deferAnswerKey——答案键推迟到用户作答之后再审。
+  //
+  // 原设计假定答案键只在教练侧，但 Claude Code 会把工具调用渲染给用户看，
+  // 命令行、文件写入、参数一律可见，所以「展示前把答案交给 Gate」在这个宿主上
+  // 等于每道题自带答案（2026-08-26 云截图实证）。答案键在本文件里只被
+  // targetedSubsetViolations 使用，用途是查「题干是否只点了正解集或其补集」——
+  // 这个检查放到作答之后跑，结论完全一样，而作答之后再泄已经无害。
+  // 代价说清楚：污染改为事后发现，会浪费用户一次作答；但那比直接把答案给他强。
+  // 防绕过：延迟审计不是取消审计，judgment-result 会拒绝为仍处于延迟态的 Run 判分。
+  const deferAnswerKey = Boolean(input.deferAnswerKey);
+  if (!deferAnswerKey) {
+    if (expectedLabel && !answerKey.length) violations.push(evidence("missing-answer-key", "answerKey", "选择题 Gate 需要教练侧答案键，才能检测间接答案污染"));
+    if (questionType === "non-choice" && !rawAnswer) violations.push(evidence("missing-answer-key", "answerKey", "非选择复检题也需要教练侧参考答案，才能检测答案文本污染"));
+  } else if (rawAnswer) {
+    violations.push(evidence("deferred-answer-key-supplied", "answerKey", "已声明延迟审答案键，就不能同时把答案键传进来"));
+  }
   if (answerKey.some((label) => labels.length && !labels.includes(label))) {
     violations.push(evidence("answer-key-outside-options", "answerKey", "答案键含题面不存在的选项编号", answerKey.join("")));
   }
@@ -207,6 +221,7 @@ export function auditReviewQuestion(input = {}) {
     new RegExp(`(?:(?:指出|说明|解释|分析|改正|比较)?\\s*(?:${LABEL_TOKEN})(?:[\\s、,，和及与+＋/]*${LABEL_TOKEN})*[^。！？\\n]{0,18}(?:错(?:误)?|不正确|不能选|不成立|有问题|应?排除|为何错|正确|必选|应选)|(?:正确|应选|答案)[^。！？\\n]{0,12}(?:${LABEL_TOKEN})(?:[\\s、,，和及与+＋/]*${LABEL_TOKEN})*|除\\s*(?:${LABEL_TOKEN})\\s*外[^。！？\\n]{0,18}(?:均|都|全部)[^。！？\\n]{0,8}(?:正确|错误|应选|不应选))`, "iu"),
     "附加要求或提示对点名选项预先作出正误判断",
   ));
+  // 延迟态下 answerKey 为空，子集比对无从谈起；originalAnswer 仍照常审。
   violations.push(...targetedSubsetViolations({ stem, requirements, hints }, labels, answerKey, originalAnswer));
   violations.push(...verbatimAnswerViolations(
     rows,

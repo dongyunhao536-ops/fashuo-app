@@ -111,6 +111,11 @@ export function recoveryHint(skill, step, { runId = null, subject = null, phase 
       return contextHint(skill, subject, runId)
         && `${contextHint(skill, subject, runId)} --signal <continue|too-little|switch|pass|partial|fail|absorbed|new-error>`;
     case "materials_checked":
+      // [gpt] 2026-08-26：带背现役母版可在题面 Gate 内自动签材料回执；
+      // 其余 Skill 仍必须走五源 material/material-batch。
+      if (skill === "daibei-pc") {
+        return `现役母版非选择题直接在题面 Gate 加 --template-entry "<母版完整条目键>"，同一次调用自动签 materials_checked；母版缺失/锚点不全时把本节缺失项合并成一次 ${withRun(`${ENV}/cuoti.mjs material-batch --query <词1> --query <词2>`, runId)}（别逐题 material）`;
+      }
       return `${withRun(`${ENV}/cuoti.mjs material <连续短词> [特征词]`, runId)}；多个独立争点改用一次 ${withRun(`${ENV}/cuoti.mjs material-batch --query <词1> --query <词2>`, runId)}（别拆成多次 material）`;
     case "question_integrity_pass":
       return `${withRun(`${BARE}/question-integrity.mjs check --type <题型> --stem "<题干>" --answer "<答案键>" [--original-answer "<原错答案>"]`, runId)}`
@@ -170,9 +175,22 @@ export function recoveryHints(skill, missing = [], context = {}) {
  * `material-batch`。脚本本身只要 127ms，代价全在往返上。前两次不打扰——
  * 两个争点分开查是合理的；第三次起才提示。
  */
+export function materialQueryCount(evidenceRef) {
+  // [claude] 2026-08-26：回执格式 2026-08-25 从 `queries:N` 改成 `q:N|kaoshi:N|…`
+  // （见 cuoti.mjs 的 formatMaterialEvidenceRef），本函数当时仍在做全等字符串比较，
+  // 于是这条提醒静默失效——连查三次也返回 null。改为解析计数并同时兼容两种格式。
+  for (const part of String(evidenceRef ?? "").split("|")) {
+    const [key, value] = part.split(":");
+    if (key !== "q" && key !== "queries") continue;
+    const count = Number.parseInt(value, 10);
+    return Number.isFinite(count) ? count : null;
+  }
+  return null;
+}
+
 export function repeatedMaterialHint(events = [], { threshold = 3 } = {}) {
   const singles = events.filter((event) => (
-    event?.event === "step" && event.step === "materials_checked" && event.evidenceRef === "queries:1"
+    event?.event === "step" && event.step === "materials_checked" && materialQueryCount(event.evidenceRef) === 1
   )).length;
   if (singles < threshold) return null;
   return `本 Run 已第 ${singles} 次单查询检索。多个争点请一次跑 material-batch --query <词1> --query <词2> ...，`

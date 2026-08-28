@@ -28,9 +28,16 @@ const CONTROLLED_SKILLS = new Set([
   "yingyu-pc",
 ]);
 
+// [gpt] 2026-08-26：已撤下的 Skill 只保留历史遥测兼容，不再参与显式路由、续跑或 Stop 硬闸。
+const RETIRED_SKILLS = new Set(["shouke-pc"]);
+
 const RETRY_PATTERN = /^SKILL_EXECUTION_GUARD_RETRY\|skill=([a-z-]+)\|code=([a-z_]+)/u;
 const RUN_PURPOSES = new Set(["learning", "diagnostic", "simulation"]);
 const SYSTEM_DIAGNOSTIC_INTENT = /(?:诊断|监控|迁移|升级|代码|脚本|配置|故障|速度慢|日志|遥测|机制|执行.{0,8}(?:慢|异常|问题|不严格|不完整)|为什么.{0,8}(?:不执行|没执行|失效))/u;
+// [gpt] 2026-08-26：“Claude 那边也可以正常授课吗”是在核验宿主能力，不是要求立即开课。
+const SYSTEM_CAPABILITY_INTENT = /(?:(?:claude|codex|skill|入口|守卫|系统|那边|这边).{0,20}(?:可以|能|能否|是否|能不能|可不可以).{0,12}(?:正常)?(?:授课|上课|运行|使用)|(?:可以|能|能否|是否|能不能|可不可以).{0,12}(?:在)?(?:claude|codex|那边|这边).{0,12}(?:正常)?(?:授课|上课|运行|使用))/iu;
+// [gpt] 2026-08-26：文档名含“授课Skill方案”不等于开课；仅在技术表面与维护动作同时出现时排除。
+const SYSTEM_DOCUMENT_MAINTENANCE_INTENT = /(?:(?:docs\/|\.md\b|skill|hook|handler|claude-enforce|codex|claude).{0,50}(?:文档|说明|版本|更新|同步|没更新|未更新|漂移)|(?:文档|说明|版本|更新|同步|漂移).{0,50}(?:docs\/|\.md\b|skill|hook|handler|claude-enforce|codex|claude))/iu;
 const EXPLICIT_SKILL_USE = /(?:使用|调用|按|走)\s*(?:ask-pc|coach-pc|cuoti-fupan|daibei-pc|lunshu-pc|yingyu-pc)/iu;
 const LEGAL_DOMAIN = /(?:法硕|法律|刑法|民法|法理|宪法|法制史|犯罪|罪名|合同|侵权|物权|债权|人格权|婚姻|继承|居住权|租赁权|占有|所有权|监护|代理|时效|法条|司法解释|案例)/u;
 
@@ -58,9 +65,16 @@ const ROUTE_RULES = Object.freeze([
   },
 ]);
 
-const ANSWER_INTENT = /(?:讲讲|解释|什么是|是什么意思|如何理解|怎么理解|为什么|区别|辨析|比较|这题选什么|选什么|怎么定性|如何认定|是否构成|法条什么意思|这个概念|这道题|如何评价|怎么判断)/u;
+// [gpt] 2026-08-25：“精讲讲义”曾跨词命中裸“讲讲”；排除教材/课程词形。
+const ANSWER_INTENT = /(?:讲讲(?!义|完|课|稿|座)|解释|什么是|是什么意思|如何理解|怎么理解|为什么|区别|辨析|比较|这题选什么|选什么|怎么定性|如何认定|是否构成|法条什么意思|这个概念|这道题|如何评价|怎么判断)/u;
 const CONTINUATION_INTENT = /^(?:继续|接着|再来|下一题|下一个|再来一(?:道|个|篇)|继续刚才的|往下)(?:吧|一下|一个|一题|一道|一篇)?[。！!？?]*$/u;
 const SUBMISSION_CONTINUATION_INTENT = /(?:^|[，,。！!？?\s])(?:我)?(?:写好了|写完了|答完了|做完了|交卷|我的答案(?:是|：|:)?)(?:$|[，,。！!？?\s])/u;
+
+function isSystemDiagnosticPrompt(text) {
+  return SYSTEM_DIAGNOSTIC_INTENT.test(text)
+    || SYSTEM_CAPABILITY_INTENT.test(text)
+    || SYSTEM_DOCUMENT_MAINTENANCE_INTENT.test(text);
+}
 
 function timestamp(value = new Date()) {
   const parsed = value instanceof Date ? value : new Date(value);
@@ -85,6 +99,14 @@ function hashPrompt(value) {
   return createHash("sha256").update(String(value ?? "").replace(/\r\n/gu, "\n"), "utf8").digest("hex");
 }
 
+// [gpt] 2026-08-26：Markdown 行尾双空格和 CRLF 只影响渲染，不改变 Gate artifact 的正文。
+// 仅归一这两类展示噪声；标点、措辞、标签和普通内部空格仍逐字受 hash 保护。
+function normalizeArtifactPresentation(value) {
+  return String(value ?? "")
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[ \t]+(?=\n|$)/gu, "");
+}
+
 export function containsHashedArtifact(message, artifactHash, artifactLength) {
   const text = String(message ?? "").replace(/\r\n/gu, "\n");
   const hash = String(artifactHash ?? "");
@@ -92,6 +114,11 @@ export function containsHashedArtifact(message, artifactHash, artifactLength) {
   if (!/^[a-f0-9]{64}$/u.test(hash) || !Number.isInteger(length) || length < 1 || text.length < length) return false;
   for (let start = 0; start <= text.length - length; start += 1) {
     if (hashPrompt(text.slice(start, start + length)) === hash) return true;
+  }
+  const normalizedText = normalizeArtifactPresentation(text);
+  if (normalizedText.length < length || normalizedText === text) return false;
+  for (let start = 0; start <= normalizedText.length - length; start += 1) {
+    if (hashPrompt(normalizedText.slice(start, start + length)) === hash) return true;
   }
   return false;
 }
@@ -211,12 +238,16 @@ export function findGuardNotInvokedRuns(runInput = [], turnInput = [], {
 export function routeSkillPrompt(prompt) {
   const text = String(prompt ?? "").normalize("NFC").trim();
   if (!text) return null;
+  if ([...RETIRED_SKILLS].some((skill) => new RegExp(`(?:^|[^a-z])${skill}(?:$|[^a-z])`, "iu").test(text))) {
+    return null;
+  }
   const retry = text.match(RETRY_PATTERN);
   if (retry && CONTROLLED_SKILLS.has(retry[1])) {
     return { skill: retry[1], source: "guard_retry", guardRetry: true, retryCode: retry[2] };
   }
   // [gpt] 系统诊断即使点名某个 Skill，也不应被误路由成学习答疑；显式“使用/按某 Skill”仍保留。
-  if (SYSTEM_DIAGNOSTIC_INTENT.test(text) && !EXPLICIT_SKILL_USE.test(text)) {
+  const systemDiagnostic = isSystemDiagnosticPrompt(text);
+  if (systemDiagnostic && !EXPLICIT_SKILL_USE.test(text)) {
     return null;
   }
   for (const skill of CONTROLLED_SKILLS) {
@@ -227,7 +258,7 @@ export function routeSkillPrompt(prompt) {
   for (const rule of ROUTE_RULES) {
     if (rule.pattern.test(text)) return { skill: rule.skill, source: "strong_trigger", guardRetry: false };
   }
-  if (ANSWER_INTENT.test(text) && LEGAL_DOMAIN.test(text) && !SYSTEM_DIAGNOSTIC_INTENT.test(text)) {
+  if (ANSWER_INTENT.test(text) && LEGAL_DOMAIN.test(text) && !systemDiagnostic) {
     return { skill: "ask-pc", source: "legal_answer", guardRetry: false };
   }
   return null;
@@ -235,24 +266,30 @@ export function routeSkillPrompt(prompt) {
 
 function latestActiveRun(runs, sessionId) {
   return [...(runs?.values?.() ?? [])]
-    .filter((run) => run.sessionId === sessionId && !run.end)
+    .filter((run) => CONTROLLED_SKILLS.has(run.skill) && run.sessionId === sessionId && !run.end)
     .sort((left, right) => String(right.lastEventAt).localeCompare(String(left.lastEventAt)))[0] ?? null;
 }
 
-function latestClosedRun(runs, sessionId) {
+function latestClosedRun(runs, sessionId, now, maxAgeMinutes = 30) {
+  const nowMs = new Date(now).getTime();
   return [...(runs?.values?.() ?? [])]
-    .filter((run) => run.sessionId === sessionId && run.end && run.end.outcome !== "aborted")
+    .filter((run) => {
+      if (!CONTROLLED_SKILLS.has(run.skill) || run.sessionId !== sessionId || !run.end || run.end.outcome === "aborted") return false;
+      const observedMs = new Date(run.lastEventAt).getTime();
+      return Number.isFinite(nowMs) && Number.isFinite(observedMs) && nowMs >= observedMs
+        && (nowMs - observedMs) / 60000 <= maxAgeMinutes;
+    })
     .sort((left, right) => String(right.lastEventAt).localeCompare(String(left.lastEventAt)))[0] ?? null;
 }
 
-function recentPromptSkill(events, sessionId, now, maxAgeMinutes = 30) {
+function latestRecentPromptRoute(events, sessionId, now, maxAgeMinutes = 30) {
   const nowMs = new Date(now).getTime();
   return [...(events ?? [])].reverse().find((event) => {
-    if (event.event !== "prompt_routed" || event.sessionId !== sessionId || !event.expectedSkill) return false;
+    if (event.event !== "prompt_routed" || event.sessionId !== sessionId) return false;
     const observedMs = new Date(event.observedAt).getTime();
     return Number.isFinite(nowMs) && Number.isFinite(observedMs) && nowMs >= observedMs
       && (nowMs - observedMs) / 60000 <= maxAgeMinutes;
-  })?.expectedSkill ?? null;
+  }) ?? null;
 }
 
 export function createPromptRoutedEvent(payload = {}, runs = new Map(), now = new Date(), { previousPromptEvents = [] } = {}) {
@@ -264,26 +301,31 @@ export function createPromptRoutedEvent(payload = {}, runs = new Map(), now = ne
   const active = sessionId ? latestActiveRun(runs, sessionId) : null;
   // [gpt] 2026-08-12：普通交卷、同 Skill 强触发和法律追问均续用活动 Run；只有明确指向不同 Skill 的强触发才切换。
   const normalizedPrompt = prompt.normalize("NFC").trim();
+  const systemDiagnostic = isSystemDiagnosticPrompt(normalizedPrompt) && !EXPLICIT_SKILL_USE.test(normalizedPrompt);
   const activeReply = active && (
-    !route
-      || route.source === "legal_answer"
-      || route.skill === active.skill
+    (!route && !systemDiagnostic)
+      || route?.source === "legal_answer"
+      || route?.skill === active.skill
       || SUBMISSION_CONTINUATION_INTENT.test(` ${normalizedPrompt} `)
   ) ? active : null;
-  const closed = sessionId && !active && CONTINUATION_INTENT.test(normalizedPrompt) ? latestClosedRun(runs, sessionId) : null;
-  const continuationSkill = closed?.end?.outcome === "handoff" ? closed.end.handoffSkill : closed?.skill;
-  // [gpt] 2026-08-21：前一轮被用户中断且尚未来得及建 Run 时，短“继续”仍继承最近一次已路由 Skill。
-  const promptContinuationSkill = sessionId && !active && !closed && CONTINUATION_INTENT.test(normalizedPrompt)
-    ? recentPromptSkill(previousPromptEvents, sessionId, now)
-    : null;
-  const expectedSkill = activeReply?.skill ?? route?.skill ?? continuationSkill ?? promptContinuationSkill ?? null;
+  const shortContinuation = sessionId && !active && CONTINUATION_INTENT.test(normalizedPrompt);
+  const recentPrompt = shortContinuation ? latestRecentPromptRoute(previousPromptEvents, sessionId, now) : null;
+  // [gpt] 2026-08-26：短“继续”只继承紧邻的最近 prompt；若中间已经进入系统诊断/修复
+  // （expectedSkill=null），不能让更早的已收口学习 Run 抢回路由。没有 prompt 遥测时才回退到
+  // 30 分钟内的已收口 Run，兼容宿主刚启动或历史数据缺口。
+  const closed = shortContinuation && !recentPrompt ? latestClosedRun(runs, sessionId, now) : null;
+  const promptContinuationSkill = CONTROLLED_SKILLS.has(recentPrompt?.expectedSkill) ? recentPrompt.expectedSkill : null;
+  const closedCandidate = closed?.end?.outcome === "handoff" ? closed.end.handoffSkill : closed?.skill;
+  const closedContinuationSkill = CONTROLLED_SKILLS.has(closedCandidate) ? closedCandidate : null;
+  const expectedSkill = activeReply?.skill ?? route?.skill ?? promptContinuationSkill ?? closedContinuationSkill ?? null;
   return {
     ...eventBase({ event: "prompt_routed", ...identity, now }),
     expectedSkill,
     expectedRunId: activeReply?.runId ?? null,
     routeSource: activeReply
       ? "active_run"
-      : route?.source ?? (continuationSkill ? "continuation" : promptContinuationSkill ? "continuation_prompt" : "none"),
+      : route?.source ?? (promptContinuationSkill ? "continuation_prompt" : closedContinuationSkill ? "continuation" : "none"),
+    intentHint: null,
     guardRetry: Boolean(route?.guardRetry),
     retryCode: route?.retryCode ?? null,
     promptHash: hashPrompt(prompt),
@@ -305,6 +347,7 @@ export function currentCodexTurnReference({
     event.event === "prompt_routed"
       && event.sessionId === normalizedSession
   ));
+  const expectedSkill = CONTROLLED_SKILLS.has(prompt?.expectedSkill) ? prompt.expectedSkill : null;
   // [gpt] 2026-08-13：把宿主已确认的 Run 路由带回执行层；跨 turn 续用必须匹配该 Run，不能只凭同 session 放行。
   return {
     sessionId: normalizedSession,
@@ -312,8 +355,8 @@ export function currentCodexTurnReference({
     producerHost: prompt?.producerHost ?? runtimeIdentity.producerHost,
     turnIdSource: prompt?.turnIdSource ?? "none",
     identityState: prompt?.identityState ?? runtimeIdentity.identityState,
-    expectedSkill: prompt?.expectedSkill ?? null,
-    expectedRunId: prompt?.expectedRunId ?? null,
+    expectedSkill,
+    expectedRunId: expectedSkill ? prompt?.expectedRunId ?? null : null,
   };
 }
 
@@ -347,6 +390,9 @@ export function latestPromptEvent(events, sessionId, turnId) {
 
 export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssistantMessage = null } = {}) {
   if (!promptEvent?.expectedSkill) return { applicable: false, compliant: true, failureCode: null, run: null };
+  if (!CONTROLLED_SKILLS.has(promptEvent.expectedSkill)) {
+    return { applicable: false, compliant: true, failureCode: null, run: null, retiredSkill: promptEvent.expectedSkill };
+  }
   const candidates = [...(runs?.values?.() ?? [])].filter((run) => (
     run.skill === promptEvent.expectedSkill
       && run.sessionId === promptEvent.sessionId
@@ -374,13 +420,10 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
     return { applicable: true, compliant: true, failureCode: null, run };
   }
   if (["completed", "handoff", "aborted"].includes(run.status)) {
-    // [gpt] 2026-08-21：普通自背进度不是会话终点；同 turn 没有更晚的抽查 Run 时阻止最终回复漏掉首题。
-    if (run.skill === "daibei-pc"
-      && run.kind === "progress"
-      && run.end?.outcome === "completed"
-      && run.end?.phase === "progress") {
-      return { applicable: true, compliant: false, failureCode: "post_progress_probe_missing", run };
-    }
+    // [gpt] 2026-08-21 立、[claude] 2026-08-25 删：原本要求 progress 后同 turn 必须出现抽查 Run，
+    // 否则报 post_progress_probe_missing。云 2026-08-25 拍板当日抽查改成无 Run 的 stateless probe
+    // （不落任何账），这条闸从"催我别漏抽查"变成"每次正确执行都误报"，故整条移除。
+    // 抽查该不该做仍是硬规矩，只是它的证据不再是一条空账本 Run——见 beisong-blueprint「二·五」。
     const judgment = run.skill === "cuoti-fupan" && run.end?.outcome === "completed" && run.end?.phase === "result"
       ? run.steps?.judgment_output_verified
       : null;
@@ -398,7 +441,11 @@ export function evaluateTurnCompliance(promptEvent, runs = new Map(), { lastAssi
   };
 }
 
-export function createStopCheckedEvent(payload = {}, promptEvent, result, { continued = false, now = new Date() } = {}) {
+export function createStopCheckedEvent(payload = {}, promptEvent, result, {
+  continued = false,
+  now = new Date(),
+  turnCheckVisible = null,
+} = {}) {
   const hookIdentity = resolveHookIdentity(payload);
   const fallbackTurnId = hookIdentity.turnIdSource === "session_latest" ? promptEvent?.turnId ?? null : null;
   const identity = fallbackTurnId
@@ -412,6 +459,13 @@ export function createStopCheckedEvent(payload = {}, promptEvent, result, { cont
   // 旧 Run 与 missing_run 没有 purpose；为兼容既有学习遥测，均按 learning 计入。
   const runPurpose = RUN_PURPOSES.has(rawRunPurpose) ? rawRunPurpose : "learning";
   const compliancePurpose = result?.failureCode === "run_purpose_mismatch" ? "learning" : runPurpose;
+  const turnCheck = result?.turnCheck ? {
+    ...result.turnCheck,
+    // 默认兼容 Claude observe 已展示语义；enforce wrapper 对被 block 的草稿显式传 false。
+    visible: typeof turnCheckVisible === "boolean"
+      ? turnCheckVisible
+      : identity.producerHost === "claude" || Boolean(result.compliant),
+  } : null;
   return {
     ...eventBase({ event: "stop_checked", ...identity, now }),
     expectedSkill: promptEvent?.expectedSkill ?? null,
@@ -423,6 +477,7 @@ export function createStopCheckedEvent(payload = {}, promptEvent, result, { cont
     stopHookActive: Boolean(payload.stop_hook_active),
     runPurpose,
     compliancePurpose,
+    turnCheck,
   };
 }
 
@@ -529,11 +584,16 @@ export function summarizeSkillTurns(input = {}, {
   const turnLatencies = checked.flatMap(({ prompt, check }) => {
     if (!check) return [];
     const durationMs = new Date(check.observedAt).getTime() - new Date(prompt.observedAt).getTime();
-    return Number.isFinite(durationMs) && durationMs >= 0 ? [{ skill: prompt.expectedSkill, durationMs }] : [];
+    return Number.isFinite(durationMs) && durationMs >= 0 ? [{
+      skill: prompt.expectedSkill,
+      intent: check.turnCheck?.intent ?? null,
+      durationMs,
+    }] : [];
   });
   const summarizeLatency = (values) => ({
     samples: values.length,
     p50: percentile(values, 0.5),
+    p90: percentile(values, 0.9),
     p95: percentile(values, 0.95),
     max: values.length ? Math.max(...values) : null,
   });

@@ -42,11 +42,12 @@ This version has breaking changes — APIs, conventions, and file structure may 
   不存在"主系统／备用系统"之分。
 - Claude 侧九个现役入口在**仓库外** `~/.claude/skills/`（`resolveClaudeSkillsRoot()`），
   不进 git，由 `backup-memory.mjs` 第七个源「Claude 现役 Skills」灾备。
-- **两个宿主的守卫都不是万能兜底**：Codex 侧 Stop 不合规最多续跑一次即放行；
-  Claude 侧在 7 日验收观察期内为 observe-only（事件带 `guardProfile:"observe"`，
-  不注入路由提示、不阻断）。因此 `_shared/执行状态机.md` 里凡依赖宿主强制的步骤，
-  **必须在 skill 正文写成执行者自己要做的动作**，不能只靠宿主兜。
-  观察期结束后 Claude 侧升强制档，两侧对称，本条前半仍然成立。
+- **两个宿主的守卫都不是万能兜底**：Codex 与 Claude 侧 Stop 不合规都最多续跑一次，
+  第二次失败只落监控并放行以避免死循环；守卫异常也会 fail-open。因此
+  `_shared/执行状态机.md` 里凡依赖宿主强制的步骤，**必须在 skill 正文写成执行者自己要做的动作**，
+  不能只靠宿主兜。Claude 强制档事件带 `guardProfile:"enforce"`，仓库规范 handler 为
+  `claude-enforce@6`；实际宿主状态只认线上 handler 签出的字段。规范版变更后若尚未由云本人安装，
+  备份链应因字节漂移 fail-closed，不得把“仓库已改”冒充“线上已生效”。<!-- [gpt] 2026-08-26：Claude 守卫由 observe 升 enforce；课堂 meta 契约后规范升 v6。 -->
 - 两个宿主**不得同时改同一棵树**。Codex 在 `~/.codex/worktrees/` 下工作时，
   主树的同名未提交改动可能是**更旧的快照**；收口前逐文件比对，别整体提交。
 - Claude 侧**无权写** `.claude/settings.local.json` 与 `~/.claude/hooks/` 的接线，

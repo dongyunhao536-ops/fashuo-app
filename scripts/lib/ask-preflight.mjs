@@ -62,7 +62,46 @@ export function evaluatePreflight(hits) {
   return { kaoshi, jiangyi, zhenti, xinde, yixiao, legacyDoctrine, solid, verdict };
 }
 
-export function buildPreflightChecklist({ category, hits, queries = 0, updated = null }) {
+/**
+ * 把本 Run 的**多条** materials_checked 回执并成一份判权输入。
+ *
+ * [claude] 2026-08-27 新增。起因：`ask.mjs` 的 preflight 原先只读 `run.steps
+ * .materials_checked`，而 `skill-run.mjs:420` 的 steps 只保留最后一条回执。于是漏了
+ * 争点想补检索时，只跑增量会把回执覆盖成 `q:2|...` 的小数、判权可能从 3 轴掉档——
+ * 执行者被逼着重跑全量。2026-08-27 那次答疑就是这样跑了三次批检，第二、三次共赔掉
+ * 约 240 秒（脚本本身只要 0.4 秒，赔的全是读输出的时间）。
+ *
+ * 各轴取 **max 而不是 sum**：evidenceRef 记的是命中行数，不是命中行的集合，补检索时
+ * 重叠的争点会被重复计数，sum 等于把同一个源数两遍——那正是本文件 08-25 修掉的毛病。
+ * max 是可证成的下界；判权只看某轴是否 >0，取下界不放宽任何一轴。
+ */
+export function mergeMaterialHits(list) {
+  const items = (Array.isArray(list) ? list : [])
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item));
+  if (!items.length) return null;
+  const merged = { queries: 0, legacyDoctrine: null };
+  for (const item of items) {
+    for (const [key, raw] of Object.entries(item)) {
+      if (key === "legacyDoctrine") continue;
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) continue;
+      if (value > (merged[key] ?? 0)) merged[key] = value;
+    }
+  }
+  // 新旧格式的轴不可比：旧回执把《考试分析》与讲义并成一条 doctrine，拆不回来。只要
+  // 混进一条旧回执就整体降级为旧口径（两轴），宁可判权偏严，也不让任一条回执被无声丢掉。
+  if (items.some((item) => item.legacyDoctrine != null)) {
+    merged.legacyDoctrine = items.reduce((max, item) => {
+      const value = item.legacyDoctrine ?? (Number(item.kaoshi ?? 0) + Number(item.jiangyi ?? 0));
+      return Number.isFinite(value) && value > max ? value : max;
+    }, 0);
+    merged.kaoshi = 0;
+    merged.jiangyi = 0;
+  }
+  return merged;
+}
+
+export function buildPreflightChecklist({ category, hits, queries = 0, updated = null, receipts = 1 }) {
   const normalizedCategory = normalizeText(category, "问题归类（科目/章节/题型）");
   if (!PREFLIGHT_CATEGORIES.some((item) => normalizedCategory.includes(item))) {
     throw new AskPreflightError(
@@ -85,12 +124,16 @@ export function buildPreflightChecklist({ category, hits, queries = 0, updated =
     `5 辅助检索：做题心得 ${scored.xinde} 行｜易混库 ${scored.yixiao} 行（只提示争点，不进判权）`,
     `6 法律更新：${updated ? normalizeText(updated, "法律更新说明", { max: 200 }) : "与教材一致"}`,
     "━━━━━━━━━━",
-    `判权：★三轴（考试分析／讲义／真题）中 ${scored.solid} 轴实锤（共 ${queries} 组检索）→ ${describeVerdict(scored.verdict)}`,
+    `判权：★三轴（考试分析／讲义／真题）中 ${scored.solid} 轴实锤（${
+      receipts > 1
+        ? `已聚合本 Run ${receipts} 条检索回执、各轴取最大值，单次最多 ${queries} 组检索`
+        : `共 ${queries} 组检索`
+    }）→ ${describeVerdict(scored.verdict)}`,
   ];
   if (scored.legacyDoctrine == null && scored.kaoshi === 0 && scored.jiangyi > 0) {
     lines.push("⚠ 只有讲义有、《考试分析》没有：按口径顺序这类内容只能当加问，不得作为过关或销账条件。");
   }
-  return { checklist: lines.join("\n"), ...scored, category: normalizedCategory, queries };
+  return { checklist: lines.join("\n"), ...scored, category: normalizedCategory, queries, receipts };
 }
 
 export function describeVerdict(verdict) {

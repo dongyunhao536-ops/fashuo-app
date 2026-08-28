@@ -9,6 +9,13 @@ description: 用户上传、登记或汇报真实错题（包括进度附错题�
 
 目标是把真实错误讲透、留证，并用跨日迁移证明不再犯。当天新错只讲解与归类，不当天重考或销账。三条入口都使用 Skill Run，业务写回不能手工补签。
 
+## 执行边界与前置授权
+
+<!-- [gpt] 2026-08-26：按本次实跑审查采纳 3/5/6/7/8，先截断诊断误建 Run 与中途授权中断。 -->
+- 用户要求审查 Skill、检查 Run/Guard/数据一致性或分析性能时，属于系统诊断，不触发本 Skill，不建 `runPurpose=learning` 的 Skill Run，也不写学习事实；只用只读状态、证明与遥测命令。用户另行要求修改 Skill 或脚本时，转系统工程流程。
+- 当前会话第一次将作答、判定、错因或错题事实写入项目配置的 Supabase 前，若用户尚未明确授权，先用一句话说明写入内容与目的地并取得同意，再建立会写回的学习 Run。用户已在当前会话明确授权时不重复询问；用户撤回授权后立即停止后续远端写入。只读检索不借此扩大成写权限。
+- **旧题复检一题一 Run。** 每条 review Run 只冻结一个稳定 `T#`（可附其 `E#`）和一份通过 Gate 的题面；新错批次 intake 仍按批次 Run 处理，不受此单题限制。同一 review Run 一旦已有 `QUESTION_INTEGRITY_PASS`，不得换题或换草稿 hash；当前题必须依次完成判题证据卡、规则与涵摄解释、必要的错因认领、真实写回和 `checkpoint/end`，之后才能带 `--signal` 重规划并为下一题开新 Run。用户追问解释时继续收完当前 Run，不能先出下一题。
+
 ## Codex 正常执行快路径
 
 <!-- [gpt] 2026-08-13：正常路径信任受控脚本回执，避免为确认契约反复翻实现。 -->
@@ -39,11 +46,11 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 ## 复检流程
 
 1. 冻结稳定对象 ID，并读取事件原始栽点与 `proof.nextProbe`；相似度候选不能冒充映射事实。
-2. 用 `material` 或 `material-batch --run <SR-ID>` 核对核心规则。材料没讲就降信心，不能硬判。
+2. 把冻结对象涉及的独立核心术语合并成**一次** `material-batch --query <词1> [--refine <特征词>] ... --run <SR-ID>`，不要先试 `material`、零命中后再改跑 batch，也不要为同一题拆成多次顺序检索。确有零命中且不足以判题时，最多再做一次更具体的 batch。教材、讲义与考试分析的用户可见锚点统一写成 `第X页·行Y-Z`；查不到页码写 `页码未知·行Y-Z`，不得写 `P213，第9273行` 一类会被 Gate 拒绝的变体。材料没讲就降信心，不能硬判。
 3. 依 [命题判题规范.md](命题判题规范.md) 生成一份不泄答案的完整题面；运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen --hash <SHA256> --ref <T#/E#/排期>` 展示。
-4. 用户作答后保留其原答与依据，逐项判定。把判定、规则、涵摄、证据锚点与病根状态写入临时 JSON，运行 `node scripts/judgment-result.mjs check --file <判题结果.json> --run <SR-ID>`；只展示脚本返回的证据卡。教材、讲义或考试分析证据必须同时带页码（未知须明示）与行号；法条带条号，真题带年份与题号。pending 病根的确定性表述会被自动阻断。<!-- [gpt] 2026-08-13 -->
-5. 用 `cuoti.mjs review ... --run <SR-ID>` 记录真实结果并同步；CLI 会在进入 outbox 前强制核对判题卡与写回的 T#、结果和病根状态。提示后通过、原题复现、规则复述和同日订正不能冒充跨日 clean 迁移。<!-- [gpt] 2026-08-13 -->
-6. 业务与判题 Gate 回执成功后分流：`pass` 或无需认领病根时，证据门槛满足才 `absorb`，并用 `end --phase result --hash <证据卡SHA256>` 收口；`partial/fail + diagnosis=pending` 必须用 `checkpoint --phase diagnosis_question --hash <pending证据卡SHA256>` 原样展示证据卡并在**同一 Run**等待认领，禁止先 `end`。用户选择后执行同 Run 的 `cuoti.mjs classify ... --diagnosis confirmed|rejected --run <SR-ID>`。只有用户明确说“忘了/不认领”时，才能执行 `cuoti.mjs mark-untraceable <事件id> --run <SR-ID> --user-ref "user:<原话或回合引用>" --reason <明确决定>`；“下一题”、断网、Stop 或 Run 中止都不能代替用户决定，只在遥测层记中止。用户在该 Run 收口前改口并想起时，可对**同一关系**用原 Run 执行 `classify` 更正；跨 Run、政策批量封账和偷换 primary 关系仍为终态。候选只存当前 Run 临时 artifact，学习事实初始写 `unassessed`，不形成跨会话待办。untraceable 错题保持原 open/absorbed 状态，只正面考知识点、不针对猜测误解出题、不与老账并案。不能手签 `response_verified/diagnosis_recorded`，也不能改写 Gate 卡。<!-- [gpt] 2026-08-25 -->
+4. 用户作答后保留其原答与依据，逐项判定。把判定、规则、涵摄、证据锚点与病根状态写入临时 JSON——**字段骨架直接用 `skill-context` 开场输出【判题证据卡 Gate】里下发的那份模板**（同源于 `judgmentResultTemplate()`，完整字段与状态条件见 [数据契约.md](数据契约.md) 的「判题 artifact」一节）；不要翻 `scripts/` 实现，更不要照抄 `.local/legacy-judgments/` 里的历史文件——那批全部无 `schemaVersion`，现在一律阻断。<!-- [claude] 2026-08-26：schema 此前不在任何文档里，快路径又禁止翻实现，唯一出路是抄旧样例，而旧样例正是会被静默降级的那批。 -->运行 `node scripts/judgment-result.mjs check --file <判题结果.json> --run <SR-ID>`；必须原样展示脚本返回的整张证据卡，其中的结论、规则、涵摄和证据就是本题解释，不能只摘正确答案便推进下一题。教材、讲义或考试分析证据必须同时带页码（未知须明示）与行号；法条带条号，真题带年份与题号。`pass` 固定写 `diagnosis={status:"pending", claim:null, candidates:[], rejectedCandidates:[], recognitionRef:null}`，含义是“本轮不新增病根”，不是待认领；不得 `classify`。只有 `partial/fail + pending` 才给候选并询问错因。<!-- [gpt] 2026-08-13；[gpt] 2026-08-26：解释先于重规划，并固化 pass 单次写回快路径。 -->
+5. 用 `cuoti.mjs review ... --run <SR-ID>` 记录真实结果并同步；CLI 会在进入 outbox 前强制核对判题卡与写回的 T#、结果和病根状态。单主题排期的 review 才传 `--schedule <ID>`；整组排期中的单题 review **不得**传 `--schedule`，逐题留证后再用原完整 T# 集合和逐题证据引用统一结案。提示后通过、原题复现、规则复述和同日订正不能冒充跨日 clean 迁移。<!-- [gpt] 2026-08-13；[gpt] 2026-08-26：把既有整组硬闸提升到正常路径。 -->
+6. 业务与判题 Gate 回执成功后分流：`pass` 直接运行不带 `--pattern/--diagnosis` 的 `review`，只发生一次业务同步；证据门槛满足才 `absorb`，并用 `end --phase result --hash <证据卡SHA256>` 收口，不询问错因、不运行 `classify`。`partial/fail + diagnosis=pending` 必须用 `checkpoint --phase diagnosis_question --hash <pending证据卡SHA256>` 原样展示证据卡并在**同一 Run**等待认领，禁止先 `end`。用户选择后执行同 Run 的 `cuoti.mjs classify ... --diagnosis confirmed|rejected --run <SR-ID>`。只有用户明确说“忘了/不认领”时，才能执行 `cuoti.mjs mark-untraceable <事件id> --run <SR-ID> --user-ref "user:<原话或回合引用>" --reason <明确决定>`；“下一题”、断网、Stop 或 Run 中止都不能代替用户决定，只在遥测层记中止。用户在该 Run 收口前改口并想起时，可对**同一关系**用原 Run 执行 `classify` 更正；跨 Run、政策批量封账和偷换 primary 关系仍为终态。候选只存当前 Run 临时 artifact，学习事实初始写 `unassessed`，不形成跨会话待办。untraceable 错题保持原 open/absorbed 状态，只正面考知识点、不针对猜测误解出题、不与老账并案。不能手签 `response_verified/diagnosis_recorded`，也不能改写 Gate 卡。<!-- [gpt] 2026-08-25；[gpt] 2026-08-26：pass 禁止额外病根同步。 -->
 
 ## 决策与数据底线
 

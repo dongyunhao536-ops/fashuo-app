@@ -135,7 +135,6 @@ function actionableIssue(code) {
     skill_waiting_orphaned: "核对孤儿 waiting_user 的真实会话去向；继续时显式恢复原 Run，不再继续时按事实 aborted，禁止直接改监控数字。",
     skill_gate_failed: "按 run 的 missing 步骤补真实工具回执后重跑硬闸；不要手工签自动步骤。",
     daibei_phase_kind_mismatch: "按用户真实意图重建正确 Run：progress 只按 progress 收口，recall 必须进入 question/result，禁止用 plan 降级。",
-    daibei_post_progress_probe_missing: "自背进度已落账但未进入首道抽查；不要重复写流水，直接按当轮标准启动 question Run。",
     skill_startup_slow: "下钻各 Skill 的 context_loaded 耗时，优先合并重复读取或缩短非必要上下文。",
     skill_turn_guard_unreadable: "修复 Codex Skill 宿主守卫 JSONL；不要删除坏行来制造合规。",
     skill_turn_guard_error: "按 guardErrors 的 producerHost/hookEventName/failureCode 修复载荷或脚本；守卫 fail-open 期间不把覆盖记为正常。",
@@ -333,14 +332,6 @@ export function evaluateLearningFlow(facts = {}, options = {}) {
     count: number(skillExecution.counts.daibeiPhaseKindMismatches),
     message: `带背有 ${skillExecution.counts.daibeiPhaseKindMismatches} 个 Run 的 kind 与结束 phase 不一致，不能计为干净收口。`,
     examples: (skillExecution.daibeiPhaseKindMismatchExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.kind}->${item.phase}`),
-  });
-  if (number(skillExecution.counts?.daibeiPostProgressProbeMissing)) mergeIssue(issues, {
-    code: "daibei_post_progress_probe_missing",
-    severity: "warning",
-    domain: "skill_execution",
-    count: number(skillExecution.counts.daibeiPostProgressProbeMissing),
-    message: `带背有 ${skillExecution.counts.daibeiPostProgressProbeMissing} 次自背进度落账后超过宽限期仍未进入首道抽查。`,
-    examples: (skillExecution.daibeiPostProgressProbeMissingExamples ?? []).slice(0, 5).map((item) => `${item.runId}:${item.subject}/${item.targetRef}`),
   });
   if (number(skillExecution.counts?.invalidHandoffs)) mergeIssue(issues, {
     code: "skill_handoff_invalid",

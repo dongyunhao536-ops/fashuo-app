@@ -17,11 +17,14 @@ import {
   resolveOutlineChapter,
 } from "./lib/coverage-range.mjs";
 import {
+  endSkillRun,
   recordBusinessWriteback,
   recordDaibeiProgressWriteback,
   recordEnglishReadingWriteback,
+  startSkillRun,
   validateBusinessWriteback,
 } from "./lib/skill-run.mjs";
+import { resolveAutoRunTransaction } from "./lib/coach-auto-run.mjs";
 import {
   normalizeStudyActivity,
   recitationModeFromActivity,
@@ -90,7 +93,7 @@ async function flushOutbox() {
 // 记录一条学习日志（进度汇报）：先入 outbox，再立即同步；--stage 才延后
 async function log(args) {
   const f = parseFlags(args);
-  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw --run）");
+  if (!SUBJECTS.includes(f.subject)) return console.error("log 需要 --subject 刑法|民法|法理|宪法|法制史|英语（还可 --chapter --activity --accuracy --feeling --date --raw --run --auto-run daibei-progress）");
   const date = (f.date && f.date !== true) ? f.date : ymd;
   let activity;
   let recitationMode;
@@ -184,6 +187,42 @@ async function log(args) {
   const recordedRecitationMode = recitationMode
     ?? String(op.raw ?? "").match(/\[背诵方式=(带背|自背)\]/u)?.[1]
     ?? null;
+  // [claude] 2026-08-25：自动建 Run 放在覆盖闸与尝试元数据都通过之后。
+  // 顺序是有意的——COVERAGE_RANGE_UNCONFIRMED 必须先处理完，绝不能先建 Run 再让它挂着，
+  // 更不能因为 Run 已经建好就顺手把最新章当成全部覆盖。
+  let autoRun = null;
+  if (f["auto-run"] != null) {
+    try {
+      autoRun = resolveAutoRunTransaction({
+        autoRun: f["auto-run"],
+        run: f.run,
+        stage: Boolean(f.stage),
+        activity,
+        recitationMode: recordedRecitationMode,
+        chapter: f.chapter,
+      });
+    } catch (error) {
+      console.error(`❌ ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      const started = startSkillRun({
+        skill: autoRun.skill,
+        subject: f.subject,
+        kind: autoRun.kind,
+        targetRef: String(f.chapter),
+        entryMode: "direct",
+        source: "coach-log-auto-run",
+      });
+      f.run = started.runId;
+      console.log(`▶ 自动建 Run：${started.runId}（${autoRun.skill}/${autoRun.kind}，目标已冻结为「${f.chapter}」）`);
+    } catch (error) {
+      console.error(`❌ 自动建 Run 失败，未写入任何流水：${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+      return;
+    }
+  }
   const runValidation = f.run && f.run !== true
     ? validateBusinessWriteback({
       runId: String(f.run),
@@ -204,10 +243,13 @@ async function log(args) {
   for (const { stagedOp: item } of stagedPlans) {
     console.log(`${stagedPlans.length > 1 ? "   ·" : "⏳ 已暂存待同步·学习日志："} ${item.date} ${item.subject}${item.chapter ? " " + item.chapter : ""} ${item.activity}${item.accuracy != null ? " " + item.accuracy + "%" : ""}${item.feeling ? "（" + item.feeling + "）" : ""}${item.attempt ? " + 统一尝试分母" : ""}`);
   }
+  // --auto-run 与 --stage 已在准入判定处互斥，这里到不了自动建的 Run。
   if (f.stage) return console.log("（已按 --stage 仅暂存；稍后用 cuoti.mjs sync 重试。）");
   const report = await flushOutbox();
+  let writebackConfirmed = false;
   if (report && f.run && f.run !== true) {
     const succeeded = report.succeeded.find(({ op: item }) => item.operation_id === stagedOp.operation_id);
+    writebackConfirmed = Boolean(succeeded);
     if (succeeded) {
       const runId = String(f.run);
       // [gpt] 2026-08-12：英语阅读日志的篇目、会话键、分数必须与本 Run 的本地答案键实算一致；普通业务写回不得代签。
@@ -239,6 +281,43 @@ async function log(args) {
         });
       }
     }
+  }
+  // [claude] 2026-08-25：自动建的 Run 到此为止，刻意不自动收口。
+  // phase=progress 还差 response_verified，那是「末尾一致性复核」的人工断言——
+  // 由脚本代签就等于开场预签，正是状态机第四节明令禁止的事。
+  // 同理不自动起抽查 Run：出题要先选点、先查材料，脚本没资格替它决定问什么。
+  if (autoRun) {
+    const runId = String(f.run);
+    if (!writebackConfirmed) {
+      // 本命令建的 Run，本命令负责收尾。progress Run 目前没有"事后补签回执"的恢复桥，
+      // 留着它只会变成一条永远签不上 progress_recorded 的孤儿 Run，还会占住
+      // "一会话一条活跃 Run"的名额、把下一次 start 顶掉。
+      try {
+        endSkillRun({
+          runId,
+          outcome: "aborted",
+          abortReason: "auto-run 建立后同步未确认成功，回执无法补签，回收本 Run",
+          abortSource: "system",
+        });
+        console.error(`❌ 同步未确认成功，已回收自动建的 Run ${runId}（未留孤儿）。`);
+      } catch (error) {
+        console.error(`❌ 同步未确认成功，且回收 Run ${runId} 失败：${error instanceof Error ? error.message : String(error)}`);
+        console.error(`→ 请手工中止：node scripts/skill-run.mjs abort --run ${runId} --reason "同步失败" --source system`);
+      }
+      console.error(`⚠️ 先用 node --env-file=.env.local scripts/cuoti.mjs sync 确认 ${stagedOp.operation_id} 是否已落库，再决定是否重跑；直接重跑 --auto-run 会写出第二条流水。`);
+      process.exitCode = 1;
+      return;
+    }
+    console.log(`✅ Run ${runId} 已签 progress_recorded/writeback_verified，尚未收口。`);
+    console.log(`→ 核对无误后收口：node --env-file=.env.local scripts/skill-run.mjs end --run ${runId} --phase progress --done response_verified --ref "<可核对短引用>"`);
+    if (autoRun.kind === "progress") {
+      // [claude] 2026-08-25：这行是执行者真正会看到的下一步，优先级高于任何文档。
+      // 已废止的旧版写的是"再建 kind=recall-sameday 的首题 Run"（该方案已降为 legacy、不得新建），
+      // 留着会把刚砍掉的四次调用原样复现。
+      console.log("→ 收口后照常做当日抽查，但**不建 Run**：答案来源已可靠（有母版或本轮已核过同一材料）就直接跑一次不带 --run 的 question-integrity 出题（1 次调用）；来源不可靠先 material/material-batch 再跑 Gate（2 次调用）。不 checkpoint、不 end、四个账本一个都不写。");
+      console.log("→ 用户明确说只记录不抽查时，才改用 --auto-run daibei-progress-only。");
+    }
+    console.log(`⚠️ 后续失败请带 --run ${runId} 续跑，不要重跑整条 --auto-run：study_log 的 operation_id 每次新生成，重跑会写出第二条流水。`);
   }
 }
 

@@ -538,6 +538,34 @@ describe("带背分科风险", () => {
     expect(formatSkillContext(context)).toContain("隔离旧 Run SR-MIXED");
   });
 
+  it("到期带背排期绑定唯一 KP-ID 时直接选择知识点，不误判为模糊条目", () => {
+    // [gpt] 2026-08-28：稳定知识点 recall 是 daibei-pc 的正式写回路线，与 L#/X# 挂账路线并列。
+    const assessment = {
+      referenceDate: "2026-08-28", dates: {}, rounds: {},
+      reviewSchedule: {
+        overdue: [{
+          id: "R-JUDICIAL", date: "2026-08-17", priority: "P1", subject: "法理",
+          route: "daibei-pc", dimension: "recall", ref: "coach-engine:knowledge:FL-0057:2026-08-14", title: "司法三原则无提示复述",
+        }],
+        dueToday: [], upcoming: [], issues: [],
+      },
+      recite: { counts: {}, oldestActive: [], withdrawnReviewCandidates: [] },
+      coachEngine: { reciteMemory: { counts: {}, items: [] }, failurePortrait: { counts: {}, bySubject: [], byKnowledgePoint: [], unmatched: [] } },
+    };
+
+    const context = buildDaibeiContext({ assessment, studyLogs: [], subject: "法理" });
+    expect(context.selection).toMatchObject({
+      source: "due_schedule",
+      scheduleId: "R-JUDICIAL",
+      blocked: false,
+      targetId: "FL-0057",
+      targetKind: "knowledge",
+      kpId: "FL-0057",
+      reciteId: null,
+    });
+    expect(formatSkillContext(context)).toContain("知识点 FL-0057");
+  });
+
   it("到期排期没有唯一条目 ID 时阻断，不用同科自由题冲抵", () => {
     const assessment = {
       referenceDate: "2026-08-14", dates: {}, rounds: {},
@@ -550,7 +578,7 @@ describe("带背分科风险", () => {
     };
     const context = buildDaibeiContext({ assessment, studyLogs: [], subject: "法理" });
     expect(context.selection).toMatchObject({ source: "due_schedule", scheduleId: "R-FUZZY", blocked: true, reciteId: null });
-    expect(formatSkillContext(context)).toContain("BLOCK｜到期排期 R-FUZZY 未绑定唯一带背条目 ID");
+    expect(formatSkillContext(context)).toContain("BLOCK｜到期排期 R-FUZZY 未绑定唯一带背目标（挂账条目 ID 或 KP-ID）");
   });
 });
 

@@ -176,3 +176,60 @@ describe("复检题命题完整性 Gate", () => {
     }));
   });
 });
+
+// [claude] 2026-08-26：答案键延迟审计回归。
+// 事故：Gate 假定答案键只在教练侧，但 Claude Code 把工具调用渲染给用户看，
+// 命令行与文件写入一律可见，于是「展示前把答案交给 Gate」等于每道题自带答案。
+describe("答案键延迟审计", () => {
+  const choice = {
+    questionType: "single-choice",
+    stem: "【单选题】清代某案的初审机关是（　）\nA. 州县\nB. 府\nC. 督抚\nD. 刑部",
+  };
+
+  it("延迟态不再因缺答案键而 BLOCK，但其余闸门照旧", () => {
+    const audit = auditReviewQuestion({ ...choice, deferAnswerKey: true });
+    expect(audit.ok).toBe(true);
+    expect(audit.violations.map((item) => item.code)).not.toContain("missing-answer-key");
+    const noLabel = auditReviewQuestion({ ...choice, stem: choice.stem.replace("【单选题】", ""), deferAnswerKey: true });
+    expect(noLabel.ok).toBe(false);
+    expect(noLabel.violations.map((item) => item.code)).toContain("missing-choice-label");
+  });
+
+  it("声明延迟又同时把答案键传进来，直接 BLOCK", () => {
+    const audit = auditReviewQuestion({ ...choice, answerKey: "A", deferAnswerKey: true });
+    expect(audit.ok).toBe(false);
+    expect(audit.violations.map((item) => item.code)).toContain("deferred-answer-key-supplied");
+  });
+
+  it("非延迟态仍然强制答案键——延迟是显式选择，不是新默认", () => {
+    const audit = auditReviewQuestion(choice);
+    expect(audit.ok).toBe(false);
+    expect(audit.violations.map((item) => item.code)).toContain("missing-answer-key");
+  });
+
+  it("补审阶段照样抓出「题干只点正解集」这类间接污染", () => {
+    const contaminated = {
+      questionType: "single-choice",
+      stem: "【单选题】清代某案的初审机关是（　）\nA. 州县\nB. 府\nC. 督抚\nD. 刑部",
+      requirements: "重点说明 A 为何正确",
+      answerKey: "A",
+    };
+    expect(auditReviewQuestion(contaminated).ok).toBe(false);
+    // 这一条即使延迟也拦得住，因为「点名选项预判正误」不依赖答案键。
+    // 真正被推迟的只有需要比对答案集合的那部分，见下一条。
+    expect(auditReviewQuestion({ ...contaminated, answerKey: undefined, deferAnswerKey: true }).ok).toBe(false);
+  });
+
+  it("需要比对答案集合的那类污染，确实要等补审才抓得到", () => {
+    const subsetLeak = {
+      questionType: "multiple-choice",
+      stem: "【多选题】下列表述正确的有（　）\nA. 甲\nB. 乙\nC. 丙\nD. 丁",
+      requirements: "请分析选项A和选项C",
+      answerKey: "AC",
+    };
+    // 延迟态放行：没有答案键就不知道 A、C 恰好是正解集。
+    expect(auditReviewQuestion({ ...subsetLeak, answerKey: undefined, deferAnswerKey: true }).ok).toBe(true);
+    // 补审带上答案键，同一份题面立刻 BLOCK——所以延迟不等于免检。
+    expect(auditReviewQuestion(subsetLeak).ok).toBe(false);
+  });
+});

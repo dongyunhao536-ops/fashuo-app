@@ -26,7 +26,8 @@ function print(value) {
 }
 
 function promptContext(event) {
-  return `SKILL_EXECUTION_GUARD｜expected=${event.expectedSkill}｜turn=${event.turnId}。完整读取对应 SKILL.md；按其唯一入口建立或续用 Skill Run；自动步骤只认脚本回执；最终答复前必须 checkpoint/end，BLOCK 不得口头越过。`;
+  const intent = event.intentHint ? `｜intent=${event.intentHint}` : "";
+  return `SKILL_EXECUTION_GUARD｜expected=${event.expectedSkill}｜turn=${event.turnId}${intent}。完整读取对应 SKILL.md；按其唯一入口建立或续用 Skill Run；自动步骤只认脚本回执；最终答复前必须 checkpoint/end，BLOCK 不得口头越过。`;
 }
 
 function retryReason(event, result) {

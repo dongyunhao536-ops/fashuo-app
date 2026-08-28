@@ -41,6 +41,29 @@ const AUTO_STEPS = new Set([
 
 const RUN_PURPOSES = new Set(["learning", "diagnostic", "simulation"]);
 const ABORT_SOURCES = new Set(["user", "model", "guard", "system", "reconstruction", "unattributed"]);
+// [gpt] 2026-08-26：题目/错因认领等待超过 30 分钟后只回收 Run 生命周期，
+// 不把“没有继续作答”解释成用户 fail，也不补写任何学习事实。
+export const DEFAULT_WAITING_USER_IDLE_MINUTES = 30;
+// [claude] 2026-08-25：带背 recall 的写回路线在启动时就声明并按目标语法硬校验。
+// 两条路线的目标语法互不重叠——knowledge 只认 KP-ID（LS-0012），ledger 只认唯一带背挂账
+// 条目 ID（L12/X15/S6/M1）——所以这是类型校验，不是"看起来像不像"的命名启发式。
+// 只按命名启发式判会同时犯两种错：误伤合法的 ledger 复检，又挡不住拿假 KP 串走错路线。
+const DAIBEI_RESULT_ROUTES = new Set(["knowledge", "ledger", "none"]);
+const KP_ID_PATTERN = /^[A-Z]{2,4}-\d{4}$/u;
+
+export function classifyDaibeiTarget(targetRef) {
+  const ref = String(targetRef ?? "").trim();
+  const upper = ref.toUpperCase();
+  const kpId = KP_ID_PATTERN.test(upper) ? upper : null;
+  const recite = parseDaibeiTargetRef(ref);
+  const reciteId = recite.stable ? recite.reciteId : null;
+  return {
+    ref: ref || null,
+    kpId,
+    reciteId,
+    routes: [kpId ? "knowledge" : null, reciteId ? "ledger" : null].filter(Boolean),
+  };
+}
 
 const MANUAL_STEPS = new Set([
   "target_frozen",
@@ -87,6 +110,13 @@ export const SKILL_WORKFLOWS = Object.freeze({
     // [gpt] 2026-08-21：明确章节的自背汇报走轻量写回，不为一条流水加载全盘画像。
     progress: ["target_frozen", "progress_recorded", "writeback_verified", "response_verified"],
     question: ["target_frozen", "materials_checked", "question_integrity_pass"],
+    // [claude] 2026-08-25：⚠️ legacy，仅供历史 Run 回放兼容，不得新建。
+    // 上午的中间方案：当日抽查不落账、永远签不出 result_recorded，于是给它一个专属收口阶段。
+    // 同日下午云拍板砍掉整个审计层——当日抽查改成完全不建 Run 的 stateless probe，
+    // 本阶段与 kind=recall-sameday 一起降为 legacy。保留的只是回放兼容与防御性兜底：
+    // 万一旧调用或错误路由仍建了这种 Run，两条写回路都会被 DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK 拒绝，
+    // 且 probe 与 recall-sameday 之间的双向锁仍成立（见 finishSkillRun 的闸）。
+    probe: ["target_frozen", "materials_checked", "question_integrity_pass", "response_verified"],
     result: ["target_frozen", "materials_checked", "question_integrity_pass", "result_recorded", "writeback_verified", "response_verified"],
   }),
   "lunshu-pc": Object.freeze({
@@ -188,7 +218,7 @@ function normalizedComparableText(value) {
   return String(value ?? "").normalize("NFC").replace(/\s+/gu, "").trim();
 }
 
-// [gpt] 2026-08-21：进度流水只能给 daibei progress Run 签回执，并绑定同科同章与自背方式。
+// [gpt] 2026-08-28：进度流水绑定同科同章、规范背诵活动及真实的自背/带背方式。
 export function validateDaibeiProgressWriteback({
   runId,
   subject,
@@ -213,8 +243,8 @@ export function validateDaibeiProgressWriteback({
   if (String(activity ?? "").trim() !== "背诵") {
     throw new Error(`DAIBEI_PROGRESS_ACTIVITY_INVALID｜进度流水必须是 activity=背诵，实际 ${activity ?? "空"}`);
   }
-  if (String(recitationMode ?? "").trim() !== "自背") {
-    throw new Error(`DAIBEI_PROGRESS_MODE_INVALID｜用户自背汇报必须保留 [背诵方式=自背]，实际 ${recitationMode ?? "空"}`);
+  if (!["自背", "带背"].includes(String(recitationMode ?? "").trim())) {
+    throw new Error(`DAIBEI_PROGRESS_MODE_INVALID｜背诵进度必须保留真实的 [背诵方式=自背|带背]，实际 ${recitationMode ?? "空"}`);
   }
   return run;
 }
@@ -353,6 +383,7 @@ export function reconstructSkillRuns(events = []) {
       referenceDate: null,
       entryMode: null,
       runPurpose: null,
+      resultRoute: null,
       producerHost: null,
       turnIdSource: null,
       identityState: null,
@@ -382,6 +413,7 @@ export function reconstructSkillRuns(events = []) {
       current.referenceDate = event.referenceDate ?? event.beijingDate;
       current.entryMode = event.entryMode ?? null;
       current.runPurpose = event.runPurpose ?? "unknown";
+      current.resultRoute = event.resultRoute ?? null;
       current.startedAt = event.observedAt;
       current.status = "active";
     } else if (event.event === "step") {
@@ -399,6 +431,29 @@ export function reconstructSkillRuns(events = []) {
       // [claude] 2026-08-24：写回真成功后，之前的延迟标记不再成立。
       if (event.step === "writeback_verified" && event.status === "pass") current.deferredWriteback = null;
       if (!current.end) current.status = "active";
+    // [gpt] 2026-08-26：shouke-pc 已撤下；以下分支只为历史授课事件提供只读重建，
+    // 不再暴露写入 API，也不让旧 Run 参与宿主路由或 Stop 守卫。
+    } else if (event.event === "turn_prepared") {
+      current.shouke ??= { turns: [], acknowledgements: [], understandingPins: [], pendingTurn: null };
+      current.shouke.turns.push(event);
+      current.shouke.pendingTurn = event;
+      if (!current.end) current.status = "waiting_delivery";
+    } else if (event.event === "unit_acknowledged") {
+      current.shouke ??= { turns: [], acknowledgements: [], understandingPins: [], pendingTurn: null };
+      current.shouke.acknowledgements.push(event);
+      current.shouke.pendingTurn = null;
+      if (!current.end) current.status = "active";
+    } else if (event.event === "understanding_pin_checked") {
+      current.shouke ??= { turns: [], acknowledgements: [], understandingPins: [], pendingTurn: null };
+      current.shouke.understandingPins ??= [];
+      current.shouke.understandingPins.push(event);
+      if (!current.end) current.status = "active";
+    } else if (event.event === "classroom_meta_recorded") {
+      // [gpt] 2026-08-26：课堂操作反馈只证明本轮使用了非正文通道；不清 pendingTurn、
+      // 不改变 waiting_delivery，也不产生学习、游标或掌握状态。
+      current.shouke ??= { turns: [], acknowledgements: [], understandingPins: [], metaEvents: [], pendingTurn: null };
+      current.shouke.metaEvents ??= [];
+      current.shouke.metaEvents.push(event);
     } else if (event.event === "writeback_deferred") {
       // [claude] 2026-08-24：证据已进本地 outbox、只是远端没同步上。
       // 这既不是"完成"也不是"放弃"，此前没有这一档，断网只能被迫记成 aborted。
@@ -424,6 +479,11 @@ export function reconstructSkillRuns(events = []) {
         handoffReason: event.handoffReason ?? null,
         abortReason: event.outcome === "aborted" ? event.abortReason ?? "unattributed" : null,
         abortSource: event.outcome === "aborted" ? event.abortSource ?? "unattributed" : null,
+        source: event.source ?? null,
+        timeoutMinutes: event.timeoutMinutes ?? null,
+        idleSince: event.idleSince ?? null,
+        idleMinutes: event.idleMinutes ?? null,
+        reapedByHost: event.reapedByHost ?? null,
         // 事件自带的标记优先；老事件没有这个字段时回落到运行期状态。
         deferredWriteback: event.deferredWriteback ?? current.deferredWriteback ?? null,
         observedAt: event.observedAt,
@@ -433,6 +493,142 @@ export function reconstructSkillRuns(events = []) {
     runs.set(event.runId, current);
   }
   return runs;
+}
+
+function normalizedWaitingIdleMinutes(value) {
+  const minutes = Number(value);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 24 * 60) {
+    throw new Error("waiting_user idleMinutes 必须是 1-1440 的整数");
+  }
+  return minutes;
+}
+
+function waitingRunIdleMinutes(run, now) {
+  const nowMs = new Date(timestamp(now)).getTime();
+  const lastEventMs = new Date(run?.lastEventAt).getTime();
+  if (!Number.isFinite(lastEventMs)) return null;
+  return (nowMs - lastEventMs) / 60000;
+}
+
+function appendWaitingUserTimeout(run, {
+  file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
+  idleMinutes = DEFAULT_WAITING_USER_IDLE_MINUTES,
+} = {}) {
+  const threshold = normalizedWaitingIdleMinutes(idleMinutes);
+  const actualIdleMinutes = waitingRunIdleMinutes(run, now);
+  if (run?.end || run?.status !== "waiting_user" || actualIdleMinutes == null || actualIdleMinutes < threshold) return null;
+  const base = eventBase({
+    runId: run.runId,
+    event: "ended",
+    now,
+    sessionId: run.sessionId,
+    turnId: latestRunTurn(run),
+  });
+  const event = appendEvent({
+    ...base,
+    // Run 的 producerHost 表示原业务宿主；回收动作的实际执行宿主另留 reapedByHost，
+    // 避免 Codex 回收 Claude Run 后把整条 Run 误归为 Codex。
+    producerHost: run.producerHost ?? base.producerHost,
+    reapedByHost: base.producerHost,
+    skill: run.skill,
+    phase: null,
+    outcome: "aborted",
+    abortReason: `waiting_user ${threshold} 分钟无新事件，系统自动收口；未记录用户 fail、未确认错因、未改写学习事实`,
+    abortSource: "system",
+    source: "skill-run-idle-timeout",
+    idleSince: run.lastEventAt,
+    idleMinutes: Math.floor(actualIdleMinutes),
+    timeoutMinutes: threshold,
+  }, file);
+  return {
+    runId: run.runId,
+    skill: run.skill,
+    producerHost: run.producerHost,
+    idleSince: run.lastEventAt,
+    idleMinutes: Math.floor(actualIdleMinutes),
+    timeoutMinutes: threshold,
+    eventId: event.eventId,
+  };
+}
+
+/**
+ * [claude] 2026-08-26：用户仍在场时给 waiting_user Run 续命。
+ *
+ * 起因：`waitingRunIdleMinutes()` 数的是**最后一条 Run 遥测事件**，而用户在聊天里回话
+ * 不产生任何 Run 事件。所以 30 分钟阈值的真实语义是「模型 30 分钟没跑脚本」，
+ * 不是云以为的「用户 30 分钟没操作」——2026-08-26 一个 waiting_user Run 就因为中途
+ * 岔开去排查而 idle 132 分钟被回收。本函数由宿主 UserPromptSubmit 调用，把语义补齐。
+ *
+ * 三条约束，防止它变成「永不过期」的后门：
+ *   - 只碰**同一 session** 里已 `waiting_user` 且未收口的 Run，绝不新建、绝不复活已 end 的；
+ *   - 只写 `event:"user_active"` 心跳。该事件名不在 reconstruct 的任何分支里，只更新
+ *     `lastEventAt`，不签 step、不改 status/phase、不进 checkpoints，因此不构成合规证据；
+ *   - 仍有绝对上限：进入 waiting_user 起超过 `maxWaitMinutes` 就不再续，交回空闲回收，
+ *     以保留「杜绝 Run 永久悬空」这条原始保证。
+ */
+export const DEFAULT_WAITING_USER_MAX_WAIT_MINUTES = 360;
+
+export function touchWaitingRunsForUserActivity({
+  sessionId,
+  file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
+  maxWaitMinutes = DEFAULT_WAITING_USER_MAX_WAIT_MINUTES,
+} = {}) {
+  if (!sessionId) return { touched: [], skipped: [] };
+  const parsed = readSkillRunEvents(file);
+  if (parsed.issues.length) return { touched: [], skipped: [] };
+  const runs = reconstructSkillRuns(parsed.events);
+  const touched = [];
+  const skipped = [];
+  for (const run of runs.values()) {
+    if (run.end || run.status !== "waiting_user" || run.sessionId !== sessionId) continue;
+    const waitingSince = [...run.events].reverse()
+      .find((event) => event.event === "checkpoint_passed")?.observedAt ?? run.startedAt;
+    const waitedMinutes = (now.getTime() - new Date(waitingSince).getTime()) / 60000;
+    if (Number.isFinite(waitedMinutes) && waitedMinutes >= maxWaitMinutes) {
+      skipped.push({ runId: run.runId, waitedMinutes: Math.floor(waitedMinutes), reason: "max_wait_reached" });
+      continue;
+    }
+    const base = eventBase({ runId: run.runId, event: "user_active", now, sessionId: run.sessionId, turnId: latestRunTurn(run) });
+    appendEvent({
+      ...base,
+      producerHost: run.producerHost ?? base.producerHost,
+      skill: run.skill,
+      source: "user-prompt-heartbeat",
+      idleSince: run.lastEventAt,
+      waitedMinutes: Number.isFinite(waitedMinutes) ? Math.floor(waitedMinutes) : null,
+      maxWaitMinutes,
+    }, file);
+    touched.push({ runId: run.runId, skill: run.skill, idleSince: run.lastEventAt });
+  }
+  return { touched, skipped };
+}
+
+// [gpt] 2026-08-26：这是唯一允许跨 session 回收 Run 的入口。它只接受已经处于
+// waiting_user 且超过阈值的 Run，写入 system/aborted 终态，不经过普通业务写入路径。
+export function expireIdleWaitingSkillRuns({
+  file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
+  idleMinutes = DEFAULT_WAITING_USER_IDLE_MINUTES,
+} = {}) {
+  const threshold = normalizedWaitingIdleMinutes(idleMinutes);
+  const parsed = readSkillRunEvents(file);
+  if (parsed.issues.length) throw new Error(`Skill Run 遥测文件有 ${parsed.issues.length} 个结构错误，拒绝自动收口`);
+  const runs = reconstructSkillRuns(parsed.events);
+  const expired = [];
+  for (const run of runs.values()) {
+    const result = appendWaitingUserTimeout(run, { file, now, idleMinutes: threshold });
+    if (result) expired.push(result);
+  }
+  return { checked: runs.size, timeoutMinutes: threshold, expired };
+}
+
+function assertWaitingRunNotTimedOut(run, { file, now } = {}) {
+  const expired = appendWaitingUserTimeout(run, { file, now });
+  if (expired) {
+    throw new Error(`SKILL_RUN_IDLE_TIMEOUT｜${run.runId} 已等待超过 ${expired.timeoutMinutes} 分钟并由系统安全收口；如需继续，请为当前题目新建 Run`);
+  }
 }
 
 // [claude] 2026-08-24：补同步要按 Run 自身的 skill 决定门槛，调用方得先读得到 Run。
@@ -463,6 +659,46 @@ function assertEventTurn(run) {
   return { sessionId: run.sessionId ?? reference.sessionId, turnId: reference.turnId ?? run.turnId };
 }
 
+// [claude] 2026-08-25：在 start 就把"这个 Run 将来往哪写"钉死并校验目标类型。
+// 事故依据：同日一个 recall Run 的 target 冻成章节级，一路跑完材料、Gate、出题、判分，
+// 直到写回才被 DAIBEI_ATTEMPT_TARGET_MISMATCH 炸掉，整条链返工。闸装在末端等于没装。
+function resolveDaibeiResultRoute({ kind, targetRef, declared }) {
+  // recall-sameday 分支是 legacy 兜底，仅供历史 Run 回放，不得新建；当日抽查已改成不建 Run。
+  if (kind === "recall-sameday") {
+    if (declared && declared !== "none") {
+      throw new Error(`DAIBEI_SAMEDAY_ROUTE_FORCED｜recall-sameday 当日抽查不落账，写回路线只能是 none，收到 ${declared}`);
+    }
+    return "none";
+  }
+  if (kind !== "recall") {
+    if (declared && declared !== "none") {
+      throw new Error(`DAIBEI_ROUTE_NOT_APPLICABLE｜kind=${kind ?? "空"} 不写知识点或挂账结果，不要声明 --result-route ${declared}`);
+    }
+    return declared ?? null;
+  }
+  const classified = classifyDaibeiTarget(targetRef);
+  const route = declared ?? (classified.routes.length === 1 ? classified.routes[0] : null);
+  if (!route) {
+    throw new Error(
+      `DAIBEI_RESULT_ROUTE_REQUIRED｜kind=recall 的目标“${classified.ref ?? "空"}”既不是 KP-ID 也不是唯一带背挂账条目 ID，`
+      + "两条写回路线都走不通，这个 Run 无法收口。\n补救：\n"
+      + "  - 知识点抽查 → --target <KP-ID，如 LS-0012> [--result-route knowledge]\n"
+      + "  - 挂账条目复检 → --target <条目ID，如 L12> [--result-route ledger]\n"
+      + "  - 当天进度后的顺手抽查 → 根本不要建 Run（stateless probe）：直接跑不带 --run 的 question-integrity 出题；答案来源不可靠时先跑不带 --run 的 material/material-batch",
+    );
+  }
+  if (route === "knowledge" && !classified.kpId) {
+    throw new Error(`DAIBEI_ROUTE_TARGET_MISMATCH｜--result-route knowledge 要求 --target 是 KP-ID，收到“${classified.ref ?? "空"}”`);
+  }
+  if (route === "ledger" && !classified.reciteId) {
+    throw new Error(`DAIBEI_ROUTE_TARGET_MISMATCH｜--result-route ledger 要求 --target 含唯一带背挂账条目 ID，收到“${classified.ref ?? "空"}”`);
+  }
+  if (route === "none") {
+    throw new Error("DAIBEI_ROUTE_NONE_REQUIRED_WRITEBACK｜kind=recall 必须真实写回；不落账的当日抽查根本不建 Run，直接跑不带 --run 的 question-integrity 出题");
+  }
+  return route;
+}
+
 export function startSkillRun({
   skill,
   subject = null,
@@ -477,13 +713,22 @@ export function startSkillRun({
   entryMode = null,
   targetRef = null,
   runPurpose = "learning",
+  resultRoute = null,
 } = {}) {
   const normalizedSkill = assertSkill(skill);
   const normalizedSubject = normalizeStudySubject(subject);
   const normalizedTargetRef = safeToken(targetRef, "targetRef", { max: 160 });
+  const normalizedKind = safeToken(kind, "kind", { max: 40 });
   let normalizedEntryMode = safeToken(entryMode, "entryMode", { max: 20 });
   const normalizedRunPurpose = safeToken(runPurpose, "runPurpose", { required: true, max: 20 });
   if (!RUN_PURPOSES.has(normalizedRunPurpose)) throw new Error("runPurpose 只接受 learning|diagnostic|simulation");
+  let normalizedResultRoute = safeToken(resultRoute, "resultRoute", { max: 20 })?.toLowerCase() ?? null;
+  if (normalizedResultRoute && !DAIBEI_RESULT_ROUTES.has(normalizedResultRoute)) {
+    throw new Error("RESULT_ROUTE_INVALID｜resultRoute 只接受 knowledge|ledger|none");
+  }
+  if (normalizedSkill !== "daibei-pc" && normalizedResultRoute) {
+    throw new Error("RESULT_ROUTE_NOT_APPLICABLE｜--result-route 只用于 daibei-pc 的 kind=recall");
+  }
   if (normalizedSkill === "daibei-pc") {
     assertStudySubject(normalizedSubject);
     normalizedEntryMode ??= normalizedTargetRef ? "direct" : null;
@@ -494,6 +739,11 @@ export function startSkillRun({
     if (normalizedEntryMode === "direct" && !normalizedTargetRef) {
       throw new Error("DAIBEI_TARGET_REQUIRED｜轻量带背必须提供稳定章节、设问或条目 --target");
     }
+    normalizedResultRoute = resolveDaibeiResultRoute({
+      kind: normalizedKind,
+      targetRef: normalizedTargetRef,
+      declared: normalizedResultRoute,
+    });
   }
   const observedAt = timestamp(now);
   // [gpt] 2026-08-12：先解析宿主会话再查冲突；不能因调用方省略 --session 就绕过“一会话一条活跃 Run”。
@@ -504,6 +754,9 @@ export function startSkillRun({
     throw new Error("SKILL_IDENTITY_REQUIRED｜Claude 宿主缺少 FASHUO_SESSION_ID/session_id；禁止新建可能串写学习事实的 Run");
   }
   const resolvedRunId = runId ?? `SR-${beijingDate(now).replaceAll("-", "")}-${observedAt.slice(11, 19).replaceAll(":", "")}-${randomUUID().slice(0, 8)}`;
+  // [gpt] 2026-08-26：下一次启动任何 Skill 时顺手回收跨宿主遗留的超时等待，
+  // 使忘记返回的 Run 不再永久悬空，也不会触碰普通跨 session 写入权限。
+  expireIdleWaitingSkillRuns({ file, now });
   const existing = readSkillRunEvents(file);
   if (existing.issues.length) throw new Error(`Skill Run 遥测文件有 ${existing.issues.length} 个结构错误，拒绝新建运行`);
   const existingRuns = reconstructSkillRuns(existing.events);
@@ -516,11 +769,12 @@ export function startSkillRun({
     ...eventBase({ runId: resolvedRunId, event: "started", now, sessionId: resolvedSessionId, turnId: resolvedTurnId }),
     skill: normalizedSkill,
     subject: safeToken(normalizedSubject, "subject", { max: 40 }),
-    kind: safeToken(kind, "kind", { max: 40 }),
+    kind: normalizedKind,
     referenceDate: safeToken(referenceDate, "referenceDate", { max: 20 }) ?? beijingDate(now),
     source: safeToken(source, "source", { max: 60 }) ?? "skill-run",
     entryMode: normalizedEntryMode,
     runPurpose: normalizedRunPurpose,
+    resultRoute: normalizedResultRoute,
   }, file);
   if (normalizedTargetRef) {
     appendEvent({
@@ -539,11 +793,16 @@ export function startSkillRun({
 }
 
 function daibeiRecoverySummary(run) {
-  const target = parseDaibeiTargetRef(run.steps.target_frozen?.evidenceRef);
-  const result = parseDaibeiResultRef(run.steps.result_recorded?.evidenceRef);
+  // [gpt] 2026-08-28：跨日带背既可冻结挂账条目，也可冻结稳定 KP-ID；恢复器必须与启动路由一致。
+  const target = classifyDaibeiTarget(run.steps.target_frozen?.evidenceRef);
+  const ledgerResult = parseDaibeiResultRef(run.steps.result_recorded?.evidenceRef);
+  const knowledgeResult = parseDaibeiKnowledgeAttemptRef(run.steps.result_recorded?.evidenceRef);
+  const stable = target.routes.length === 1;
   const resultState = !run.steps.result_recorded
     ? "none"
-    : result && target.stable && result.reciteId === target.reciteId
+    : target.kpId && knowledgeResult?.kpId === target.kpId
+      ? "consistent"
+      : target.reciteId && ledgerResult?.reciteId === target.reciteId
       ? "consistent"
       : "mismatch";
   return {
@@ -551,13 +810,16 @@ function daibeiRecoverySummary(run) {
     subject: normalizeStudySubject(run.subject),
     status: run.status,
     targetRef: target.ref,
+    targetId: target.kpId ?? target.reciteId,
+    targetKind: target.kpId ? "knowledge" : target.reciteId ? "ledger" : null,
+    kpId: target.kpId,
     reciteId: target.reciteId,
     startedAt: run.startedAt,
     lastEventAt: run.lastEventAt,
     sessionId: run.sessionId,
-    stable: target.stable,
+    stable,
     resultState,
-    resumable: run.status === "waiting_user" && target.stable && resultState === "none",
+    resumable: run.status === "waiting_user" && stable && resultState === "none",
   };
 }
 
@@ -643,6 +905,7 @@ function recordSkillStep({
   now = new Date(),
 } = {}) {
   const run = loadRun(runId, file);
+  assertWaitingRunNotTimedOut(run, { file, now });
   if (run.end) throw new Error(`Skill Run 已结束：${runId}`);
   assertEventTurn(run);
   if (expectedSkill && run.skill !== expectedSkill) throw new Error(`Skill Run 路由不一致：预期 ${expectedSkill}，实际 ${run.skill}`);
@@ -682,6 +945,16 @@ function recordSkillStep({
   }
   if (["question_integrity_pass", "judgment_output_verified"].includes(normalizedStep) && status === "pass" && (!hash || !normalizedArtifactLength)) {
     throw new Error(`${normalizedStep} 必须带同一展示草稿的 sha256 与长度，禁止无草稿回执`);
+  }
+  // [gpt] 2026-08-26：旧题复检一题一 Run。题面一旦通过 Gate 即冻结，禁止在同一 Run
+  // 覆盖成第二份草稿，把上一题结果、下一题题面和同一组自动步骤串在一起。
+  if (run.skill === "cuoti-fupan" && normalizedStep === "question_integrity_pass"
+    && run.steps.question_integrity_pass?.status === "pass") {
+    const existingQuestion = run.steps.question_integrity_pass;
+    if (existingQuestion.artifactHash !== hash || existingQuestion.artifactLength !== normalizedArtifactLength) {
+      throw new Error("CUOTI_ONE_QUESTION_PER_RUN｜本 Run 已绑定另一份 PASS 题面；先完成解释、错因认领、写回与收口，再为下一题新建 Run");
+    }
+    return run;
   }
   const normalizedCandidateHash = safeToken(candidateHash, "candidateHash", { max: 64 });
   if (normalizedCandidateHash && !/^[a-f0-9]{64}$/u.test(normalizedCandidateHash)) {
@@ -827,6 +1100,7 @@ export function recordWritebackDeferred({
   now = new Date(),
 } = {}) {
   const run = loadRun(runId, file);
+  assertWaitingRunNotTimedOut(run, { file, now });
   if (run.end) throw new Error(`Skill Run 已结束，不能再记延迟写回：${runId}`);
   if (expectedSkill && run.skill !== expectedSkill) {
     throw new Error(`Skill Run 路由不一致：预期 ${expectedSkill}，实际 ${run.skill}`);
@@ -874,7 +1148,7 @@ export function recordBusinessWriteback({
   return run;
 }
 
-// [gpt] 2026-08-21：自背进度写回使用独立步骤，避免触发带背复检结果的条目 ID 一致性校验。
+// [gpt] 2026-08-28：自背/带背进度写回使用独立步骤，不冒充复检结果或触发条目 ID 校验。
 export function recordDaibeiProgressWriteback({
   runId,
   subject,
@@ -914,8 +1188,18 @@ export function recordDaibeiKnowledgeAttemptWriteback({
 } = {}) {
   const requiredSteps = ["target_frozen", "materials_checked", "question_integrity_pass"];
   const run = assertSkillRunPrerequisites({ runId, expectedSkill: "daibei-pc", steps: requiredSteps, file });
+  // [claude] 2026-08-25：当日进度后的抽查按云拍板不落任何账，所以 recall-sameday 单独给一句
+  // 说得清的拒绝理由——否则执行者只会看到“要求 kind=recall”，转头去新建一个 recall Run 把它写进去。
+  // ⚠️ legacy 防御性兜底：recall-sameday/probe 已废止、不得新建（2026-08-25 云拍板改为无 Run 的 stateless probe），此处仅拦误建的 Run。
+  if (run.kind === "recall-sameday") {
+    throw new Error("DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK｜当天汇报进度后的抽查不落账（2026-08-25 云拍板）：不写 learning_attempt/knowledge_evidence，也不挂带背台账与错题本；讲透即可，用 --phase probe 收口。跨日冷复检请另建 kind=recall 的 Run。");
+  }
   if (run.kind !== "recall") {
     throw new Error(`DAIBEI_ATTEMPT_KIND_REQUIRED｜知识点抽查要求 kind=recall，实际 ${run.kind ?? "空"}`);
+  }
+  // [claude] 2026-08-25：路线在 start 已声明，这里只做二次确认，防止拿 ledger Run 串写知识点。
+  if (run.resultRoute && run.resultRoute !== "knowledge") {
+    throw new Error(`DAIBEI_ROUTE_MISMATCH｜本 Run 启动时声明的写回路线是 ${run.resultRoute}，不能改走 knowledge`);
   }
   const normalizedKpId = safeToken(kpId, "kpId", { required: true, max: 40 }).toUpperCase();
   const frozenTarget = safeToken(run.steps.target_frozen?.evidenceRef, "target_frozen", { required: true, max: 200 }).toUpperCase();
@@ -986,6 +1270,10 @@ function assertCuotiJudgmentConsistency(run) {
   if (recorded.targetRef !== judged.targetRef || recorded.result !== judged.result) {
     throw new Error(`错题判题卡与业务写回不一致：${judged.targetRef}:${judged.result} != ${recorded.targetRef}:${recorded.result}`);
   }
+  // [gpt] 2026-08-26：历史或旁路 artifact 也不能让 pass 带终态病根收口。
+  if (judged.result === "pass" && (judged.diagnosisStatus !== "pending" || recorded.diagnosisStatus !== "pending")) {
+    throw new Error("PASS_DIAGNOSIS_NOT_APPLICABLE｜本题通过只接受 diagnosis=pending 的单次 review 写回，禁止 classify 或病根终态");
+  }
   if (["partial", "fail"].includes(judged.result) && judged.diagnosisStatus === "pending") {
     if (recorded.diagnosisStatus !== "pending") {
       throw new Error(`错题判题卡病根状态与复检写回不一致：pending != ${recorded.diagnosisStatus}`);
@@ -1051,8 +1339,10 @@ export function assertSkillRunPrerequisites({
   expectedSkill = null,
   steps = [],
   file = DEFAULT_SKILL_RUN_FILE,
+  now = new Date(),
 } = {}) {
   const run = loadRun(runId, file);
+  assertWaitingRunNotTimedOut(run, { file, now });
   if (run.end) throw new Error(`Skill Run 已结束：${runId}`);
   assertEventTurn(run);
   if (expectedSkill && run.skill !== expectedSkill) throw new Error(`Skill Run 路由不一致：预期 ${expectedSkill}，实际 ${run.skill}`);
@@ -1076,6 +1366,15 @@ export function assertDaibeiTargetWritebackReady({
     steps: ["target_frozen", "materials_checked", "question_integrity_pass"],
     file,
   });
+  // [claude] 2026-08-25：ledger 这条路原本完全不看 kind/route——recall-sameday 的 Run 照样能从
+  // 这里把结果写进带背台账，等于"不落账"只堵住了 knowledge 一条路。两条路一起堵。
+  // ⚠️ legacy 防御性兜底：recall-sameday/probe 已废止、不得新建（2026-08-25 云拍板改为无 Run 的 stateless probe），此处仅拦误建的 Run。
+  if (run.kind === "recall-sameday") {
+    throw new Error("DAIBEI_SAMEDAY_PROBE_NO_WRITEBACK｜当天汇报进度后的抽查不落账（2026-08-25 云拍板）：带背台账同样不写，讲透即可，用 --phase probe 收口。跨日复检请另建 kind=recall + --result-route ledger 的 Run。");
+  }
+  if (run.resultRoute && run.resultRoute !== "ledger") {
+    throw new Error(`DAIBEI_ROUTE_MISMATCH｜本 Run 启动时声明的写回路线是 ${run.resultRoute}，不能改走 ledger`);
+  }
   const target = parseDaibeiTargetRef(run.steps.target_frozen?.evidenceRef);
   const expectedReciteId = safeToken(reciteId, "reciteId", { required: true, max: 40 })?.toUpperCase();
   if (!target.stable) {
@@ -1239,6 +1538,7 @@ export function checkpointSkillRun({
   now = new Date(),
 } = {}) {
   let run = loadRun(runId, file);
+  assertWaitingRunNotTimedOut(run, { file, now });
   if (run.end) throw new Error(`Skill Run 已结束：${runId}`);
   assertEventTurn(run);
   const reference = currentCodexTurnReference({ sessionId: runtimeSessionId() });
@@ -1300,6 +1600,7 @@ export function endSkillRun({
   now = new Date(),
 } = {}) {
   let run = loadRun(runId, file);
+  assertWaitingRunNotTimedOut(run, { file, now });
   if (run.end) {
     if (run.end.outcome === outcome && run.end.phase === phase) return run;
     throw new Error(`Skill Run 已以 ${run.end.outcome} 结束：${runId}`);
@@ -1333,12 +1634,21 @@ export function endSkillRun({
   if (outcome === "completed") {
     normalizedPhase = assertPhase(run.skill, phase);
     // [gpt] 2026-08-21：带背进度、抽查和规划不能互相降级收口；阶段必须与入口意图一致。
+    // ⚠️ probe 与 recall-sameday 均已降为 legacy、不得新建；本闸只为历史回放与防御性兜底保留。
+    // [claude] 2026-08-25：probe 反向锁死在 recall-sameday 上。它是四项手工/材料步骤就能收口的
+    // 最轻阶段，一旦对普通 recall 开放，就成了绕开 result_recorded/writeback_verified 的后门。
     const daibeiPhaseMismatch = run.skill === "daibei-pc" && (
       (["progress", "progress-only"].includes(run.kind) && normalizedPhase !== "progress")
       || (run.kind === "recall" && normalizedPhase === "plan")
+      // ⚠️ 下面两行是 legacy recall-sameday/probe 的双向锁，仅防误建，新流程不得走这条路。
+      || (run.kind === "recall-sameday" && normalizedPhase !== "probe")
+      || (normalizedPhase === "probe" && run.kind !== "recall-sameday")
     );
     if (daibeiPhaseMismatch) {
-      const expectedPhase = ["progress", "progress-only"].includes(run.kind) ? "progress" : "question|result";
+      const expectedPhase = ["progress", "progress-only"].includes(run.kind)
+        ? "progress"
+        // ⚠️ recall-sameday→probe 这一支是 legacy，不得新建。
+        : run.kind === "recall-sameday" ? "probe" : "question|result";
       const missing = [`phase_kind_mismatch:${run.kind ?? "unknown"}->${expectedPhase}`];
       appendEvent({
         ...eventBase({ runId, event: "end_blocked", now }),
@@ -1471,7 +1781,6 @@ export function summarizeSkillRuns(input = {}, {
   windowStart = null,
   windowEnd = null,
   staleMinutes = 24 * 60,
-  postProgressProbeGraceMinutes = 10,
   runPurpose = "learning",
 } = {}) {
   if (!RUN_PURPOSES.has(runPurpose)) throw new Error("runPurpose 只接受 learning|diagnostic|simulation");
@@ -1516,7 +1825,10 @@ export function summarizeSkillRuns(input = {}, {
   // [claude] 2026-08-24：证据已落 outbox、只差远端同步的，不能和"真放弃"混为一谈。
   // 2026-08-24 云三次断网就是这样被记成 4 个 aborted，看上去像模型不肯收口。
   const deferredWriteback = runs.filter((run) => run.deferredWriteback || run.end?.deferredWriteback);
-  const abandonedAborted = aborted.filter((run) => !run.end?.deferredWriteback);
+  // [gpt] 2026-08-26：用户暂离导致的 idle timeout 是生命周期回收，不是“模型放弃”或用户答错。
+  const idleTimeoutAborted = aborted.filter((run) => run.end?.source === "skill-run-idle-timeout");
+  const idleTimeoutIds = new Set(idleTimeoutAborted.map((run) => run.runId));
+  const abandonedAborted = aborted.filter((run) => !run.end?.deferredWriteback && !idleTimeoutIds.has(run.runId));
   const handoff = runs.filter((run) => run.end?.outcome === "handoff");
   const invalidHandoffs = handoff.filter((run) => !run.end?.handoffSkill || !run.end?.handoffReason);
   const unresolvedHandoffs = handoff.filter((run) => {
@@ -1529,30 +1841,21 @@ export function summarizeSkillRuns(input = {}, {
     return !destination;
   });
   // [gpt] 2026-08-21：监控用户意图链，不再把“recall 按 plan 收口”或“记完进度未进入抽查”算作干净完成。
+  // ⚠️ 其中 probe/recall-sameday 部分属 legacy 历史 Run 回放，不表示新流程该走它。
+  // [claude] 2026-08-25：监控侧跟 finishSkillRun 的闸保持同一套判准，含 probe 的双向锁。
   const daibeiPhaseKindMismatches = completed.filter((run) => run.skill === "daibei-pc" && (
     (run.kind === "recall" && run.end?.phase === "plan")
     || (["progress", "progress-only"].includes(run.kind) && run.end?.phase !== "progress")
+    // ⚠️ 下面两行同为 legacy recall-sameday/probe 的双向锁，只用于历史 Run 回放。
+    || (run.kind === "recall-sameday" && run.end?.phase !== "probe")
+    || (run.end?.phase === "probe" && run.kind !== "recall-sameday")
   ));
-  const daibeiPostProgressProbeMissing = completed.filter((run) => {
-    if (run.skill !== "daibei-pc" || run.kind !== "progress" || run.end?.phase !== "progress") return false;
-    const endedAt = new Date(run.end.observedAt).getTime();
-    if (!Number.isFinite(nowMs) || !Number.isFinite(endedAt)
-      || (nowMs - endedAt) / 60000 < postProgressProbeGraceMinutes) return false;
-    return !runs.some((candidate) => (
-      candidate.runId !== run.runId
-        && candidate.skill === "daibei-pc"
-        && candidate.kind === "recall"
-        && candidate.sessionId
-        && candidate.sessionId === run.sessionId
-        && candidate.subject === run.subject
-        && String(candidate.startedAt) >= String(run.end.observedAt)
-        && candidate.checkpoints.some((checkpoint) => checkpoint.phase === "question")
-    ));
-  });
-  const invalidClosureIds = new Set([
-    ...daibeiPhaseKindMismatches,
-    ...daibeiPostProgressProbeMissing,
-  ].map((run) => run.runId));
+  // [claude] 2026-08-25：原 daibeiPostProgressProbeMissing 检测已整条删除。
+  // 云拍板当日抽查改成无 Run 的 stateless probe（不写四个账本中的任何一个），
+  // 这个检测的判据是"progress 之后有没有另一条带 question checkpoint 的 Run"——
+  // 新流程下正确执行恰好一条都不会有，它会把每次合规都判成断链。
+  // 为了留住这个信号而维持一整套空账本 Run 生命周期，代价远大于信号本身的价值。
+  const invalidClosureIds = new Set(daibeiPhaseKindMismatches.map((run) => run.runId));
   // [gpt] 2026-08-14：waiting_user 也可能已被旧流程串入上一题结果；单列隔离，不能伪装成正常等待。
   const quarantinedDaibeiRuns = runs.filter((run) => {
     if (run.end || run.skill !== "daibei-pc" || run.steps.result_recorded?.status !== "pass") return false;
@@ -1568,7 +1871,7 @@ export function summarizeSkillRuns(input = {}, {
   const bySkill = {};
   for (const run of runs) {
     const bucket = bySkill[run.skill] ?? {
-      started: 0, completed: 0, cleanCompleted: 0, invalidClosures: 0, handoff: 0, aborted: 0, active: 0, actionableActive: 0, waitingUser: 0, orphanedWaiting: 0, quarantined: 0, blocked: 0, stale: 0,
+      started: 0, completed: 0, cleanCompleted: 0, invalidClosures: 0, handoff: 0, aborted: 0, idleTimeoutAborted: 0, active: 0, actionableActive: 0, waitingUser: 0, orphanedWaiting: 0, quarantined: 0, blocked: 0, stale: 0,
     };
     bucket.started += 1;
     if (run.end?.outcome === "completed") bucket.completed += 1;
@@ -1576,6 +1879,7 @@ export function summarizeSkillRuns(input = {}, {
     if (invalidClosureIds.has(run.runId)) bucket.invalidClosures += 1;
     if (run.end?.outcome === "handoff") bucket.handoff += 1;
     if (run.end?.outcome === "aborted") bucket.aborted += 1;
+    if (idleTimeoutIds.has(run.runId)) bucket.idleTimeoutAborted += 1;
     if (!run.end) bucket.active += 1;
     if (!run.end && !quarantinedIds.has(run.runId) && !orphanedWaitingIds.has(run.runId)) bucket.actionableActive += 1;
     if (run.status === "waiting_user") bucket.waitingUser += 1;
@@ -1638,8 +1942,9 @@ export function summarizeSkillRuns(input = {}, {
       quarantined: quarantinedDaibeiRuns.length,
       aborted: aborted.length,
       // 拆开看：deferredWriteback 是基础设施抖动（证据在 outbox，可补同步），
-      // abandonedAborted 才是真放弃。混在一起会让 aborted 这个数字失去意义。
+      // idleTimeoutAborted 是用户暂离后的生命周期回收；abandonedAborted 才是真放弃。
       deferredWriteback: deferredWriteback.length,
+      idleTimeoutAborted: idleTimeoutAborted.length,
       abandonedAborted: abandonedAborted.length,
       handoff: handoff.length,
       stale: stale.length,
@@ -1647,7 +1952,6 @@ export function summarizeSkillRuns(input = {}, {
       invalidHandoffs: invalidHandoffs.length,
       unresolvedHandoffs: unresolvedHandoffs.length,
       daibeiPhaseKindMismatches: daibeiPhaseKindMismatches.length,
-      daibeiPostProgressProbeMissing: daibeiPostProgressProbeMissing.length,
     },
     compliance: {
       eligible,
@@ -1679,6 +1983,15 @@ export function summarizeSkillRuns(input = {}, {
       status: run.status,
       lastEventAt: run.lastEventAt,
       ageMinutes: Math.floor((nowMs - new Date(run.lastEventAt).getTime()) / 60000),
+    })),
+    idleTimeoutRuns: idleTimeoutAborted.map((run) => ({
+      runId: run.runId,
+      skill: run.skill,
+      producerHost: run.producerHost,
+      idleSince: run.end?.idleSince ?? null,
+      idleMinutes: run.end?.idleMinutes ?? null,
+      timeoutMinutes: run.end?.timeoutMinutes ?? null,
+      observedAt: run.end?.observedAt ?? null,
     })),
     // [claude] 2026-08-24：原来只给 10 条样例，看不出模式。2026-08-13～08-23 的
     // 21 次阻断里 question_integrity_pass 缺 7 次、context_loaded 缺 6 次
@@ -1723,12 +2036,6 @@ export function summarizeSkillRuns(input = {}, {
       runId: run.runId,
       kind: run.kind,
       phase: run.end?.phase ?? null,
-      observedAt: run.end?.observedAt ?? run.lastEventAt,
-    })),
-    daibeiPostProgressProbeMissingExamples: daibeiPostProgressProbeMissing.slice(-10).map((run) => ({
-      runId: run.runId,
-      subject: run.subject,
-      targetRef: run.steps.target_frozen?.evidenceRef ?? null,
       observedAt: run.end?.observedAt ?? run.lastEventAt,
     })),
     quarantinedRuns: quarantinedDaibeiRuns.map((run) => ({
