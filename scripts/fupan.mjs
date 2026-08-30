@@ -12,8 +12,9 @@
 //   ⑥ 教材/讲义证据锚点要「页码+行号」，真题要「年份+法硕/法律硕士+题号」才过正则
 //   ⑦ 一个 Run 只绑一份 PASS 题面，追问必须新建 Run
 // 这些全部可以在跑之前判掉。校验逻辑在 `lib/fupan-spec.mjs`（那里可测），
-// 本文件只负责把 `FupanSpecError` 翻译成 `FUPAN_BLOCK` + 退出码 2，并把每题的
-// 多次往返压成 ask / judge / claim 三条命令。
+// 本文件只负责三件事：把 `FupanSpecError` 翻译成 `FUPAN_BLOCK` + 退出码 2；
+// 把每题的多次往返压成 ask / judge / claim 三条命令；把本次调用产出的全部
+// 上屏 artifact 收进单一「整块照贴」区（见 flushPaste 的头注）。
 //
 // 用法（务必带 --env-file，且由调用方 export 身份变量）：
 //   node --env-file=.env.local scripts/fupan.mjs ask   --spec <出题.json>
@@ -57,6 +58,27 @@ function beijingDate() {
   return new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
 }
 
+// [claude] 2026-08-30：宿主 Stop 守卫在一个 turn 里只挑**一个** Run 校验展示
+// （同 turn 有事件、lastEventAt 最大的那个）：waiting_user 查题面 artifact，
+// completed/result 查判题卡 artifact。一个 turn 同时收口旧 Run 又新开一题时，
+// 挑中哪个无法在模型侧可靠预判——2026-08-30 连栽三次（题面加空行、判题卡压缩、
+// 认领终态卡漏贴），每次都是整条消息被打回重发，云连续三轮点名「又重复输出」。
+// 结论：不要猜守卫挑谁，把本次调用产出的**全部** artifact 收进一个块，整块照贴。
+const PASTE_BLOCKS = [];
+function queuePaste(label, text) {
+  PASTE_BLOCKS.push({ label, text: String(text ?? "").trim() });
+}
+function flushPaste() {
+  if (!PASTE_BLOCKS.length) return;
+  console.log("\n██████ 以下整块逐字贴进回复，一个字都不许改、不许压缩、不许只挑一段 ██████");
+  console.log("（守卫只认字节；漏贴其中任何一段都会被判 display_drift 并强制重发整条消息）");
+  for (const block of PASTE_BLOCKS) {
+    console.log(`\n──── ${block.label} ────`);
+    console.log(block.text);
+  }
+  console.log("\n██████ 以上整块结束 ██████");
+}
+
 // ── ask：建 Run → 查材料 → 过题面 Gate → 落预测 → 签 question ─────────
 
 function commandAsk(argv) {
@@ -93,8 +115,7 @@ function commandAsk(argv) {
   // [claude] 2026-08-30：预测号必须随出题一起打出来。用 grep 去台账里"找回"预测号，
   // 曾把同为 T#90 的一条排期类预测 J0057 误判成本题预测并写了 miss（当场发现并订正）。
   console.log(`FUPAN_ASK_READY｜run=${runId}｜hash=${hash}｜prediction=${predictionId ?? "无"}`);
-  console.log("——以下题面逐字上屏，不得改动排版——");
-  console.log(spec.stem);
+  queuePaste("题面", spec.stem);
   return 0;
 }
 
@@ -132,18 +153,13 @@ function commandJudge(argv) {
     run("skill-run.mjs", ["end", "--run", spec.run, "--phase", "result", "--done", "response_verified",
       "--hash", hash, "--ref", spec.ref ?? `T#${spec.review.topicId}/E#${spec.review.event}`], { quiet: true });
     console.log(`FUPAN_JUDGE_DONE｜run=${spec.run}｜已收口`);
-    console.log("⚠️ 收口在 result 阶段的 Run，宿主守卫会逐字比对本轮回复里的证据卡；压缩、改写或只摘要＝judgment_display_drift，整条消息被打回重发。下面这段必须整段照贴。");
   } else {
     run("skill-run.mjs", ["checkpoint", "--run", spec.run, "--phase", "diagnosis_question", "--hash", hash,
       "--ref", spec.ref ?? `T#${spec.review.topicId}/E#${spec.review.event} 病根待认领`], { quiet: true });
     console.log(`FUPAN_JUDGE_PENDING｜run=${spec.run}｜card=${cardPath}｜等云认领病根后跑 claim`);
   }
-  console.log("——以下证据卡逐字上屏——");
-  console.log(gate.split("\n").slice(1).join("\n").trim());
-  if (spec.thenAsk && result === "pass") {
-    console.log("\n════════ 下一题 ════════");
-    commandAsk(["--spec", spec.thenAsk]);
-  }
+  queuePaste("判题证据卡", gate.split("\n").slice(1).join("\n"));
+  if (spec.thenAsk && result === "pass") commandAsk(["--spec", spec.thenAsk]);
   return 0;
 }
 
@@ -157,13 +173,17 @@ function commandClaim(argv) {
   if (spec.verdict) card.verdict = spec.verdict;
   writeFileSync(spec.cardPath, JSON.stringify(card, null, 2), "utf8");
 
-  run("cuoti.mjs", ["classify", String(spec.event), "--diagnosis", spec.status,
+  run("cuoti.mjs", ["classify", String(spec.event), "--topic", spec.topic, "--diagnosis", spec.status,
     "--pattern", spec.pattern, "--run", spec.run], { quiet: true });
   const gate = run("judgment-result.mjs", ["check", "--run", spec.run, "--file", spec.cardPath], { quiet: true });
   const hash = requireGatePass(gate, "JUDGMENT_RESULT_PASS", `终态证据卡 Gate 未通过\n${gate}`, { hashFrom: "first-line" });
   run("skill-run.mjs", ["end", "--run", spec.run, "--phase", "result", "--done", "response_verified",
     "--hash", hash, "--ref", spec.ref ?? `T#${card.targetRef} 病根${spec.status}`], { quiet: true });
   console.log(`FUPAN_CLAIM_DONE｜run=${spec.run}｜病根 ${spec.status}｜已收口`);
+  // [claude] 2026-08-30：认领后的终态卡也必须逐字上屏。漏贴一次就被守卫判 judgment_display_drift
+  // 打回重发（本轮实测），而且 Run 收口后 judgment-result 不能再带 --run 复现，只能无 --run 重渲染。
+  queuePaste("病根终态卡", gate.split("\n").slice(1).join("\n"));
+  if (spec.thenAsk) commandAsk(["--spec", spec.thenAsk]);
   return 0;
 }
 
@@ -177,10 +197,12 @@ try {
     console.log("  ask   规格：{target:'T#124/E#116 描述', kind, materialQueries:[], type, stem, answer, originalAnswer, prediction, basis, subject}");
     console.log("        materialQueries 每项写 \"关键词\" 或 { query, refine }，整批合成一次 material-batch");
     console.log("  judge 规格：{run, judgment:{…证据卡…}, review:{topicId,result,variant,axis,context,seconds,event,dimension,angle,anchor,note}, resolvePrediction:{id,outcome}}");
-    console.log("  claim 规格：{run, event, cardPath, status:confirmed|rejected, claimIndex, pattern, recognitionRef, verdict}");
+    console.log("  claim 规格：{run, event, topic, cardPath, status:confirmed|rejected, claimIndex, pattern, recognitionRef, verdict}");
     console.log("⚠️ target 必须写成 T#<主题>/E#<事件>，冻结后不可改；漏写会让 classify --run 永远签不上，Run 只能 abort。");
+    console.log("⚠️ judge/claim 规格可给 thenAsk <出题.json>，把「收口＋下一题」并成一次调用。");
     process.exitCode = 0;
   }
+  flushPaste();
 } catch (error) {
   if (error instanceof FupanSpecError) {
     console.error(`FUPAN_BLOCK｜${error.message}`);

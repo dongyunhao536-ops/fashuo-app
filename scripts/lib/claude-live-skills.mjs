@@ -19,8 +19,22 @@ export const CLAUDE_SKILL_NAMES = Object.freeze([
   "lunshu-pc", "pinggu-pc", "ribao-pc", "weekly-pc", "yingyu-pc",
 ]);
 
+// [claude] 2026-08-30：**厚入口漂移**闸的预算。
+//
+// 缺这条闸的代价（本次实测，不是假想）：`lunshu-pc` 现役入口 122 行、5.9KB，
+// 里面「当前病灶快照」停在 2026-08-11，而 `.local/主观题台账.md` 已记到 08-30——
+// A3 罪数层在 08-30 是**第三次现形且 fail**，入口却写「08-11 partial」；
+// 参考答案加载写成 `loadReferenceAnswer({...})` 这个 JS 函数名，而权威版是
+// `scripts/reference-answer.mjs --run … --type … --year …`，照入口跑不起来。
+// 旧审计对这两条全绿——它只证明"能路由"，不证明"已最新"。
+//
+// "已最新"无法直接机检，但它的**成因**可以：入口每复制一条权威内容，就多一条会过期的副本。
+// 所以对按设计留薄的入口设字节预算。收敛后实测最大 1921B（lunshu-pc），
+// 3000B 留了 56% 余量，同时能挡住收敛前的两个厚入口（5.9KB / 6.5KB）。
+export const THIN_ENTRY_MAX_BYTES = 3000;
+
 // 只有这三个入口"用户常带具体目标"，必须自带路径判断并把轻路排在全盘快照之前。
-// 其余六个按设计留薄、正文不含命令——那是合理的宿主差异，不是漂移，不纳入。
+// 它们正文里有命令是设计使然，不受上面的薄入口预算约束。
 export const ROUTED_ENTRIES = Object.freeze([
   Object.freeze({ name: "daibei-pc", light: "--auto-run daibei-progress", heavy: "skill-context.mjs daibei" }),
   Object.freeze({ name: "coach-pc", light: "--kind intake", heavy: "skill-context.mjs coach" }),
@@ -93,7 +107,29 @@ function codeLines(text) {
   return merged.filter(({ line }) => STATEFUL_SCRIPTS.test(line) && /\bnode\b/u.test(line));
 }
 
-export function auditLiveSkillEntries({ root, read = readFileSync, exists = existsSync } = {}) {
+/**
+ * 现役入口引用的仓库路径。抽出来是为了**只审引用**，不审散文里出现的词。
+ * `scripts/x.mjs` 与 `.agents/skills/…` 两类都收：前者是要跑的东西，后者是权威指针。
+ */
+function repoReferences(text) {
+  const out = new Map();
+  const re = /(?:^|[^\w./-])((?:scripts\/[\w./-]+\.(?:mjs|ts|py)|\.agents\/skills\/[\w./一-鿿-]+))/gu;
+  for (const line of text.split(/\r?\n/u)) {
+    for (const match of line.matchAll(re)) {
+      const path = match[1].replace(/[.,;:、。）)]+$/u, "");
+      if (!out.has(path)) out.set(path, line.trim().slice(0, 70));
+    }
+  }
+  return out;
+}
+
+/**
+ * @param {object} options
+ * @param {string} options.root 现役入口根目录（仓库外 `~/.claude/skills/`）。
+ * @param {(path: string) => boolean} [options.repoFileTracked] 判某个仓库相对路径是否**已入 Git**。
+ *   省略即跳过悬空引用检查——纯 fixture 测试用得上；真实跑必须由 CLI 传入，否则等于没这道闸。
+ */
+export function auditLiveSkillEntries({ root, read = readFileSync, exists = existsSync, repoFileTracked } = {}) {
   const violations = [];
   const add = (code, name, detail, line = null) => violations.push({ code, skill: name, detail, line });
 
@@ -143,7 +179,39 @@ export function auditLiveSkillEntries({ root, read = readFileSync, exists = exis
     }
   }
 
+  const routedNames = new Set(ROUTED_ENTRIES.map((entry) => entry.name));
+
   for (const [name, text] of texts) {
+    // ① 自我否定的指针。仓内 `.claude/skills/` 已于 2026-08-25 删除，这句话再没有合法所指；
+    // 而从 `~` 解析，`.claude/skills/<name>/SKILL.md` **正是这个文件自己**——
+    // 于是入口在逐字告诉执行者"不要遵循本文件"。旧审计对此全绿。
+    if (new RegExp(`不要遵循[^\\n]{0,8}\`?\\.claude/skills/${name}/SKILL\\.md`, "u").test(text)) {
+      add("self_negating_pointer", name, "叫执行者别遵循 `.claude/skills/<自己>/SKILL.md`；仓内该目录已删，从 ~ 解析即本文件自身");
+    }
+
+    // ② 悬空的仓库引用。入口指向的脚本／权威目录必须**已入 Git**——只存在于某一棵树的
+    // 未跟踪文件，换个 worktree 就不存在，等于把入口指向空气。
+    // 事故形状：现役 cuoti-fupan §六 默认路径写 `scripts/fupan.mjs`，而该文件当时 untracked，
+    // 主树之外的任何一棵树都没有它。
+    if (repoFileTracked) {
+      for (const [path, context] of repoReferences(text)) {
+        if (!repoFileTracked(path)) {
+          add("dangling_repo_reference", name, `引用了未入 Git 的仓库路径 ${path}（换棵树就不存在）：${context}`);
+        }
+      }
+    }
+
+    // ③ 权威指针。每个入口都必须指向自己的 `.agents/skills/<name>/`，否则执行者无处可去。
+    if (!text.includes(`.agents/skills/${name}/`)) {
+      add("authority_pointer_missing", name, `未指向权威目录 .agents/skills/${name}/`);
+    }
+
+    // ④ 厚入口漂移预算。见 THIN_ENTRY_MAX_BYTES 头注。
+    if (!routedNames.has(name) && text.length > THIN_ENTRY_MAX_BYTES) {
+      add("thin_entry_oversized", name,
+        `按设计留薄的入口有 ${text.length} 字节，超预算 ${THIN_ENTRY_MAX_BYTES}；正文越厚越可能是权威内容的过期副本`);
+    }
+
     if (STALE_HOST_CLAIMS.test(text)) {
       // 这类声明的理由（"Claude 侧 Run 缺会话标识、落账即脏账"）在 2026-08-25 已被实测证伪：
       // 带 FASHUO_SESSION_ID/FASHUO_PRODUCER_HOST 建出的 Run 全是 identityState=full；

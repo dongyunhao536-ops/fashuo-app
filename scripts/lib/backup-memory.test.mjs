@@ -37,7 +37,9 @@ const LIVE_SKILL_NAMES = ["ask-pc", "coach-pc", "cuoti-fupan", "daibei-pc", "lun
 
 function writeCompliantSkill(rootDir, name) {
   const routed = ROUTED_FIXTURE[name];
-  let body = `# ${name}\n\n`;
+  // [claude] 2026-08-30：审计新增 authority_pointer_missing——每个现役入口都必须指向
+  // 自己的 `.agents/skills/<name>/`。合规 fixture 也得带上，否则备份链会正当地拒绝继续。
+  let body = `# ${name}\n\n**权威内容在 \`.agents/skills/${name}/\`。**\n\n`;
   if (routed) {
     body += "## 〇、先判断路径\n\n";
     body += "```bash\n" + IDENT_FIXTURE + routed.light + "\n```\n\n";
@@ -103,7 +105,8 @@ describe("backup-memory dry-run", () => {
       CODEX_HOME: codexHome,
     };
     delete env.FASHUO_LEGACY_MEMORY_ROOT;
-    return spawnSync(process.execPath, [SCRIPT, "--dry-run"], { env, encoding: "utf8" });
+    // [gpt] 2026-08-30：fixture 只验证本地源；--no-push 明确跳过真实 GitHub 私有性预检。
+    return spawnSync(process.execPath, [SCRIPT, "--dry-run", "--no-push"], { env, encoding: "utf8" });
   }
 
   it("Claude 记忆源不存在时退出 1，不能先警告再宣告全部可用", () => {

@@ -249,6 +249,19 @@ describe("fupan 前置校验｜claim 规格与终态卡", () => {
     expect(() => assertClaimSpec({ run: RUN, event: 116, cardPath: ".local/c.json" })).toThrow(/需要 pattern/u);
   });
 
+  // [claude] 2026-08-30：`cuoti.mjs classify` 是 requireTopic:true。漏 --topic 会在子进程里失败，
+  // 而那时终态卡已写盘、Run 还停在 diagnosis_question，报错离病因隔了两层。
+  it("缺 topic 时拒绝——classify 必填，漏了要到子进程才炸", () => {
+    expect(() => assertClaimSpec({ run: RUN, event: 116, cardPath: ".local/c.json", pattern: "P07" }))
+      .toThrow(/需要 topic/u);
+  });
+
+  it("正例：run/event/cardPath/pattern/topic 齐全时放行", () => {
+    expect(() => assertClaimSpec({
+      run: RUN, event: 116, cardPath: ".local/c.json", pattern: "P07", topic: "监护人顺位",
+    })).not.toThrow();
+  });
+
   it("原卡候选不足 2 条时拒绝生成终态卡", () => {
     expect(() => buildClaimDiagnosis(pendingCard(["只有一条"]), { status: "rejected" }))
       .toThrow(/缺 2–4 条候选/u);

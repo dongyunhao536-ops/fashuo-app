@@ -8,7 +8,23 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { auditLiveSkillEntries, CLAUDE_SKILL_NAMES, formatViolations } from "./lib/claude-live-skills.mjs";
-import { resolveClaudeSkillsRoot } from "./lib/workspace-paths.mjs";
+import { resolveAppRoot, resolveClaudeSkillsRoot } from "./lib/workspace-paths.mjs";
+
+// [claude] 2026-08-30：悬空引用闸只有拿**真实 Git 索引**判才有意义。
+// `existsSync` 会把主树上那份未跟踪的临时文件判成"存在"——而 08-30 的事故正是
+// 现役入口指向 untracked 的 `scripts/fupan.mjs`，主树能跑、任何别的 worktree 都没有它。
+// 目录引用（`.agents/skills/<name>/`）按前缀命中判：git ls-files 只列文件。
+function trackedPathPredicate(appRoot) {
+  const listed = execFileSync("git", ["-C", appRoot, "ls-files", "-z"], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+  const files = new Set(listed.split("\0").filter(Boolean));
+  const prefixes = [...files].map((file) => file.slice(0, file.lastIndexOf("/") + 1));
+  const dirs = new Set(prefixes);
+  return (path) => {
+    if (files.has(path)) return true;
+    const asDir = path.endsWith("/") ? path : `${path}/`;
+    return dirs.has(asDir) || [...dirs].some((dir) => dir.startsWith(asDir));
+  };
+}
 
 // [claude] 2026-08-25：静态规则查不出"这条命令到底跑不跑得起来"。
 // 事故：26 处续行写成了双反斜杠，命令全不可运行，而当时的静态检查照样报绿。
@@ -37,7 +53,7 @@ function shellSyntaxViolations(root) {
 
 export function main() {
   const root = resolveClaudeSkillsRoot();
-  const violations = auditLiveSkillEntries({ root });
+  const violations = auditLiveSkillEntries({ root, repoFileTracked: trackedPathPredicate(resolveAppRoot()) });
   if (existsSync(root)) violations.push(...shellSyntaxViolations(root));
   console.log(`现役 Claude 入口根目录：${root}`);
   console.log(formatViolations(violations));

@@ -208,6 +208,10 @@ export function assertJudgeSpec(spec) {
 export function assertClaimSpec(spec) {
   if (!spec?.run || !spec?.event || !spec?.cardPath) block("claim 需要 run / event / cardPath");
   if (!spec?.pattern) block("claim 需要 pattern（病根代码），与 status 同时给");
+  // [claude] 2026-08-30：`cuoti.mjs classify` 走 `parseTopicOptions(rest, { requireTopic: true })`，
+  // 漏 --topic 会在子进程里失败——那时终态卡已写盘、Run 还停在 diagnosis_question，
+  // 报错离病因隔了两层。前置成本地闸，错误信息直接指到规格字段。
+  if (!spec?.topic) block("claim 需要 topic（标准弱项主题名，与 T# 同名）；classify 必填");
 }
 
 /**

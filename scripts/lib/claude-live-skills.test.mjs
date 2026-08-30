@@ -6,16 +6,22 @@
 
 import { describe, expect, it } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
-import { auditLiveSkillEntries, CLAUDE_SKILL_NAMES, ROUTED_ENTRIES, STATEFUL_SCRIPT_NAMES } from "./claude-live-skills.mjs";
+import {
+  auditLiveSkillEntries, CLAUDE_SKILL_NAMES, ROUTED_ENTRIES,
+  STATEFUL_SCRIPT_NAMES, THIN_ENTRY_MAX_BYTES,
+} from "./claude-live-skills.mjs";
 
 const IDENT = 'FASHUO_SESSION_ID="$CLAUDE_CODE_SESSION_ID" FASHUO_PRODUCER_HOST=claude \\\n  node --env-file=.env.local scripts/';
 // [gpt] 2026-08-26：现役 Claude 入口与仓库共享层共用同一条刑法分则范围契约。
 const XINGFA_SCOPE_FIXTURE = "刑法分则＝170 罪全量最低覆盖 ＋ 60 罪重点深带；60 罪盘裁深度，不裁范围。";
 
+// [claude] 2026-08-30：每个入口都必须指向自己的权威目录，薄入口尤其——它本来就只干这一件事。
+const authority = (name) => `**权威内容在 \`.agents/skills/${name}/\`。**`;
+
 function goodEntry(name) {
   const heavy = ROUTED_ENTRIES.find((entry) => entry.name === name)?.heavy ?? "";
   const light = ROUTED_ENTRIES.find((entry) => entry.name === name)?.light ?? "";
-  if (!heavy) return `# ${name}\n\n## 一、云是谁\n\n正文。\n`;
+  if (!heavy) return `# ${name}\n\n${authority(name)}\n\n## 一、云是谁\n\n正文。\n`;
   const lightCmd = name === "daibei-pc"
     ? `${IDENT}coach.mjs log ${light} --subject 法制史 --activity 自背 --chapter 第一章\n`
     : `${IDENT}skill-run.mjs start --skill ${name === "coach-pc" ? "cuoti-fupan" : name} \\\n    ${light} --target X --json\n`;
@@ -25,6 +31,8 @@ function goodEntry(name) {
     : "";
   const subjectScope = name === "daibei-pc" ? `${XINGFA_SCOPE_FIXTURE}\n\n` : "";
   return `# ${name}
+
+${authority(name)}
 
 ## 〇、先判断路径
 
@@ -213,5 +221,60 @@ describe("现役 Claude 入口路由审计器", () => {
     expect(codes).toContain("legacy_sameday_recommended");
     const ok = `${goodEntry("daibei-pc")}\n⚠️ recall-sameday 已降为 legacy，仅供历史 Run 回放，不得新建。\n`;
     expect(audit({ "daibei-pc": ok }).some((v) => String(v.code).startsWith("legacy_sameday"))).toBe(false);
+  });
+});
+
+// [claude] 2026-08-30：以下四条闸补的是同一个缺口——旧审计只证明"能路由"，不证明"已最新"。
+// 实测：`lunshu-pc` 现役入口一边写着自己带硬闸、一边写「不要遵循 .claude/skills/lunshu-pc/SKILL.md」
+// （从 ~ 解析就是它自己），病灶快照比 `.local` 台账落后 19 天，而九个入口全部报"通过"。
+describe("现役 Claude 入口漂移审计｜厚入口与悬空引用", () => {
+  it("自我否定的指针要报——仓内 .claude/skills 已删，从 ~ 解析即本文件自身", () => {
+    const bad = `${goodEntry("pinggu-pc")}\n**不要遵循 \`.claude/skills/pinggu-pc/SKILL.md\`** —— 冻结于 2026-08-04。\n`;
+    expect(audit({ "pinggu-pc": bad }))
+      .toContainEqual(expect.objectContaining({ code: "self_negating_pointer", skill: "pinggu-pc" }));
+  });
+
+  it("提到别的入口的 .claude/skills 路径不算自我否定，不误报", () => {
+    const other = `${goodEntry("pinggu-pc")}\n历史背景：不要遵循 \`.claude/skills/weekly-pc/SKILL.md\`。\n`;
+    expect(audit({ "pinggu-pc": other }).some((v) => v.code === "self_negating_pointer")).toBe(false);
+  });
+
+  it("缺权威目录指针要报；指到别人的目录不算数", () => {
+    const noPointer = goodEntry("ribao-pc").replace(authority("ribao-pc"), "自己看着办。");
+    expect(audit({ "ribao-pc": noPointer }))
+      .toContainEqual(expect.objectContaining({ code: "authority_pointer_missing", skill: "ribao-pc" }));
+    const wrongPointer = goodEntry("ribao-pc").replace(authority("ribao-pc"), authority("weekly-pc"));
+    expect(audit({ "ribao-pc": wrongPointer }).some((v) => v.code === "authority_pointer_missing")).toBe(true);
+  });
+
+  it("薄入口超字节预算要报；三个路由入口带命令是设计，不受该预算约束", () => {
+    const fat = `${goodEntry("yingyu-pc")}\n${"权威内容的副本。".repeat(THIN_ENTRY_MAX_BYTES)}\n`;
+    expect(audit({ "yingyu-pc": fat }))
+      .toContainEqual(expect.objectContaining({ code: "thin_entry_oversized", skill: "yingyu-pc" }));
+    // daibei-pc 现役 18KB，正是设计如此；把它算进预算等于逼人把路由规则搬走。
+    const fatRouted = `${goodEntry("daibei-pc")}\n${"路由与命令正文。".repeat(THIN_ENTRY_MAX_BYTES)}\n`;
+    expect(audit({ "daibei-pc": fatRouted }).some((v) => v.code === "thin_entry_oversized")).toBe(false);
+  });
+
+  it("引用未入 Git 的仓库路径要报——换棵 worktree 就不存在", () => {
+    // 事故形状：现役 cuoti-fupan 默认路径写 scripts/fupan.mjs，而它当时 untracked，
+    // 只有主树有；任何别的树按入口执行都会扑空。existsSync 判不出这件事，只有 Git 索引能。
+    const tracked = new Set(["scripts/skill-run.mjs", ...CLAUDE_SKILL_NAMES.map((n) => `.agents/skills/${n}/SKILL.md`)]);
+    // 与 CLI 的 trackedPathPredicate 同口径：git ls-files 只列文件，目录引用按前缀命中判。
+    const isTracked = (p) => tracked.has(p) || [...tracked].some((f) => f.startsWith(p.endsWith("/") ? p : `${p}/`));
+    const entry = `${goodEntry("weekly-pc")}\n默认走 \`scripts/fupan.mjs\`，回退用 \`scripts/skill-run.mjs\`。\n`;
+    const t = tree({ "weekly-pc": entry });
+    const violations = auditLiveSkillEntries({
+      root: t.root, exists: t.exists, read: t.read, repoFileTracked: isTracked,
+    });
+    const dangling = violations.filter((v) => v.code === "dangling_repo_reference" && v.skill === "weekly-pc");
+    // 只该报 fupan 那一条：skill-run 在索引里，权威目录指针按前缀命中。
+    expect(dangling).toHaveLength(1);
+    expect(dangling[0].detail).toContain("scripts/fupan.mjs");
+  });
+
+  it("不传 repoFileTracked 就跳过悬空引用检查——纯 fixture 测试用，真实跑由 CLI 传 Git 索引", () => {
+    const entry = `${goodEntry("weekly-pc")}\n默认走 \`scripts/根本不存在.mjs\`。\n`;
+    expect(audit({ "weekly-pc": entry }).some((v) => v.code === "dangling_repo_reference")).toBe(false);
   });
 });
