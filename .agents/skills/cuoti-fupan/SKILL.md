@@ -45,6 +45,8 @@ PowerShell 读取中文 Markdown 时首次就用 `Get-Content -Raw -Encoding UTF
 
 ## 复检流程
 
+**默认走快路径 `scripts/fupan.mjs`（[claude] 2026-08-30）。** 一题三条命令：`ask`（建 Run→一次 `material-batch`→题面 Gate→落预测→签 `question`）、`judge`（证据卡 Gate→写回 `review`；`pass` 直接收口，`partial/fail` 停在等认领）、`claim`（认领后 `classify`→终态卡→收口）。均以 `--spec <JSON>` 传参，不带参数运行会打印字段清单；`judge` 规格里给 `thenAsk` 可把「判分＋下一题」并成一次调用。它只是把下列契约**提前**在本地判掉——target 须含 `T#/E#`、答案键不得出现题面外选项、证据锚点格式、`--context timed` 须带 `--seconds`、`--diagnosis` 须与 `--pattern` 同给、终态卡逐字保留原候选——**判闸口径一条不改**。报 `FUPAN_BLOCK` 就照提示改规格重跑，不得转手工路径绕过。下面的逐条命令是回退路径，只在改规格解决不了时才用。<!-- [claude] 2026-08-30：08-30 实测手工路径第 1 题 41 次工具调用、495 秒；走 fupan 的第 3、4 题各 2–3 次调用、81–159 秒。入口不写命令＝每次冷启动重学契约，优化反复重建又丢失。 -->
+
 1. 冻结稳定对象 ID，并读取事件原始栽点与 `proof.nextProbe`；相似度候选不能冒充映射事实。
 2. 把冻结对象涉及的独立核心术语合并成**一次** `material-batch --query <词1> [--refine <特征词>] ... --run <SR-ID>`，不要先试 `material`、零命中后再改跑 batch，也不要为同一题拆成多次顺序检索。确有零命中且不足以判题时，最多再做一次更具体的 batch。教材、讲义与考试分析的用户可见锚点统一写成 `第X页·行Y-Z`；查不到页码写 `页码未知·行Y-Z`，不得写 `P213，第9273行` 一类会被 Gate 拒绝的变体。材料没讲就降信心，不能硬判。
 3. 依 [命题判题规范.md](命题判题规范.md) 生成一份不泄答案的完整题面；运行 `question-integrity.mjs`。只有 PASS 的同一草稿可用 `checkpoint --phase question --done target_frozen --hash <SHA256> --ref <T#/E#/排期>` 展示。

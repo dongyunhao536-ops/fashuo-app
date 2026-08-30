@@ -36,9 +36,12 @@ const IDENTITY_PREFIX = /FASHUO_SESSION_ID="\$CLAUDE_CODE_SESSION_ID"\s+FASHUO_P
 // 所以配了一条对 `scripts/*.mjs` 的漂移断言（见 claude-live-skills.test.mjs），
 // 名单少一个就红，不靠人记得回来改这里。
 export const STATEFUL_SCRIPT_NAMES = Object.freeze([
+  // [claude] 2026-08-30：fupan.mjs 是错题复盘快路径，一条命令内建 Run、过 Gate、
+  // 写 review 并收口——比单个受控 CLI 写得更多，身份前缀一条都不能少。
   "ask.mjs", "coach.mjs", "cuoti.mjs", "daibei-ledger.mjs", "english-growth.mjs",
-  "judgment-result.mjs", "knowledge.mjs", "question-integrity.mjs", "reference-answer.mjs",
-  "schedule.mjs", "skill-context.mjs", "skill-run.mjs", "subjective-profile.mjs",
+  "fupan.mjs", "judgment-result.mjs", "knowledge.mjs", "question-integrity.mjs",
+  "reference-answer.mjs", "schedule.mjs", "skill-context.mjs", "skill-run.mjs",
+  "subjective-profile.mjs",
 ]);
 const STATEFUL_SCRIPTS = new RegExp(`\\b(${STATEFUL_SCRIPT_NAMES.map((n) => n.replace(".", "\\.")).join("|")})\\b`, "u");
 // [claude] 2026-08-25：只读豁免必须按"带不带 --run"判，不能按关键词整条豁免。
