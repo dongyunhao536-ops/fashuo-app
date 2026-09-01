@@ -2,8 +2,10 @@ import { supabaseAdmin } from "./supabase";
 import type { ErrorItem } from "./errorbook";
 import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
 import { EXAM_OUTLINE } from "./exam-outline.gen";
+import { LECTURE_OUTLINE } from "./lecture-outline.gen";
 import { buildQuantV3, scoreEnglishV3, scoreSubjectV3 } from "./quant-v3.mjs";
 import { buildTargetReadinessV4 } from "./readiness-v4.mjs";
+import { coachRecitationModeFromRow } from "./coach";
 import coachConfig from "../../config/coach.json";
 
 /**
@@ -182,7 +184,7 @@ export interface DashboardData {
   ask: { openCount: number; lastConfusion: string | null };
   coach: { openErrors: number };
   inbox: { pendingCount: number; byType: Record<string, number> };
-  today: { studied: { subject: string; chapter: string | null; activity: string }[]; absorbed: number };
+  today: { studied: { subject: string; chapter: string | null; activity: string; recitationMode: "带背" | "自背" | null }[]; absorbed: number };
   week: { absorbed: number; logs: number };
   top5: ErrorItem[];
   /** 首页「日报」栏摘要行：最新一份日报的靶心句（当天的没出就退回派单）。纯展示，不入量化。 */
@@ -259,6 +261,9 @@ export async function getDashboard(): Promise<DashboardData> {
     subject: (r.subject as string | null) ?? "未识别",
     chapter: (r.chapter as string | null) ?? null,
     activity: (r.activity as string | null) ?? "其他",
+    // 同日同章的带背与自背是两条独立事实（业务键含方式，见 scripts/lib/study-outbox.mjs:937），
+    // 不带出方式的话它们在首页会渲染成两条一模一样的行。仅展示用，不进任何量化口径。
+    recitationMode: coachRecitationModeFromRow(r),
   }));
   const weekLogs = logs.filter((r) => String(r.log_date) >= weekStart).length;
   const todayTs = bjDayStart(todayStr), weekTs = bjDayStart(weekStart);
@@ -266,7 +271,8 @@ export async function getDashboard(): Promise<DashboardData> {
   const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
   // v3 只生成基础证据；首页唯一主数由 v4 按目标分与真实试卷重新聚合。
-  const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE });
+  // [gpt] 2026-08-29：精讲输入按拆分章整组折算到考试分析官方轴，两套来源择一、不重复累计。
+  const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE, lectureOutline: LECTURE_OUTLINE });
   const readiness = buildTargetReadinessV4({
     quantV3: quant,
     logs,

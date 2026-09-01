@@ -57,6 +57,16 @@ export function coachRecitationMode(activity: unknown): "带背" | "自背" | nu
   return RECITATION_ACTIVITY_ALIASES[String(activity).trim()] ?? null;
 }
 
+// [claude] 2026-09-01：读回方向此前只有写入侧（withCoachRecitationModeMarker）没有读出侧，
+// 结果同日同章的带背/自背两条独立事实在首页长得一模一样（activity 都被规范成"背诵"，
+// 方式只存在 raw_input 的 [背诵方式=X] 标记里）。语义对齐脚本侧
+// scripts/lib/study-activity.mjs:60 recitationModeFromStudyRow：raw_input 优先、再回落 activity 别名。
+export function coachRecitationModeFromRow(row: { activity?: unknown; raw_input?: unknown } | null | undefined): "带背" | "自背" | null {
+  const fromRaw = String(row?.raw_input ?? "").match(RECITATION_MODE_MARKER)?.[1];
+  if (fromRaw === "带背" || fromRaw === "自背") return fromRaw;
+  return coachRecitationMode(row?.activity);
+}
+
 export function withCoachRecitationModeMarker(rawInput: string, mode: "带背" | "自背" | null): string {
   if (!mode) return rawInput;
   const marker = `[背诵方式=${mode}]`;

@@ -139,7 +139,7 @@ export default async function DashboardPage() {
                 <div key={i} className="text-[13px] leading-snug text-label">
                   <span className="mr-1.5 rounded-[5px] bg-fill px-1.5 py-0.5 text-[11px] text-label2">{s.subject}</span>
                   {s.chapter ?? "（未记章节）"}
-                  <span className="ml-1 text-label3">· {s.activity}</span>
+                  <span className="ml-1 text-label3">· {s.recitationMode ?? s.activity}</span>
                 </div>
               ))}
               {d.today.absorbed > 0 && <div className="text-[13px] font-medium text-green">✓ 今天吸收错题 {d.today.absorbed} 条</div>}
