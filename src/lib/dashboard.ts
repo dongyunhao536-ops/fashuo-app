@@ -2,7 +2,6 @@ import { supabaseAdmin } from "./supabase";
 import type { ErrorItem } from "./errorbook";
 import { bjDateStr, bjWeekMonday, bjDayStart } from "./dates";
 import { EXAM_OUTLINE } from "./exam-outline.gen";
-import { LECTURE_OUTLINE } from "./lecture-outline.gen";
 import { buildQuantV3, scoreEnglishV3, scoreSubjectV3 } from "./quant-v3.mjs";
 import { buildTargetReadinessV4 } from "./readiness-v4.mjs";
 import { coachRecitationModeFromRow } from "./coach";
@@ -271,8 +270,7 @@ export async function getDashboard(): Promise<DashboardData> {
   const weekAbsorbed = errs.filter((r) => r.status === "absorbed" && r.absorbed_at && String(r.absorbed_at) >= weekTs).length;
 
   // v3 只生成基础证据；首页唯一主数由 v4 按目标分与真实试卷重新聚合。
-  // [gpt] 2026-08-29：精讲输入按拆分章整组折算到考试分析官方轴，两套来源择一、不重复累计。
-  const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE, lectureOutline: LECTURE_OUTLINE });
+  const quant = buildQuantV3({ logs, errors: errs, referenceDate: todayStr, examOutline: EXAM_OUTLINE });
   const readiness = buildTargetReadinessV4({
     quantV3: quant,
     logs,
